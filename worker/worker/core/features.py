@@ -89,6 +89,18 @@ USAGE_STAT_COLUMNS = (
     "snaps",
 )
 
+# Metrics pivoted into the opponent's full defensive profile, so a row can read
+# what its opponent allows to ANY position rather than only to its own. A QB's
+# passing markets depend on what the defense concedes to WRs and TEs; without
+# this those markets would have no opponent adjustment at all.
+DEFENSE_PROFILE_METRICS = (
+    "adj_rush_yards_allowed_pg",
+    "adj_rec_yards_allowed_pg",
+    "adj_receptions_allowed_pg",
+    "adj_rush_tds_allowed_pg",
+    "adj_rec_tds_allowed_pg",
+)
+
 # Recency window for the "hot lately" features. Five matches the L5 hit-rate
 # window the board already offers (app_config.hit_rate_windows), so the number a
 # user sees and the number the model uses describe the same span.
@@ -646,6 +658,26 @@ def build_feature_frame(
         )
         frame = frame.join(
             defense_frame, on=["opponent_team_id", "position_group"], how="left"
+        )
+
+        # The join above matches the PLAYER's position, which is right for a
+        # receiver facing "rec yards allowed to WRs" — and useless for a QB,
+        # whose passing markets care about what the defense allows to WRs and
+        # TEs, not to quarterbacks. So attach the opponent's full defensive
+        # profile as well, one column per position, available to every row.
+        profile = defense_frame.pivot(
+            index="opponent_team_id",
+            on="position_group",
+            values=list(DEFENSE_PROFILE_METRICS),
+            aggregate_function="first",
+        )
+        renames = {
+            c: f"opp_{c}"
+            for c in profile.columns
+            if c != "opponent_team_id"
+        }
+        frame = frame.join(
+            profile.rename(renames), on="opponent_team_id", how="left"
         )
 
     if include_weather:

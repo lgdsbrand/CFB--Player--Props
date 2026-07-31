@@ -374,6 +374,100 @@ def prior_weight(
 # -----------------------------------------------------------------------------
 # Team context
 # -----------------------------------------------------------------------------
+def player_goal_line_usage(
+    as_of: AsOf, goal_line_yards: int = 10
+) -> list[dict[str, Any]]:
+    """Scoring opportunities and conversions, split at the goal-line threshold.
+
+    Feeds the anytime-TD model (CLAUDE.md §6), which is opportunity x finish
+    rate rather than a per-game average.
+
+    TWO measurements that the box score cannot give us:
+
+    1. **Where the chances came from.** Split at `goal_line_yards` because the
+       two ranges convert at wildly different rates — measured over 2024-25, an
+       RB scores on 28% of goal-line opportunities and 1.6% of the rest.
+
+    2. **The split is NOT optional for receivers.** Only 28.5% of WR touchdowns
+       originate inside the ten; they score on long plays. A pure goal-line
+       model would systematically underrate exactly the players books price as
+       longshots. RB 60%, TE 51%, QB 42% — so the mix differs by position too.
+
+    EXCLUDING PASSING TOUCHDOWNS. `play_player_stats` records `stat_type =
+    'Touchdown'` against the passer as well as the scorer, so counting those
+    rows directly credits a quarterback with every touchdown he throws. Measured
+    on 2024 weeks 1-7 that put QB goal-line conversion at 1.064 per opportunity
+    — above 1.0, which is impossible and was the tell. Requiring the same player
+    to also have a Rush or Reception on that play drops it to 0.381, and matches
+    the rushing-plus-receiving definition `player_game_stats.offensive_tds` uses.
+
+    KNOWN DISTORTION for receivers, harmless to the output but not to the story
+    told about it. `Target` rows exist only on INCOMPLETE passes, and not even on
+    all of them: inside the ten in 2024, wide receivers show 386 receptions
+    against just 72 targets, implying an 84% catch rate where the true red-zone
+    figure is nearer 50%. So the receiving OPPORTUNITY count is understated and
+    the conversion rate correspondingly overstated — WR 0.595 rather than
+    something near 0.3.
+
+    This does not bias the projection, because the two errors cancel exactly:
+    opportunities x (touchdowns / opportunities) = touchdowns, and touchdowns are
+    counted correctly. Expected touchdowns per game is right either way. What it
+    does mean is that the decomposition is only INTERPRETABLE for rush-based
+    scoring, where Rush rows are complete. The weekly AI read must not tell a
+    user a receiver "scores on 59% of goal-line targets" — that number is an
+    artifact of the provider's attribution, not a fact about the player.
+    """
+    rows = fetch_all(
+        """
+        with per_play as (
+          select pps.play_id,
+                 pps.player_id,
+                 p.game_id,
+                 p.week,
+                 p.yards_to_goal,
+                 count(*) filter (
+                   where pps.stat_type in ('Rush', 'Reception', 'Target')
+                 ) > 0 as is_opportunity,
+                 count(*) filter (
+                   where pps.stat_type in ('Rush', 'Reception')
+                 ) > 0 as is_touch,
+                 count(*) filter (where pps.stat_type = 'Touchdown') > 0 as has_td
+            from play_player_stats pps
+            join plays p on p.id = pps.play_id
+           where pps.season = %(season)s
+             and pps.week   < %(week)s
+             and pps.position_group = any(%(positions)s::position_group[])
+             and p.yards_to_goal is not null
+           group by pps.play_id, pps.player_id, p.game_id, p.week, p.yards_to_goal
+        )
+        select player_id,
+               max(week)                as max_source_week,
+               count(distinct game_id)  as scoring_games,
+               count(*) filter (
+                 where is_opportunity and yards_to_goal <= %(goal_line)s
+               ) as goal_line_opportunities,
+               count(*) filter (
+                 where is_touch and has_td and yards_to_goal <= %(goal_line)s
+               ) as goal_line_tds,
+               count(*) filter (
+                 where is_opportunity and yards_to_goal > %(goal_line)s
+               ) as open_field_opportunities,
+               count(*) filter (
+                 where is_touch and has_td and yards_to_goal > %(goal_line)s
+               ) as open_field_tds
+          from per_play
+         group by player_id
+        """,
+        {
+            "season": as_of.season,
+            "week": as_of.week,
+            "goal_line": goal_line_yards,
+            "positions": list(SKILL_POSITIONS),
+        },
+    )
+    return _assert_no_lookahead(rows, as_of, "player_goal_line_usage")
+
+
 def team_context(as_of: AsOf) -> list[dict[str, Any]]:
     """Offensive volume and pass/run balance per team, season to date.
 
@@ -543,6 +637,7 @@ def build_feature_frame(
     *,
     prior_season_weight_max: float = 0.5,
     include_weather: bool = True,
+    goal_line_yards: int = 10,
 ) -> pl.DataFrame:
     """Assemble one row per (player, upcoming game) for the target week.
 
@@ -630,6 +725,30 @@ def build_feature_frame(
             frame = frame.with_columns(
                 pl.lit(None, dtype=pl.Utf8).alias("prior_position_group")
             )
+
+    goal_line_frame = _frame(player_goal_line_usage(as_of, goal_line_yards))
+    if not goal_line_frame.is_empty():
+        frame = frame.join(
+            goal_line_frame.drop("max_source_week"), on="player_id", how="left"
+        )
+    for column in (
+        "scoring_games",
+        "goal_line_opportunities",
+        "goal_line_tds",
+        "open_field_opportunities",
+        "open_field_tds",
+    ):
+        if column not in frame.columns:
+            frame = frame.with_columns(pl.lit(0, dtype=pl.Int64).alias(column))
+    frame = frame.with_columns(
+        [pl.col(c).fill_null(0) for c in (
+            "scoring_games",
+            "goal_line_opportunities",
+            "goal_line_tds",
+            "open_field_opportunities",
+            "open_field_tds",
+        )]
+    )
 
     context_frame = _frame(context)
     if not context_frame.is_empty():

@@ -25,6 +25,8 @@ from worker.core.models import (
     negative_binomial_params,
     position_baselines,
     project,
+    project_anytime_td,
+    score_probability,
 )
 
 
@@ -337,12 +339,6 @@ class TestProjectComposition:
         q = projection.quantiles
         assert q["p10"] <= q["p25"] <= q["p50"] <= q["p75"] <= q["p90"]
 
-    def test_anytime_td_is_deferred_to_phase_3e(self):
-        projection = project(
-            self._wr_row(), "anytime_td", "bernoulli", self._baselines(), {"WR": {}}
-        )
-        assert projection is None
-
     def test_unknown_market_is_rejected(self):
         with pytest.raises(ValueError, match="No projector"):
             project(self._wr_row(), "field_goals", "poisson", {}, {})
@@ -356,6 +352,133 @@ class TestProjectComposition:
             {"WR": {}},
         )
         assert projection is None
+
+
+class TestScoreProbability:
+    """Touchdowns cluster, so Poisson overstates P(at least one)."""
+
+    OBSERVED = {"RB": (0.455, 0.335), "QB": (0.370, 0.285),
+                "WR": (0.298, 0.251), "TE": (0.250, 0.225)}
+
+    def test_reproduces_observed_base_rates(self):
+        """The clustering constants exist to make this true."""
+        for position, (lam, observed) in self.OBSERVED.items():
+            assert score_probability(lam, position) == pytest.approx(
+                observed, abs=0.005
+            ), position
+
+    def test_below_poisson_where_clustering_was_measured(self):
+        for position in ("RB", "QB", "WR"):
+            lam = self.OBSERVED[position][0]
+            assert score_probability(lam, position) < 1 - math.exp(-lam)
+
+    def test_running_backs_are_the_worst_poisson_case(self):
+        """A naive Poisson would overstate RB anytime-TD by ~3 points, which on
+        the most lopsidedly priced market we serve sits on top of the 5% edge
+        threshold."""
+        lam = self.OBSERVED["RB"][0]
+        assert (1 - math.exp(-lam)) - score_probability(lam, "RB") > 0.025
+
+    def test_tight_ends_fall_back_to_poisson(self):
+        lam = 0.25
+        assert score_probability(lam, "TE") == pytest.approx(1 - math.exp(-lam))
+
+    def test_monotonic_and_bounded(self):
+        previous = -1.0
+        for lam in (0.0, 0.1, 0.5, 1.0, 3.0, 10.0):
+            p = score_probability(lam, "RB")
+            assert 0.0 <= p <= 1.0
+            assert p > previous
+            previous = p
+
+    def test_zero_expectation_is_zero_probability(self):
+        assert score_probability(0.0, "RB") == 0.0
+
+    def test_unknown_position_uses_a_default(self):
+        assert 0.0 < score_probability(0.4, "K") < 1.0
+
+
+class TestAnytimeTdProjection:
+    @staticmethod
+    def _row(**overrides):
+        row = {
+            "position_group": "RB",
+            "games_played": 7,
+            "goal_line_opportunities": 14,
+            "goal_line_tds": 4,
+            "open_field_opportunities": 91,
+            "open_field_tds": 2,
+        }
+        row.update(overrides)
+        return row
+
+    @staticmethod
+    def _league():
+        return {"RB": {"goal_line_conversion": 0.34,
+                       "open_field_conversion": 0.02}}
+
+    def test_produces_a_bernoulli_probability(self):
+        p = project_anytime_td(self._row(), {}, self._league())
+        assert p is not None
+        assert p.distribution == "bernoulli"
+        assert 0.0 < p.params["p"] < 1.0
+        # The line is 0.5, so "over" is exactly the scoring probability.
+        assert p.probability_over(0.5) == pytest.approx(p.params["p"])
+
+    def test_more_goal_line_work_raises_the_probability(self):
+        few = project_anytime_td(
+            self._row(goal_line_opportunities=2, goal_line_tds=0), {}, self._league()
+        )
+        many = project_anytime_td(
+            self._row(goal_line_opportunities=28, goal_line_tds=8), {}, self._league()
+        )
+        assert few is not None and many is not None
+        assert many.params["p"] > few.params["p"]
+
+    def test_open_field_chances_alone_can_produce_a_scorer(self):
+        """Only 28.5% of WR touchdowns start inside the ten — a pure goal-line
+        model would score every deep threat at zero."""
+        deep = project_anytime_td(
+            self._row(
+                position_group="WR",
+                goal_line_opportunities=0,
+                goal_line_tds=0,
+                open_field_opportunities=56,
+                open_field_tds=5,
+            ),
+            {},
+            {"WR": {"goal_line_conversion": 0.5, "open_field_conversion": 0.06}},
+        )
+        assert deep is not None
+        assert deep.params["p"] > 0.10
+
+    def test_a_thin_sample_is_shrunk_toward_the_position_rate(self):
+        """Three goal-line carries and one score is not a 33% finisher."""
+        thin = project_anytime_td(
+            self._row(goal_line_opportunities=3, goal_line_tds=3,
+                      open_field_opportunities=0, open_field_tds=0),
+            {},
+            self._league(),
+        )
+        assert thin is not None
+        # Raw rate would be 1.0; shrinkage must pull it well below.
+        assert thin.efficiency < 0.55
+
+    def test_no_opportunities_yields_no_projection(self):
+        assert project_anytime_td(
+            self._row(goal_line_opportunities=0, open_field_opportunities=0),
+            {}, self._league(),
+        ) is None
+
+    def test_no_games_played_yields_no_projection(self):
+        assert project_anytime_td(self._row(games_played=0), {}, self._league()) is None
+
+    def test_probability_never_reaches_certainty(self):
+        p = project_anytime_td(
+            self._row(goal_line_opportunities=200, goal_line_tds=200), {}, self._league()
+        )
+        assert p is not None
+        assert p.params["p"] < 1.0
 
 
 class TestProjectionObject:

@@ -376,6 +376,37 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
                 else 0.5 * (ordered[middle - 1] + ordered[middle])
             )
         baselines[position] = resolved
+
+    # Touchdown conversion rates are POOLED, not per-player medians: they are
+    # ratios of counts, and the median of per-player ratios is dominated by
+    # players with one or two chances, whose rate is 0 or 1 and neither.
+    totals: dict[str, dict[str, float]] = {}
+    for row in rows:
+        position = row.get("position_group")
+        if not position:
+            continue
+        bucket = totals.setdefault(str(position), {})
+        for key in (
+            "goal_line_opportunities",
+            "goal_line_tds",
+            "open_field_opportunities",
+            "open_field_tds",
+        ):
+            bucket[key] = bucket.get(key, 0.0) + (_value(row, key, 0.0) or 0.0)
+
+    for position, counts in totals.items():
+        resolved = baselines.setdefault(position, {})
+        goal_line_chances = counts.get("goal_line_opportunities", 0.0)
+        open_chances = counts.get("open_field_opportunities", 0.0)
+        if goal_line_chances > 0:
+            resolved["goal_line_conversion"] = (
+                counts.get("goal_line_tds", 0.0) / goal_line_chances
+            )
+        if open_chances > 0:
+            resolved["open_field_conversion"] = (
+                counts.get("open_field_tds", 0.0) / open_chances
+            )
+
     return baselines
 
 
@@ -452,6 +483,164 @@ def _dispersion(row: dict[str, Any], stat: str) -> float:
 
 def _opponent(row: dict[str, Any], metric: str, position: str) -> float | None:
     return _value(row, f"opp_{metric}_{position}")
+
+
+# -----------------------------------------------------------------------------
+# Anytime touchdown
+# -----------------------------------------------------------------------------
+# Measured over 2024-25, on players with at least 6 games in a season. The
+# observed P(score) sits BELOW what a Poisson with the same mean predicts:
+#
+#   pos   TDs/game   observed P(score)   Poisson 1-exp(-lam)   gap
+#   RB      0.455          0.335                0.366          -3.1pp
+#   QB      0.370          0.285                0.309          -2.4pp
+#   WR      0.298          0.251                0.258          -0.7pp
+#   TE      0.250          0.225                0.221          +0.4pp
+#
+# Touchdowns cluster: a player who scores once is likelier to score twice,
+# because the same game script and goal-line role produced both. Clustering puts
+# MORE mass on zero than a Poisson allows, so assuming Poisson would overstate
+# every anytime-TD probability — worst for running backs, by three points.
+#
+# That matters more here than anywhere else in the model. Anytime TD is the most
+# lopsidedly priced market we serve, it is where the de-vig choice already bites
+# hardest, and a systematic +3pp would sit right on top of the 5% edge
+# threshold. So P(score) comes from a negative-binomial zero,
+#
+#     P(score) = 1 - (1 + lam/k)^(-k)
+#
+# with k the clustering parameter solved from the table above. k -> infinity
+# recovers Poisson, which is what TE gets since it showed no clustering.
+#
+# CAVEAT for the calibration report: these four constants were fitted on the same
+# seasons the backtest evaluates. They are four scalars describing a structural
+# fact rather than a per-player fit, so the leakage is small — but it is not
+# zero, and the report should say so rather than let the numbers look cleaner
+# than they are.
+TD_CLUSTERING_K: dict[str, float] = {
+    "RB": 1.9,
+    "QB": 1.8,
+    "WR": 5.0,
+    "TE": math.inf,  # no clustering measured; Poisson
+}
+DEFAULT_TD_CLUSTERING_K = 3.0
+
+# Share of touchdowns originating inside the goal line, measured 2024-25. Used
+# only as a prior for players with no scoring history of their own.
+GOAL_LINE_TD_SHARE: dict[str, float] = {
+    "RB": 0.603,
+    "TE": 0.514,
+    "QB": 0.420,
+    "WR": 0.285,
+}
+
+
+def score_probability(expected_tds: float, position: str) -> float:
+    """P(at least one touchdown) from an expected count.
+
+    Not 1 - exp(-lam): see TD_CLUSTERING_K for why that overstates it.
+    """
+    lam = max(expected_tds, 0.0)
+    if lam <= 0:
+        return 0.0
+    k = TD_CLUSTERING_K.get(position, DEFAULT_TD_CLUSTERING_K)
+    if not math.isfinite(k):
+        return 1.0 - math.exp(-lam)
+    return 1.0 - (1.0 + lam / k) ** (-k)
+
+
+def project_anytime_td(
+    row: dict[str, Any],
+    baselines: dict[str, float],
+    league: dict[str, dict[str, float]] | None = None,
+) -> Projection | None:
+    """Opportunity x finish rate, in two ranges (CLAUDE.md §6).
+
+    Goal-line and open-field chances are modelled separately because they
+    convert at completely different rates — an RB scores on 28% of goal-line
+    opportunities and 1.6% of the rest — and because the MIX differs sharply by
+    position. Only 28.5% of WR touchdowns start inside the ten, against 60% for
+    RBs. A single goal-line model, which is the obvious reading of the brief,
+    would systematically underrate wide receivers: precisely the players books
+    price as longshots, and precisely where a mispriced probability is most
+    expensive.
+
+    Both components are shrunk toward the position's conversion rate, heavily so
+    early in the season — a player with three goal-line carries and one score
+    has not demonstrated a 33% finish rate. This is CLAUDE.md §6's "TD
+    probabilities especially should lean on priors early".
+    """
+    league = league or {}
+    position = str(row.get("position_group") or "")
+    games = _value(row, "games_played", 0.0) or 0.0
+    if games <= 0:
+        return None
+
+    goal_line_chances = (_value(row, "goal_line_opportunities", 0.0) or 0.0) / games
+    goal_line_tds = _value(row, "goal_line_tds", 0.0) or 0.0
+    open_chances = (_value(row, "open_field_opportunities", 0.0) or 0.0) / games
+    open_tds = _value(row, "open_field_tds", 0.0) or 0.0
+
+    if goal_line_chances <= 0 and open_chances <= 0:
+        return None
+
+    # Conversion rates, shrunk toward the position baseline by opportunity count.
+    def conversion(scored: float, chances_total: float, fallback: float) -> float:
+        if chances_total <= 0:
+            return fallback
+        return (scored + fallback * TD_RATE_PRIOR_CHANCES) / (
+            chances_total + TD_RATE_PRIOR_CHANCES
+        )
+
+    position_league = league.get(position) or {}
+    goal_line_rate = conversion(
+        goal_line_tds,
+        _value(row, "goal_line_opportunities", 0.0) or 0.0,
+        position_league.get("goal_line_conversion", DEFAULT_GOAL_LINE_CONVERSION),
+    )
+    open_rate = conversion(
+        open_tds,
+        _value(row, "open_field_opportunities", 0.0) or 0.0,
+        position_league.get("open_field_conversion", DEFAULT_OPEN_FIELD_CONVERSION),
+    )
+
+    # Opponent effect. Goal-line scoring is defended by what a unit concedes near
+    # its own line; open-field scoring by explosive plays allowed. Both come from
+    # the same adjusted TD-allowed rates, which is the closest signal we carry.
+    rush_like = position in ("RB", "QB")
+    metric = "adj_rush_tds_allowed_pg" if rush_like else "adj_rec_tds_allowed_pg"
+    allowed = _opponent(row, metric, position)
+    expected_allowed = (league.get(position) or {}).get(metric)
+    multiplier = matchup_multiplier(
+        allowed, expected_allowed, _value(row, "shrinkage_weight")
+    )
+
+    expected_tds = (
+        goal_line_chances * goal_line_rate + open_chances * open_rate
+    ) * multiplier
+
+    probability = score_probability(expected_tds, position)
+    probability = min(max(probability, 1e-4), 1.0 - 1e-4)
+
+    return finalize(
+        "anytime_td",
+        "bernoulli",
+        {"p": probability},
+        expected_tds,
+        volume=goal_line_chances + open_chances,
+        efficiency=goal_line_rate,
+        matchup_multiplier=multiplier,
+    )
+
+
+# Pseudo-opportunities of shrinkage on a conversion rate. Three goal-line
+# carries and one score is not a 33% finisher, and anytime TD is the market
+# where an overconfident rate is most expensive.
+TD_RATE_PRIOR_CHANCES = 12.0
+
+# League-wide fallbacks, measured 2024-25 across all skill positions.
+DEFAULT_GOAL_LINE_CONVERSION = 0.35
+DEFAULT_OPEN_FIELD_CONVERSION = 0.03
 
 
 # -----------------------------------------------------------------------------
@@ -661,8 +850,6 @@ def project(
         )
 
     if market_key == "anytime_td":
-        # Built in Phase 3e, which models it as goal-line opportunity x finish
-        # rate rather than as a per-game average (CLAUDE.md §6).
-        return None
+        return project_anytime_td(row, baselines, league)
 
     raise ValueError(f"No projector for market {market_key!r}")

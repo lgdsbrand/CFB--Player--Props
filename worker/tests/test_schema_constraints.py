@@ -30,6 +30,7 @@ from worker.config import ConfigError, get_settings  # noqa: E402
 from worker.core.probability import (  # noqa: E402
     american_to_implied_probability,
     devig_two_way,
+    solve_shin_z,
 )
 
 pytestmark = pytest.mark.integration
@@ -328,16 +329,69 @@ class TestPickDerivation:
 
 
 class TestOddsMath:
-    def test_sql_devig_matches_python(self, conn):
-        """The SQL and Python implementations must not drift apart."""
-        cases = [(-110, -110), (-130, 110), (-200, 165), (120, -140)]
-        for over, under in cases:
+    """SQL and Python must agree exactly.
+
+    The worker computes picks in Python; the read layer de-vigs live lines in
+    SQL. Two implementations of one definition is a deliberate trade (see the
+    note atop worker/core/probability.py), and these tests are the thing that
+    makes it safe. Note the implementations are deliberately DIFFERENT
+    algorithms for Shin — bisection in Python, closed form in SQL — so this is
+    a real cross-check rather than a transcription check.
+    """
+
+    # Spans heavy favourites to long longshots. The methods agree near -110 and
+    # diverge at the extremes, so a narrow set of cases would prove nothing.
+    PRICE_CASES = [
+        (-110, -110), (-130, 110), (-200, 165), (120, -140),
+        (-150, 130), (150, -190), (600, -1100), (-1100, 600),
+        (300, -400), (-5000, 2000), (100, -100),
+    ]
+
+    @pytest.mark.parametrize("method", ["proportional", "additive", "shin"])
+    def test_sql_devig_matches_python_for_every_method(self, conn, method):
+        for over, under in self.PRICE_CASES:
             row = conn.execute(
-                "select devig_two_way(%s, %s) as fair", (over, under)
+                "select devig_two_way(%s, %s, %s) as fair", (over, under, method)
             ).fetchone()
-            assert float(row["fair"]) == pytest.approx(
-                devig_two_way(over, under), abs=1e-9
-            ), f"drift at {over}/{under}"
+            expected = devig_two_way(over, under, method)
+            if expected is None:
+                assert row["fair"] is None, f"{method} at {over}/{under}"
+            else:
+                assert row["fair"] is not None, f"{method} at {over}/{under}"
+                assert float(row["fair"]) == pytest.approx(expected, abs=1e-9), (
+                    f"drift at {over}/{under} under {method}"
+                )
+
+    def test_sql_shin_equals_sql_additive(self, conn):
+        """The two-way identity must hold in SQL too, not just in Python."""
+        for over, under in self.PRICE_CASES:
+            row = conn.execute(
+                """
+                select devig_two_way_shin(%(o)s, %(u)s)     as shin,
+                       devig_two_way_additive(%(o)s, %(u)s) as additive
+                """,
+                {"o": over, "u": under},
+            ).fetchone()
+            assert (row["shin"] is None) == (row["additive"] is None)
+            if row["shin"] is not None:
+                assert float(row["shin"]) == pytest.approx(
+                    float(row["additive"]), abs=1e-12
+                )
+
+    def test_sql_shin_z_matches_python(self, conn):
+        for over, under in self.PRICE_CASES:
+            raw = (
+                american_to_implied_probability(over),
+                american_to_implied_probability(under),
+            )
+            if sum(raw) <= 1.0 + 1e-9:
+                continue
+            row = conn.execute(
+                "select devig_shin_z(%s, %s) as z", (over, under)
+            ).fetchone()
+            assert float(row["z"]) == pytest.approx(solve_shin_z(raw), abs=1e-8), (
+                f"z drift at {over}/{under}"
+            )
 
     def test_sql_implied_probability_matches_python(self, conn):
         for price in (-250, -110, 100, 145, 400):
@@ -351,6 +405,40 @@ class TestOddsMath:
     def test_one_sided_price_is_null_not_zero(self, conn):
         row = conn.execute("select devig_two_way(-110, null) as fair").fetchone()
         assert row["fair"] is None
+
+    def test_incoherent_market_is_null(self, conn):
+        """Implied total below 1 is a data error, not a priceable market."""
+        row = conn.execute("select devig_two_way(600, 5000) as fair").fetchone()
+        assert row["fair"] is None
+
+    def test_unknown_method_raises_rather_than_returning_null(self, conn):
+        """A config typo must be loud. Silent NULL would just erase every edge."""
+        with pytest.raises(pg_errors.RaiseException):
+            with conn.transaction():
+                conn.execute("select devig_two_way(-110, -110, 'wishful')")
+
+    def test_two_arg_form_follows_app_config(self, conn):
+        """The configured default drives the view, so it must actually be read."""
+        configured = conn.execute(
+            "select value #>> '{}' as method from app_config where key = 'devig_method'"
+        ).fetchone()["method"]
+        assert configured in ("proportional", "additive", "shin")
+
+        row = conn.execute(
+            """
+            select devig_two_way(600, -1100)             as implicit,
+                   devig_two_way(600, -1100, %s)         as explicit
+            """,
+            (configured,),
+        ).fetchone()
+        assert float(row["implicit"]) == pytest.approx(float(row["explicit"]))
+
+    def test_configured_default_is_shin(self, conn):
+        """Chosen 2026-07-31; migration 0013 carries the reasoning."""
+        row = conn.execute(
+            "select value #>> '{}' as method from app_config where key = 'devig_method'"
+        ).fetchone()
+        assert row["method"] == "shin"
 
 
 class TestAnytimeTdOutcome:

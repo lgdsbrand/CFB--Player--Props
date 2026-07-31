@@ -125,6 +125,8 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 | `v_board_rows` | Main board, one row per **projection** (see below) |
 | `v_player_game_log` | Game log for the player detail chart |
 | `american_to_implied_probability`, `devig_two_way`, `edge_on_side` | Odds math |
+| `devig_two_way_proportional` / `_additive` / `_shin` | The three selectable de-vig methods (migration 0013) |
+| `devig_shin_z` | Shin's *z*, the implied informed-money share — a market-quality diagnostic, not used in pricing |
 
 ### Why the board is driven by projections, not picks
 
@@ -165,11 +167,43 @@ everything, so anything not explicitly granted is closed.
 
 ## Open items carried in the schema
 
-Both unresolved decisions in CLAUDE.md §9 are configuration, not hardcoded:
-
 | `app_config` key | Default | Status |
 |---|---|---|
 | `hit_rate_basis` | `"threshold"` | §9.2 — open. `player_prop_lines` already keeps full history, so switching to `closing_line` needs no re-ingest of anything but odds |
-| `odds_adapter` | `"none"` | §9.1 — open. Board shows model leans only until a source is configured |
-| `devig_method` | `"proportional"` | **Unconfirmed.** Must match the client's MLB model; their implementation has not been inspected |
-| `edge_threshold` | `0.05` | Matches their pitcher model |
+| `odds_adapter` | `"none"` | §9.1 — source confirmed as The Odds API; coverage and quota pending the `probe_odds` job |
+| `devig_method` | `"shin"` | **Settled 2026-07-31.** Chosen on merit — the requirement to match the client's MLB model was withdrawn |
+| `edge_threshold` | `0.05` | Starting value, to be tuned from the backtest |
+
+### On the de-vig method
+
+`edge = model probability − de-vigged book implied probability` is unchanged;
+what changed is *how* the vig comes off.
+
+For a **two-outcome** market Shin's method and the additive method are
+algebraically identical — proof in the header of migration 0013. Every market
+here is two-way (over/under, or Yes/No for anytime TD), so the live choice is
+really *proportional vs not*, and Shin and additive are two derivations of the
+same number.
+
+It only matters where prices are lopsided:
+
+| Market | Typical price | Method disagreement |
+|---|---|---|
+| Rec yds, receptions, pass yds | ~−110 both sides | < 0.5pp — immaterial |
+| **Anytime TD** | e.g. +600 / −1100 | proportional 13.5% vs shin 11.3% — **decisive** |
+
+That 2.2pp gap on a 13% probability can move a pick across the 5%
+`edge_threshold` on its own. Proportional's known weakness is under-correcting
+the favourite–longshot bias, and that bias sits exactly where our most lopsided
+market sits — hence the default.
+
+Two consequences the schema enforces:
+
+- `picks.devig_method` and `backtest_predictions.devig_method` record the method
+  used per row. Edges computed under different methods are not comparable, so
+  the method travels with the data rather than being inferred from current
+  config.
+- `devig_two_way(over, under)` reads `app_config` and is therefore `STABLE`, not
+  `IMMUTABLE`. Use the three-argument form where an immutable expression is
+  required. Nothing indexed or generated depends on it — `picks.edge` is
+  generated from `edge_on_side()`, which takes an already-computed probability.

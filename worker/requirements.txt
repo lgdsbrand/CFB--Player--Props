@@ -22,6 +22,11 @@ psycopg[binary]>=3.2,<4.0
 # Local .env loading. No-op in production, where Render injects real env vars.
 python-dotenv>=1.0.0
 
-# --- Phase 3 (modelling + backtest). Not installed yet to keep deploys lean. ---
-# scikit-learn>=1.5
-# statsmodels>=0.14
+# --- Phase 3 (modelling + backtest) ---
+# Pre-justified in CLAUDE.md §2. scipy is declared explicitly rather than leaned
+# on as a transitive dependency of the two below: worker.core.probability imports
+# scipy.special directly for the gamma and negative-binomial CDFs, and a package
+# you import is a package you depend on.
+scipy>=1.13
+scikit-learn>=1.5
+statsmodels>=0.14

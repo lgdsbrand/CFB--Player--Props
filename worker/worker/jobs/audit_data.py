@@ -94,6 +94,16 @@ check(G, "odds helper functions exist", """
                        'edge_on_side','defense_position_splits_through')
 """, lambda r: r["n"] >= 4)
 
+check(G, "all three de-vig methods are installed", """
+    select count(*) as n from pg_proc
+     where proname in ('devig_two_way_proportional','devig_two_way_additive',
+                       'devig_two_way_shin','devig_shin_z')
+""", lambda r: r["n"] == 4)
+
+check(G, "configured devig_method is one we implement", """
+    select value #>> '{}' as method from app_config where key = 'devig_method'
+""", lambda r: r["method"] in ("proportional", "additive", "shin"))
+
 check(G, "board/detail views exist", """
     select count(*) as n from pg_views where schemaname='public'
        and viewname in ('v_board_rows','v_latest_prop_lines','v_player_game_log')
@@ -136,6 +146,42 @@ check(G, "edge on the UNDER is measured against the under side", """
 check(G, "edge is NULL when no book price exists (not zero)", """
     select edge_on_side(0.60, null, 'over'::bet_side) is null as is_null
 """, lambda r: r["is_null"] is True)
+
+# --- de-vig method behaviour (migration 0013) ---------------------------------
+check(G, "shin and additive agree on a two-way market", """
+    select devig_two_way_shin(600, -1100)     as shin,
+           devig_two_way_additive(600, -1100) as additive
+""", lambda r: abs(float(r["shin"]) - float(r["additive"])) < 1e-12)
+
+check(G, "proportional and shin diverge on a lopsided price", """
+    select devig_two_way_proportional(600, -1100) as prop,
+           devig_two_way_shin(600, -1100)         as shin
+""", lambda r: float(r["prop"]) - float(r["shin"]) > 0.02)
+
+check(G, "all methods agree near even money", """
+    select devig_two_way_proportional(-110, -110) as prop,
+           devig_two_way_additive(-110, -110)     as additive,
+           devig_two_way_shin(-110, -110)         as shin
+""", lambda r: max(abs(float(r["prop"]) - float(r["shin"])),
+                   abs(float(r["additive"]) - float(r["shin"]))) < 1e-9)
+
+check(G, "an incoherent market (implied total < 1) de-vigs to NULL", """
+    select devig_two_way(600, 5000) is null as is_null
+""", lambda r: r["is_null"] is True)
+
+check(G, "shin z is a plausible informed-money share", """
+    select devig_shin_z(-110, -110) as z
+""", lambda r: 0.0 < float(r["z"]) < 0.25)
+
+check(G, "picks records which devig method produced its book probability", """
+    select count(*) as n from information_schema.columns
+     where table_name = 'picks' and column_name = 'devig_method'
+""", lambda r: r["n"] == 1)
+
+check(G, "no pick carries a book probability without naming its method", """
+    select count(*) as n from picks
+     where book_prob_over is not null and devig_method is null
+""", lambda r: r["n"] == 0)
 
 check(G, "views are queryable against real data", """
     select (select count(*) from v_board_rows) as board,

@@ -8,17 +8,76 @@ football, so the NFL build copies this module unchanged (CLAUDE.md §3).
 
 NOTE ON DUPLICATION: the odds helpers here mirror the SQL functions
 `american_to_implied_probability`, `devig_two_way` and `edge_on_side` defined in
-migration 0006. Both exist on purpose — the worker computes picks in Python, the
-read layer de-vigs live lines in SQL — but they must agree exactly. The test
-suite pins both to the same fixed vectors; if you change one, change the other.
+migration 0006 and extended in 0013. Both exist on purpose — the worker computes
+picks in Python, the read layer de-vigs live lines in SQL — but they must agree
+exactly. The test suite pins both to the same fixed vectors; if you change one,
+change the other.
+
+NOTE ON PURITY: nothing in this module reads the database. The de-vig method is
+an explicit argument, never a config lookup, because this file is copied
+wholesale into the NFL build (CLAUDE.md §3) and because a pricing function whose
+answer depends on hidden global state is untestable. Jobs resolve
+`app_config.devig_method` and pass it down.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from typing import Any, Literal
 
+from scipy import stats as _stats
+
 BetSide = Literal["over", "under"]
+
+DevigMethod = Literal["proportional", "additive", "shin"]
+
+# CHOSEN 2026-07-31. The client released the requirement to match their MLB
+# pitcher model, so this is picked on merit rather than for consistency.
+#
+# Where it matters: on a two-way market priced near -110/-110 all three methods
+# agree to well under a percentage point, so the choice is irrelevant for
+# yardage and reception props. It is decisive for anytime touchdown, which is
+# priced at wildly lopsided numbers. On a +600/-1100 market, proportional gives
+# the longshot 13.5% and Shin gives it 11.3% — a 2.2pp gap on a 13% probability,
+# which alone can move a pick across the 5% edge threshold.
+#
+# Proportional's known failure is under-correcting the favourite-longshot bias,
+# and that bias lives exactly where our most lopsided market lives. Shin models
+# the vig as protection against informed money and shades longshots down, which
+# is the right direction; it also collapses to proportional as prices approach
+# even, so it only differs where it helps.
+DEFAULT_DEVIG_METHOD: DevigMethod = "shin"
+
+# IDENTITY, verified numerically across 441 price pairs and provable in two
+# lines: for a TWO-outcome market, Shin's method and the additive method give
+# exactly the same answer.
+#
+#   Shin requires  sqrt(z²+aπ₁²) + sqrt(z²+aπ₂²) = 2  where a = 4(1−z)/Π.
+#   Multiply the difference of those roots by their sum:
+#     D·2 = a(π₁²−π₂²) = a(π₁−π₂)Π = 4(1−z)(π₁−π₂),  so D = 2(1−z)(π₁−π₂).
+#   Dividing by the 2(1−z) denominator gives p₁−p₂ = π₁−π₂ — each side shifted
+#   by the same amount, which is precisely what the additive method does.
+#
+# This matters for how the default is justified. The published results showing
+# Shin better calibrated than plain normalization come from THREE-outcome
+# markets (home/draw/away), where the methods genuinely differ. Every market we
+# model is two-way, so here the real choice is proportional vs not-proportional,
+# and Shin and additive are two derivations of the same number.
+#
+# Both are kept: they are independent code paths that now cross-check each
+# other, and they would diverge if a three-way market were ever added.
+_SHIN_EQUALS_ADDITIVE_FOR_TWO_WAY = True
+
+# Bisection settings for Shin's z. Shared verbatim with the plpgsql
+# implementation in migration 0013 so both converge to the same double.
+_SHIN_Z_MAX = 0.99
+_SHIN_TOLERANCE = 1e-12
+_SHIN_MAX_ITERATIONS = 200
+
+# Slack when testing whether a two-way price total reaches 1.0, so that float
+# noise in the implied-probability division is not read as an incoherent market.
+_COHERENCE_TOLERANCE = 1e-9
 
 DistributionFamily = Literal[
     "normal",
@@ -53,27 +112,167 @@ def american_to_implied_probability(price: int) -> float:
     return 100.0 / (price + 100.0)
 
 
-def devig_two_way(over_price: int | None, under_price: int | None) -> float | None:
-    """Fair probability of the OVER, vig removed proportionally.
+def solve_shin_z(raw_probabilities: Sequence[float]) -> float:
+    """Solve for Shin's z — the implied share of informed money in the market.
+
+    Shin (1993) models the overround as the bookmaker's protection against
+    insider traders rather than as a flat proportional margin. Given raw implied
+    probabilities summing to Π > 1, fair probabilities are
+
+        p_i = [sqrt(z² + 4(1−z)·π_i²/Π) − z] / (2(1−z))
+
+    with z chosen so Σp_i = 1. The sum is monotone decreasing in z, so plain
+    bisection is both sufficient and reproducible — which matters, because the
+    plpgsql twin must land on the same double.
+
+    Returns 0.0 when there is no overround to explain (Π ≤ 1), which is the
+    degenerate case where Shin reduces to no correction at all.
+
+    z is worth keeping: it is a clean measure of how toxic a market is, and a
+    market with an implausibly high z is usually a stale or mispulled price.
+    """
+    total = sum(raw_probabilities)
+    if total <= 1.0 or any(p <= 0 for p in raw_probabilities):
+        return 0.0
+
+    def excess(z: float) -> float:
+        return sum(_shin_probabilities(raw_probabilities, total, z)) - 1.0
+
+    low, high = 0.0, _SHIN_Z_MAX
+    if excess(high) > 0:
+        # No root in range: the overround is too extreme for the model. Caller
+        # falls back to proportional rather than returning a fabricated number.
+        return _SHIN_Z_MAX
+
+    for _ in range(_SHIN_MAX_ITERATIONS):
+        mid = 0.5 * (low + high)
+        if excess(mid) > 0:
+            low = mid
+        else:
+            high = mid
+        if high - low < _SHIN_TOLERANCE:
+            break
+    return 0.5 * (low + high)
+
+
+def _shin_probabilities(
+    raw_probabilities: Sequence[float], total: float, z: float
+) -> list[float]:
+    if z >= 1.0:
+        return list(raw_probabilities)
+    denominator = 2.0 * (1.0 - z)
+    return [
+        (math.sqrt(z * z + 4.0 * (1.0 - z) * p * p / total) - z) / denominator
+        for p in raw_probabilities
+    ]
+
+
+def devig_two_way(
+    over_price: int | None,
+    under_price: int | None,
+    method: DevigMethod = DEFAULT_DEVIG_METHOD,
+) -> float | None:
+    """Fair probability of the OVER with the vig removed.
 
     Returns None when only one side is priced: a one-sided price cannot be
     de-vigged, and callers must treat that as "no book probability", never as
-    zero edge.
+    zero edge. Books routinely post a longshot anytime-TD Yes with no No, so
+    this is a common path, not an edge case.
 
-    The proportional (multiplicative) method divides each side's raw implied
-    probability by the two-way total. CLAUDE.md §6 requires this to match the
-    client's existing MLB pitcher model exactly; proportional is the common
-    convention but their implementation is UNCONFIRMED — see
-    app_config.devig_method.
+    Methods:
+
+      * ``proportional`` — divide each side by the two-way total. The common
+        convention. Under-corrects the favourite-longshot bias.
+      * ``additive`` — subtract half the overround from each side. Also returns
+        None when that drives a side out of (0, 1), which happens on very
+        lopsided markets. Clamping instead would report a near-zero book
+        probability and manufacture an enormous fake edge — the exact failure
+        the None contract exists to prevent.
+      * ``shin`` — the default; see DEFAULT_DEVIG_METHOD and solve_shin_z.
     """
     if over_price is None or under_price is None:
         return None
+
     over_raw = american_to_implied_probability(over_price)
     under_raw = american_to_implied_probability(under_price)
     total = over_raw + under_raw
-    if total <= 0:
+
+    # An incoherent market. Two real prices on opposite sides of the same line
+    # always imply MORE than 1.0 — that surplus is the book's margin. A total
+    # below 1 is free money, which does not exist at scale, so in practice it
+    # means the pair is not what it claims: a stale price, a mispull, or two
+    # different lines crossed by an upstream bug. Normalizing it anyway would
+    # yield a confident fair probability from the least trustworthy input we
+    # ever see, and the resulting edge would look enormous. None is the honest
+    # answer, and it takes the same "no book probability" path as a one-sided
+    # quote. Exactly 1.0 is fine: a zero-vig market needs no correction.
+    if total < 1.0 - _COHERENCE_TOLERANCE:
         return None
-    return over_raw / total
+
+    if method == "proportional":
+        return over_raw / total
+
+    if method == "additive":
+        half_overround = (total - 1.0) / 2.0
+        fair_over = over_raw - half_overround
+        fair_under = under_raw - half_overround
+        # Defensive only. For a TWO-way market this cannot trigger: it would
+        # need over_raw < under_raw - 1, and a raw implied probability from
+        # American odds is always strictly below 1. Kept because the guard is
+        # free and would matter if this were ever extended past two outcomes.
+        if not (0.0 < fair_over < 1.0) or not (0.0 < fair_under < 1.0):
+            return None
+        return fair_over
+
+    if method == "shin":
+        if total <= 1.0:
+            return over_raw / total
+        z = solve_shin_z((over_raw, under_raw))
+        fair = _shin_probabilities((over_raw, under_raw), total, z)
+        fair_total = sum(fair)
+        if fair_total <= 0:
+            return None
+        # Renormalize: bisection lands within tolerance of 1, not exactly on it.
+        return fair[0] / fair_total
+
+    raise ValueError(
+        f"Unknown de-vig method {method!r}. "
+        f"Expected one of: proportional, additive, shin."
+    )
+
+
+def consensus_book_probability(
+    prices: Sequence[tuple[int | None, int | None]],
+    method: DevigMethod = DEFAULT_DEVIG_METHOD,
+) -> float | None:
+    """Median de-vigged OVER probability across books.
+
+    A single book's fair probability is a noisy estimate of the market's view.
+    De-vigging each book separately and taking the median is a materially better
+    one, and it is cheap because the board already carries per-book odds
+    (CLAUDE.md §7).
+
+    De-vig-then-median, never median-then-de-vig: averaging prices across books
+    with different holds produces a synthetic market that exists nowhere, and
+    its overround is not any real book's.
+
+    One-sided quotes are skipped rather than counted, so this returns None when
+    no book posted a two-way price. Takes plain price tuples rather than
+    adapter objects to keep this module free of provider types.
+    """
+    fair = [
+        p
+        for p in (devig_two_way(over, under, method) for over, under in prices)
+        if p is not None
+    ]
+    if not fair:
+        return None
+
+    fair.sort()
+    middle = len(fair) // 2
+    if len(fair) % 2 == 1:
+        return fair[middle]
+    return 0.5 * (fair[middle - 1] + fair[middle])
 
 
 def edge_on_side(
@@ -178,10 +377,31 @@ def prob_over(distribution: str, params: dict[str, Any], line: float) -> float:
         # 0 <= line < 1: the over is "at least one", i.e. p itself.
         return p
 
-    if distribution in ("gamma", "negative_binomial"):
-        raise NotImplementedError(
-            f"{distribution} CDF needs scipy, which arrives with statsmodels in "
-            f"Phase 3. Until then use normal or poisson."
+    if distribution == "gamma":
+        # Receiving yards: continuous, non-negative, right-skewed — a receiver's
+        # bad game floors at zero while a long touchdown has no ceiling.
+        if line <= 0:
+            return 1.0
+        return float(
+            _stats.gamma.sf(
+                line, a=float(params["shape"]), scale=float(params["scale"])
+            )
+        )
+
+    if distribution == "negative_binomial":
+        # Counts (attempts, completions, carries, receptions). Preferred over
+        # Poisson because game-to-game usage is overdispersed: a running back's
+        # carries vary with game script far more than a Poisson would allow, and
+        # Poisson would understate the tails on both sides.
+        #
+        # scipy's parameterization: r successes, success probability p, support
+        # k = 0,1,2,..., mean = r(1-p)/p. sf(k) is P(X > k) directly.
+        if line < 0:
+            return 1.0
+        return float(
+            _stats.nbinom.sf(
+                math.floor(line), n=float(params["r"]), p=float(params["p"])
+            )
         )
 
     raise ValueError(f"Unknown distribution family: {distribution!r}")

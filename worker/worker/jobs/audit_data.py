@@ -15,14 +15,19 @@ in a transcript.
 
 Covers: schema objects and constraints, RLS posture, the odds math, referential
 integrity, the anti-lookahead guarantees, data completeness, value plausibility,
-and cross-source reconciliation between box scores and play attribution.
+cross-source reconciliation between box scores and play attribution, the
+distribution-family resolution layer, Python/SQL agreement on the odds math, and
+the calibration outputs the Phase 3 report is rendered from.
 """
 
 from __future__ import annotations
 
 import sys
 
-from worker.db import fetch_one
+import psycopg
+
+from worker.core import probability
+from worker.db import connect, fetch_all, fetch_one
 from worker.logging_setup import configure_logging
 
 configure_logging("ERROR")
@@ -48,6 +53,53 @@ def check(group: str, name: str, sql: str, ok, detail_cols=None, params=None):
 
 def manual(group: str, name: str, passed: bool, detail: str):
     RESULTS.append((group, name, bool(passed), detail))
+
+
+def rejects(group: str, name: str, statement: str, params, constraint: str):
+    """Assert a CHECK constraint actually FIRES, and that the named one fired.
+
+    Every lookahead check above asks whether a constraint is *installed*. That is
+    a different question from whether it bites, and only the second one protects
+    anything: a constraint written against the wrong column, or one Postgres
+    cannot prove and therefore skips, is present in `pg_constraint` and still
+    lets the bad row in.
+
+    The rows attempted here carry deliberately invalid foreign keys, because
+    building valid ones would mean fabricating a player, a game and a projection
+    to test an arithmetic rule. That is safe: Postgres evaluates CHECK
+    constraints while forming the tuple, and foreign keys afterwards in AFTER
+    triggers, so the CHECK is reached first. Asserting on `diag.constraint_name`
+    rather than on "some error happened" is what makes that safe rather than
+    lucky — an FK violation, a type error or a missing column all report
+    something else and fail this check instead of passing it.
+
+    Everything runs inside a transaction that is always rolled back.
+    """
+    try:
+        with connect() as conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(statement, params)
+            except psycopg.errors.CheckViolation as exc:
+                fired = exc.diag.constraint_name
+                RESULTS.append(
+                    (
+                        group,
+                        name,
+                        fired == constraint,
+                        f"fired={fired}, expected={constraint}",
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                RESULTS.append(
+                    (group, name, False, f"wrong error: {type(exc).__name__}: {exc}")
+                )
+            else:
+                RESULTS.append((group, name, False, "INSERT was ACCEPTED"))
+            finally:
+                conn.rollback()
+    except Exception as exc:  # noqa: BLE001
+        RESULTS.append((group, name, False, f"connection error: {exc}"))
 
 
 # =============================================================================
@@ -550,6 +602,464 @@ check(G, "split TDs are consistent with box-score TDs (season totals)", """
     select s.rt as split_rush_td, b.rt as box_rush_td,
            round(100.0*s.rt/nullif(b.rt,0),1) as pct from s, b
 """, lambda r: 70 < float(r["pct"]) < 105)
+
+# =============================================================================
+# PHASE 3 — the distribution-family resolution layer
+# =============================================================================
+# Phase 3d measured the nine seeded families against 2024-25 data and found four
+# of them wrong, two irreparably so because one family per market cannot describe
+# a stat whose shape depends on who produces it. The fix was a per-position
+# override plus a resolver. These pin that the override layer is live and still
+# says what the measurement said — a silently reverted override would not raise
+# anywhere, it would just quietly fit RB rushing with a normal again.
+G = "P3 families"
+
+check(G, "resolve_distribution_family() exists", """
+    select count(*) as n from pg_proc where proname = 'resolve_distribution_family'
+""", lambda r: r["n"] == 1)
+
+check(G, "every market/position pair resolves to a family", """
+    select count(*) as unresolved from market_positions mp
+     where resolve_distribution_family(mp.market_key, mp.position_group) is null
+""", lambda r: r["unresolved"] == 0)
+
+check(G, "all 9 markets and 17 market/position pairs present", """
+    select (select count(*) from markets) as markets,
+           (select count(*) from market_positions) as pairs
+""", lambda r: r["markets"] == 9 and r["pairs"] == 17)
+
+# The override mechanism has to be doing work. If every pair resolved to its
+# market default, the Phase 3d measurement would have been silently discarded
+# and this whole layer would be dead code that still passes every other check.
+check(G, "per-position overrides actually differ from market defaults", """
+    select count(*) as overridden from market_positions mp
+      join markets m on m.key = mp.market_key
+     where mp.distribution_family is not null
+       and mp.distribution_family <> m.distribution_family
+""", lambda r: r["overridden"] >= 5, ["overridden"])
+
+check(G, "rush_yards is gamma for BOTH QB and RB (sacks make it skewed)", """
+    select resolve_distribution_family('rush_yards','QB') as qb,
+           resolve_distribution_family('rush_yards','RB') as rb
+""", lambda r: r["qb"] == "gamma" and r["rb"] == "gamma")
+
+# 0015's stated reason for leaving the market default at normal: a position added
+# later without measurement should inherit the family that at least admits
+# negative outcomes.
+check(G, "rush_yards market DEFAULT still admits negatives", """
+    select distribution_family as fam from markets where key = 'rush_yards'
+""", lambda r: r["fam"] == "normal")
+
+check(G, "receptions is beta_binomial everywhere (under-dispersed)", """
+    select count(*) as wrong from market_positions
+     where market_key = 'receptions'
+       and resolve_distribution_family(market_key, position_group) <> 'beta_binomial'
+""", lambda r: r["wrong"] == 0)
+
+check(G, "rec_yards is lognormal for RB and gamma for WR/TE", """
+    select resolve_distribution_family('rec_yards','RB') as rb,
+           resolve_distribution_family('rec_yards','WR') as wr,
+           resolve_distribution_family('rec_yards','TE') as te
+""", lambda r: r["rb"] == "lognormal" and r["wr"] == "gamma" and r["te"] == "gamma")
+
+check(G, "anytime_td is bernoulli, binary, and has a 0.5 default line", """
+    select distribution_family as fam, is_binary, default_line
+      from markets where key = 'anytime_td'
+""", lambda r: r["fam"] == "bernoulli" and r["is_binary"] is True
+             and abs(float(r["default_line"]) - 0.5) < 1e-9)
+
+# CLAUDE.md §7: run the model before books post, so a non-binary market must NOT
+# invent a default line — it shows a projected range until a real line appears.
+check(G, "only the binary market carries a default line", """
+    select count(*) as bad from markets
+     where (is_binary and default_line is null)
+        or (not is_binary and default_line is not null)
+""", lambda r: r["bad"] == 0)
+
+check(G, "every market grades against a real player_game_stats column", """
+    select count(*) as missing from markets m
+     where not exists (
+       select 1 from information_schema.columns c
+        where c.table_name = 'player_game_stats' and c.column_name = m.stat_column)
+""", lambda r: r["missing"] == 0)
+
+# --- Python <-> SQL: the family contract ---------------------------------------
+# projections.distribution is an enum, so any value it can hold is a value
+# prob_over() may be handed. A family added in SQL but never wired into Python
+# raises at projection time on a row that inserted cleanly.
+try:
+    _sql_families = {
+        r["fam"]
+        for r in fetch_all(
+            "select unnest(enum_range(null::distribution_family))::text as fam"
+        )
+    }
+    _py_families = set(probability.REQUIRED_PARAMS)
+    _unimplemented = sorted(_sql_families - _py_families)
+    manual(
+        G,
+        "every distribution_family enum value is implemented in Python",
+        not _unimplemented,
+        f"sql={len(_sql_families)}, python={len(_py_families)}, "
+        f"unimplemented={_unimplemented or 'none'}",
+    )
+
+    _resolved = {
+        r["fam"]
+        for r in fetch_all(
+            "select distinct resolve_distribution_family(market_key, position_group)"
+            "::text as fam from market_positions"
+        )
+        if r["fam"]
+    }
+    manual(
+        G,
+        "every family we actually resolve to is implemented in Python",
+        _resolved <= _py_families,
+        f"resolved={sorted(_resolved)}",
+    )
+except Exception as exc:  # noqa: BLE001
+    manual(G, "distribution family cross-check", False, f"error: {exc}")
+
+# =============================================================================
+# PHASE 3 — Python and SQL must agree on the odds maths
+# =============================================================================
+# The de-vig exists twice: plpgsql for the read layer and Python for the worker.
+# Two implementations of one definition is a standing invitation to drift, and
+# drift here is invisible — both sides return a plausible probability, and the
+# edge silently depends on which code path produced it. Unit tests pin each side
+# against itself; only this pins them against EACH OTHER, on the live database.
+G = "P3 devig parity"
+
+try:
+    _prices = [-2000, -1100, -500, -250, -150, -110, 100, 130, 250, 600, 1500]
+    _pairs = [(o, u) for o in _prices for u in _prices]
+    _rows = fetch_all(
+        """
+        select t.o, t.u,
+               devig_two_way_proportional(t.o, t.u) as proportional,
+               devig_two_way_additive(t.o, t.u)     as additive,
+               devig_two_way_shin(t.o, t.u)         as shin
+          from unnest(%s::int[], %s::int[]) as t(o, u)
+        """,
+        ([o for o, _ in _pairs], [u for _, u in _pairs]),
+    )
+
+    for _method in ("proportional", "additive", "shin"):
+        _worst = 0.0
+        _disagreements = 0
+        _null_mismatch = 0
+        for _row in _rows:
+            _py = probability.devig_two_way(_row["o"], _row["u"], _method)  # type: ignore[arg-type]
+            _sql = _row[_method]
+            if (_py is None) != (_sql is None):
+                _null_mismatch += 1
+                continue
+            if _py is None:
+                continue
+            _gap = abs(_py - float(_sql))
+            _worst = max(_worst, _gap)
+            if _gap > 1e-9:
+                _disagreements += 1
+        manual(
+            G,
+            f"Python and SQL agree on {_method} de-vig ({len(_rows)} price pairs)",
+            _disagreements == 0 and _null_mismatch == 0,
+            f"max_gap={_worst:.2e}, disagreements={_disagreements}, "
+            f"null_mismatch={_null_mismatch}",
+        )
+
+    # Both sides must decline the same markets, not merely agree where both
+    # answer. A one-sided price and an incoherent two-way price are the two
+    # cases where "no book probability" is the correct answer and zero is not.
+    _declined_sql = sum(1 for _row in _rows if _row["shin"] is None)
+    manual(
+        G,
+        "incoherent markets are declined by both sides, not priced at zero",
+        _declined_sql > 0,
+        f"declined={_declined_sql} of {len(_rows)}",
+    )
+except Exception as exc:  # noqa: BLE001
+    manual(G, "devig parity sweep", False, f"error: {exc}")
+
+check(G, "Python's default de-vig method is the configured one", """
+    select value #>> '{}' as method from app_config where key = 'devig_method'
+""", lambda r: r["method"] == probability.DEFAULT_DEVIG_METHOD)
+
+# =============================================================================
+# PHASE 3 — the tripwires actually fire
+# =============================================================================
+# Above, the lookahead group asks whether these constraints EXIST. Existence is
+# not protection. Each of these attempts the exact bad row the constraint was
+# written to stop, and requires that specific constraint to be the one that
+# stops it. All roll back.
+G = "P3 tripwires"
+
+rejects(G, "backtest_predictions rejects as_of_week > week (LOOKAHEAD)", """
+    insert into backtest_predictions
+      (backtest_id, player_id, game_id, market_key, position_group, season,
+       week, as_of_week, line, side, model_prob_over, confidence)
+    values (gen_random_uuid(), -1, -1, 'rec_yards', 'WR', 2024,
+            6, 7, 50.5, 'over', 0.6, 0.6)
+""", None, "backtest_predictions_as_of_matches_week")
+
+rejects(G, "projections rejects as_of_week < 1", """
+    insert into projections
+      (model_run_id, player_id, game_id, team_id, opponent_team_id, market_key,
+       season, week, as_of_week, distribution, params)
+    values (gen_random_uuid(), -1, -1, -1, -2, 'rec_yards',
+            2024, 1, 0, 'normal', '{"mu": 50, "sigma": 20}'::jsonb)
+""", None, "projections_as_of_week_positive")
+
+rejects(G, "picks rejects an OVER call on a sub-50% probability", """
+    insert into picks
+      (projection_id, player_id, game_id, team_id, opponent_team_id, market_key,
+       season, week, line, side, model_prob_over)
+    values (-1, -1, -1, -1, -2, 'rec_yards', 2024, 6, 50.5, 'over', 0.40)
+""", None, "picks_side_matches_probability")
+
+rejects(G, "picks rejects an UNDER call on an above-50% probability", """
+    insert into picks
+      (projection_id, player_id, game_id, team_id, opponent_team_id, market_key,
+       season, week, line, side, model_prob_over)
+    values (-1, -1, -1, -1, -2, 'rec_yards', 2024, 6, 50.5, 'under', 0.73)
+""", None, "picks_side_matches_probability")
+
+rejects(G, "picks rejects a probability above 1", """
+    insert into picks
+      (projection_id, player_id, game_id, team_id, opponent_team_id, market_key,
+       season, week, line, side, model_prob_over)
+    values (-1, -1, -1, -1, -2, 'rec_yards', 2024, 6, 50.5, 'over', 1.4)
+""", None, "picks_model_prob_is_a_probability")
+
+rejects(G, "season_final ratings cannot smuggle in an as_of_week (LOOKAHEAD)", """
+    insert into team_rating_snapshots
+      (team_id, season, snapshot_kind, as_of_week, source, rating)
+    values (-1, 2024, 'season_final', 8, 'elo', 1500)
+""", None, "team_rating_snapshots_as_of_week_matches_kind")
+
+rejects(G, "point_in_time ratings cannot omit as_of_week (LOOKAHEAD)", """
+    insert into team_rating_snapshots
+      (team_id, season, snapshot_kind, as_of_week, source, rating)
+    values (-1, 2024, 'point_in_time', null, 'elo', 1500)
+""", None, "team_rating_snapshots_as_of_week_matches_kind")
+
+# =============================================================================
+# PHASE 3 — backtest outputs and the calibration curve
+# =============================================================================
+# The report is the Phase 3 deliverable and the client review gate, so a wrong
+# number in it is expensive. These check the stored curve independently of the
+# code that computed it.
+G = "P3 backtest"
+
+check(G, "a backtest model_run succeeded", """
+    select count(*) as n from model_runs
+     where run_type = 'backtest' and status = 'succeeded'
+""", lambda r: r["n"] >= 1, ["n"])
+
+# A killed process leaves 'running' forever. Left unchecked, the monitoring
+# story in Phase 5 inherits rows that mean nothing.
+check(G, "no run is stranded in 'running'", """
+    select (select count(*) from model_runs
+             where status='running' and started_at < now() - interval '2 hours') as runs,
+           (select count(*) from pipeline_runs
+             where status='running' and started_at < now() - interval '2 hours') as jobs
+""", lambda r: r["runs"] == 0 and r["jobs"] == 0)
+
+# Scoped to "some backtest", not "the latest one". Partial runs are a legitimate
+# development tool — a three-week slice to check a fix, or a small run kept
+# specifically so its raw predictions can be audited below — and any of them can
+# be the most recent row. What must be true is that the report handed to the
+# client came from a walk over every season we can actually walk.
+check(G, "a backtest covered every ingested play-by-play season", """
+    with ingested as (
+      select array_agg(distinct season order by season)::smallint[] as seasons
+        from plays)
+    select (select seasons from ingested) as ingested,
+           (select max(created_at) from backtests b, ingested i
+             where b.seasons = i.seasons) as covered_at
+""", lambda r: r["covered_at"] is not None, ["ingested", "covered_at"])
+
+check(G, "hit_rate_basis is one of the two supported bases", """
+    select count(*) as bad from backtests
+     where hit_rate_basis not in ('threshold', 'closing_line')
+""", lambda r: r["bad"] == 0)
+
+check(G, "calibration bins were written for the latest backtest", """
+    select count(*) as n from calibration_bins
+     where backtest_id = (select id from backtests order by created_at desc limit 1)
+""", lambda r: r["n"] >= 10, ["n"])
+
+check(G, "every bin holds at least one prediction", """
+    select count(*) as empty_bins from calibration_bins where n <= 0
+""", lambda r: r["empty_bins"] == 0)
+
+check(G, "predicted and observed rates are probabilities", """
+    select count(*) as bad from calibration_bins
+     where mean_predicted_probability < 0 or mean_predicted_probability > 1
+        or observed_rate < 0 or observed_rate > 1
+""", lambda r: r["bad"] == 0)
+
+# The bin a prediction lands in is floor(p * 10), so its mean predicted
+# probability has to lie inside its own edges. If it does not, predictions were
+# binned by one number and summarised by another, and the reliability diagram is
+# plotting points that no bin actually contains.
+check(G, "each bin's mean predicted probability lies within its own edges", """
+    select count(*) as bad from calibration_bins
+     where mean_predicted_probability < bin_lower - 1e-9
+        or mean_predicted_probability > bin_upper + 1e-9
+""", lambda r: r["bad"] == 0)
+
+check(G, "bins never overlap within a backtest and market", """
+    select count(*) as overlaps
+      from calibration_bins a
+      join calibration_bins b
+        on a.backtest_id = b.backtest_id
+       and a.market_key is not distinct from b.market_key
+       and a.id < b.id
+     where a.bin_lower < b.bin_upper and b.bin_lower < a.bin_upper
+""", lambda r: r["overlaps"] == 0)
+
+# Per-market bins partition the same predictions the overall bins do, so the two
+# totals must agree exactly. This is the cheapest possible check that the report
+# is summarising one population rather than two.
+check(G, "per-market bin counts sum to the overall bin count", """
+    with latest as (select id from backtests order by created_at desc limit 1),
+    overall as (
+      select coalesce(sum(n), 0) as n from calibration_bins c, latest l
+       where c.backtest_id = l.id and c.market_key is null),
+    per_market as (
+      select coalesce(sum(n), 0) as n from calibration_bins c, latest l
+       where c.backtest_id = l.id and c.market_key is not null)
+    select overall.n as overall, per_market.n as per_market
+      from overall, per_market
+""", lambda r: r["overall"] > 0 and r["overall"] == r["per_market"])
+
+check(G, "every stored prediction respects the knowledge cutoff (LOOKAHEAD)", """
+    select count(*) as violations from backtest_predictions where as_of_week > week
+""", lambda r: r["violations"] == 0)
+
+check(G, "no stored prediction was graded before the model could see 2 games", """
+    select count(*) as bad from backtest_predictions where as_of_week < 2
+""", lambda r: r["bad"] == 0)
+
+# -----------------------------------------------------------------------------
+# Grading, re-derived in SQL from the raw stored rows
+# -----------------------------------------------------------------------------
+# The metrics are only as good as the grading underneath them, and a grading bug
+# is silent: every number still prints, the curve still looks like a curve, and
+# the model appears to be worth whatever the mistake is worth. These recompute
+# the graded fields from `actual_value`, `line` and `model_prob_over` in SQL, so
+# nothing here shares code with the Python that produced them.
+#
+# Requires a backtest run with --persist-predictions. Keeping one such run around
+# is deliberate: the calibration curve is the Phase 3 deliverable, and being able
+# to re-derive it from raw rows is what makes it auditable rather than asserted.
+check(G, "at least one backtest kept its raw predictions (run --persist-predictions)", """
+    select count(distinct backtest_id) as backtests from backtest_predictions
+""", lambda r: r["backtests"] >= 1, ["backtests"])
+
+check(G, "outcome_over is exactly 'the result cleared the line'", """
+    select count(*) as bad from backtest_predictions
+     where actual_value is not null
+       and outcome_over is distinct from (actual_value > line)
+""", lambda r: r["bad"] == 0)
+
+# The distinction that makes a props board correct: an UNDER call on a result
+# under the line is a hit. Conflating `hit` with `outcome_over` would roughly
+# halve the apparent accuracy on unders and nothing would error.
+check(G, "hit is 'the CALL was right', not 'the result went over'", """
+    select count(*) as bad from backtest_predictions
+     where outcome_over is not null
+       and hit is distinct from ((side = 'over') = outcome_over)
+""", lambda r: r["bad"] == 0)
+
+check(G, "stored side agrees with the stored probability", """
+    select count(*) as bad from backtest_predictions
+     where (side = 'over') <> (model_prob_over >= 0.5)
+""", lambda r: r["bad"] == 0)
+
+check(G, "confidence is the mass on the called side", """
+    select count(*) as bad from backtest_predictions
+     where abs(confidence - greatest(model_prob_over, 1 - model_prob_over)) > 1e-9
+""", lambda r: r["bad"] == 0)
+
+check(G, "lines are quantized to half-points as books post them", """
+    select count(*) as bad from backtest_predictions
+     where (line * 2) <> round(line * 2)
+""", lambda r: r["bad"] == 0)
+
+check(G, "no line sits at or below zero (a free 100% over)", """
+    select count(*) as bad from backtest_predictions where line <= 0
+""", lambda r: r["bad"] == 0)
+
+# The reliability diagram redrawn from raw rows must land on the stored curve.
+# This is the one check that ties the report's picture back to the observations
+# it claims to summarise.
+check(G, "the stored calibration curve reproduces from the raw predictions", """
+    with latest as (
+      select backtest_id from backtest_predictions
+       group by 1 order by max(created_at) desc limit 1),
+    recomputed as (
+      select least(floor(p.model_prob_over * 10)::int, 9) as slot,
+             count(*) as n,
+             avg(p.model_prob_over) as mean_predicted,
+             avg(case when p.outcome_over then 1.0 else 0.0 end) as observed
+        from backtest_predictions p join latest l using (backtest_id)
+       group by 1),
+    stored as (
+      select round(c.bin_lower * 10)::int as slot, c.n,
+             c.mean_predicted_probability, c.observed_rate
+        from calibration_bins c join latest l using (backtest_id)
+       where c.market_key is null)
+    select count(*) as compared,
+           count(*) filter (
+             where s.slot is null or r.slot is null
+                or s.n <> r.n
+                or abs(s.mean_predicted_probability - r.mean_predicted) > 1e-9
+                or abs(s.observed_rate - r.observed) > 1e-9) as disagree
+      from recomputed r full join stored s on s.slot = r.slot
+""", lambda r: r["compared"] > 0 and r["disagree"] == 0)
+
+# =============================================================================
+# PHASE 3 — configuration and key hygiene
+# =============================================================================
+G = "P3 config"
+
+check(G, "every Phase 3 config key is present", """
+    select count(*) as n from app_config
+     where key in ('devig_method','hit_rate_basis','edge_threshold',
+                   'prior_season_weight_max','goal_line_yards_to_goal',
+                   'odds_adapter','min_games_for_defense_rank')
+""", lambda r: r["n"] == 7)
+
+check(G, "hit_rate_basis is a basis we implement", """
+    select value #>> '{}' as basis from app_config where key = 'hit_rate_basis'
+""", lambda r: r["basis"] in ("threshold", "closing_line"))
+
+check(G, "edge_threshold is a sane probability difference", """
+    select (value #>> '{}')::numeric as t from app_config where key='edge_threshold'
+""", lambda r: 0 < float(r["t"]) < 0.5)
+
+check(G, "prior_season_weight_max is a proportion below 1", """
+    select (value #>> '{}')::numeric as w
+      from app_config where key='prior_season_weight_max'
+""", lambda r: 0 < float(r["w"]) < 1)
+
+# app_config is world-READABLE by design — the app reads it directly. CLAUDE.md
+# §0 makes key hygiene a hard rule, so the table has to be checked for anything
+# that looks like a credential rather than trusted to stay clean.
+check(G, "app_config holds no credential-shaped values", """
+    select count(*) as suspicious from app_config
+     where key ~* '(api_?key|token|secret|password|credential|bearer)'
+        or value #>> '{}' ~ '^[A-Za-z0-9_\\-]{24,}$'
+""", lambda r: r["suspicious"] == 0)
+
+check(G, "app_config is readable but not writable from the app role", """
+    select count(*) as write_policies from pg_policies
+     where schemaname='public' and tablename='app_config'
+       and cmd in ('INSERT','UPDATE','DELETE','ALL')
+""", lambda r: r["write_policies"] == 0)
 
 # =============================================================================
 # Report

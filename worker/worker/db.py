@@ -8,7 +8,7 @@ enters Supabase (CLAUDE.md §2).
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any
 
@@ -143,6 +143,60 @@ def upsert(
         conn.commit()
 
     return affected
+
+
+def copy_into(
+    table: str,
+    columns: Sequence[str],
+    rows: Iterable[Sequence[Any]],
+) -> int:
+    """Bulk-load via COPY. Returns rows written.
+
+    COPY rather than multi-row INSERT because Phase 2c loads hundreds of
+    thousands of rows: COPY streams them in one pass instead of building and
+    parsing enormous statements.
+
+    The tradeoff is that COPY has no ON CONFLICT, so this cannot be used where
+    rows may already exist. It suits append-only tables (`plays`,
+    `play_player_stats`) whose ingest is scoped to a season/week that is deleted
+    and reloaded, which is why those loaders clear their slice first.
+    """
+    cols = sql.SQL(", ").join(sql.Identifier(c) for c in columns)
+    statement = sql.SQL("copy {table} ({cols}) from stdin").format(
+        table=sql.Identifier(table), cols=cols
+    )
+
+    written = 0
+    with connect() as conn:
+        with conn.cursor() as cur, cur.copy(statement) as copy:
+            for row in rows:
+                copy.write_row(row)
+                written += 1
+        conn.commit()
+    return written
+
+
+def execute(
+    statement: str, params: tuple[Any, ...] | Mapping[str, Any] | None = None
+) -> int:
+    """Run a statement and return the affected row count."""
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(statement, params)
+        affected = cur.rowcount
+        conn.commit()
+        return affected
+
+
+def database_size_mb() -> float:
+    """Current database size in MB.
+
+    The development project is on Supabase's free tier, which caps the database
+    at 500 MB. Phase 2c loads several hundred thousand rows, so jobs check this
+    before starting rather than discovering the ceiling with half a season
+    loaded and no clean way to tell which half.
+    """
+    row = fetch_one("select pg_database_size(current_database()) as bytes")
+    return (row["bytes"] / 1024 / 1024) if row else 0.0
 
 
 def fetch_id_map(table: str, key_column: str, id_column: str = "id") -> dict[Any, int]:

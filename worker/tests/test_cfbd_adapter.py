@@ -10,8 +10,11 @@ No network access and no database.
 
 from __future__ import annotations
 
+import datetime
+import enum
 import json
 import time
+from decimal import Decimal
 
 import pytest
 
@@ -129,6 +132,52 @@ def test_to_rows_handles_models_lists_and_singletons():
     assert _to_rows([{"a": 1}]) == [{"a": 1}]
     assert _to_rows(FakeModel(a=1)) == [{"a": 1}]
     assert _to_rows([FakeModel(a=1), FakeModel(a=2)]) == [{"a": 1}, {"a": 2}]
+
+
+class FakeSeasonType(enum.Enum):
+    REGULAR = "regular"
+
+
+def test_to_rows_unwraps_enums_and_datetimes():
+    """CFBD's to_dict() leaves enums and datetimes as Python objects.
+
+    If they reach the JSON cache as-is they stringify to 'FakeSeasonType.REGULAR'
+    and a cached read then disagrees with a live read. Normalizing at the
+    boundary is what keeps the two identical.
+    """
+    row = _to_rows(
+        FakeModel(
+            seasonType=FakeSeasonType.REGULAR,
+            startDate=datetime.datetime(2024, 8, 24, 16, 0, tzinfo=datetime.UTC),
+            nested={"kind": FakeSeasonType.REGULAR},
+            items=[FakeSeasonType.REGULAR],
+            amount=Decimal("3.5"),
+        )
+    )[0]
+
+    assert row["seasonType"] == "regular"
+    assert row["startDate"] == "2024-08-24T16:00:00+00:00"
+    assert row["nested"]["kind"] == "regular"
+    assert row["items"] == ["regular"]
+    assert row["amount"] == 3.5
+
+
+def test_live_and_cached_rows_are_identical(tmp_path):
+    """The regression this guards: same call, different type depending on cache.
+
+    A JSON round-trip must be a no-op. If it is not, the first run and every
+    later run see different data.
+    """
+    rows = _to_rows(
+        FakeModel(
+            seasonType=FakeSeasonType.REGULAR,
+            startDate=datetime.datetime(2024, 8, 24, 16, 0, tzinfo=datetime.UTC),
+        )
+    )
+
+    cache = ResponseCache(tmp_path)
+    cache.put("/games", {"year": 2024}, rows)
+    assert cache.get("/games", {"year": 2024}, None) == rows
 
 
 # ---------------------------------------------------------------------- backoff

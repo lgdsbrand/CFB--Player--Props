@@ -8,11 +8,12 @@ enters Supabase (CLAUDE.md §2).
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import dict_row
 
 from worker.config import get_settings
@@ -43,6 +44,134 @@ def fetch_all(sql: str, params: tuple[Any, ...] | None = None) -> list[dict[str,
     with connect() as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         return cur.fetchall()
+
+
+def upsert(
+    table: str,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    conflict_columns: Sequence[str],
+    update_columns: Sequence[str] | None = None,
+    batch_size: int = 1000,
+) -> int:
+    """Bulk INSERT ... ON CONFLICT DO UPDATE. Returns rows affected.
+
+    Ingest is re-run constantly during development and weekly in production, so
+    every write has to be idempotent — a second run must correct rows rather
+    than duplicate them or abort.
+
+    Rows may have differing key sets; the union is used and missing keys are
+    written as NULL. That matters because CFBD omits fields rather than sending
+    nulls, so an early-season game and a completed one do not have identical
+    shapes, and requiring uniformity would push per-row conditionals into every
+    caller.
+
+    Passing an empty `update_columns` makes this DO NOTHING, for append-only
+    tables where an existing row must never be rewritten.
+    """
+    rows = list(rows)
+    if not rows:
+        return 0
+
+    # Postgres rejects an entire INSERT ... ON CONFLICT statement if two rows in
+    # it share a conflict key ("cannot affect row a second time"), so a single
+    # duplicate anywhere in a batch kills the whole job. CFBD does emit
+    # duplicates — /conferences returns historical and current records under the
+    # same name. Collapse them here, last occurrence winning, and say so, since
+    # silently discarding a row is exactly the kind of thing that should appear
+    # in a log rather than be inferred later from a row count that looks short.
+    deduped: dict[tuple[Any, ...], Mapping[str, Any]] = {}
+    for row in rows:
+        deduped[tuple(row.get(c) for c in conflict_columns)] = row
+
+    if len(deduped) < len(rows):
+        log.warning(
+            "upsert %s: collapsed %d row(s) duplicating %s within the batch",
+            table,
+            len(rows) - len(deduped),
+            list(conflict_columns),
+        )
+    rows = list(deduped.values())
+
+    columns = sorted({key for row in rows for key in row})
+
+    col_sql = sql.SQL(", ").join(sql.Identifier(c) for c in columns)
+    conflict_sql = sql.SQL(", ").join(sql.Identifier(c) for c in conflict_columns)
+
+    if update_columns is None:
+        update_columns = [c for c in columns if c not in set(conflict_columns)]
+
+    if update_columns:
+        assignments = sql.SQL(", ").join(
+            sql.SQL("{col} = excluded.{col}").format(col=sql.Identifier(c))
+            for c in update_columns
+        )
+        conflict_action = sql.SQL("do update set {assignments}").format(
+            assignments=assignments
+        )
+    else:
+        conflict_action = sql.SQL("do nothing")
+
+    row_placeholder = sql.SQL("({})").format(
+        sql.SQL(", ").join(sql.Placeholder() for _ in columns)
+    )
+
+    affected = 0
+    with connect() as conn:
+        for start in range(0, len(rows), batch_size):
+            batch = rows[start : start + batch_size]
+            values_sql = sql.SQL(", ").join(row_placeholder for _ in batch)
+            statement = sql.SQL(
+                "insert into {table} ({cols}) values {values} "
+                "on conflict ({conflict}) {action}"
+            ).format(
+                table=sql.Identifier(table),
+                cols=col_sql,
+                values=values_sql,
+                conflict=conflict_sql,
+                action=conflict_action,
+            )
+
+            params: list[Any] = []
+            for row in batch:
+                params.extend(row.get(c) for c in columns)
+
+            with conn.cursor() as cur:
+                cur.execute(statement, params)
+                affected += cur.rowcount
+
+        conn.commit()
+
+    return affected
+
+
+def fetch_id_map(table: str, key_column: str, id_column: str = "id") -> dict[Any, int]:
+    """Build {natural_key: surrogate_id} for resolving foreign keys.
+
+    CFBD refers to entities by its own ids and by school name; the schema uses
+    its own surrogate keys. Ingest resolves between them in Python rather than
+    with correlated subqueries per row, which would turn one bulk insert into
+    thousands of round trips.
+    """
+    rows = fetch_all(
+        sql.SQL("select {key}, {id} from {table} where {key} is not null")
+        .format(
+            key=sql.Identifier(key_column),
+            id=sql.Identifier(id_column),
+            table=sql.Identifier(table),
+        )
+        .as_string(None)  # type: ignore[arg-type]
+    )
+    return {row[key_column]: row[id_column] for row in rows}
+
+
+def count_rows(table: str) -> int:
+    row = fetch_one(
+        sql.SQL("select count(*) as n from {}")
+        .format(sql.Identifier(table))
+        .as_string(None)  # type: ignore[arg-type]
+    )
+    return int(row["n"]) if row else 0
 
 
 def get_config_value(key: str) -> Any:

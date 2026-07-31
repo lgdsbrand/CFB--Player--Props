@@ -23,6 +23,9 @@ from __future__ import annotations
 
 import random
 import time
+from datetime import date, datetime
+from decimal import Decimal
+from enum import Enum
 from typing import Any, TypeVar
 
 import cfbd
@@ -68,8 +71,34 @@ def build_configuration(api_key: str | None = None) -> cfbd.Configuration:
         return configuration
 
 
+def _jsonable(value: Any) -> Any:
+    """Coerce a value into something JSON round-trips unchanged.
+
+    This is load-bearing, not cosmetic. `to_dict()` leaves enum members and
+    datetimes as Python objects (`SeasonType.REGULAR`, not `"regular"`). Writing
+    those to the JSON cache stringifies them, so a cached read would hand ingest
+    code `"SeasonType.REGULAR"` where a live read handed it an enum — the same
+    call returning different types depending on cache state, which is the kind
+    of bug that only shows up on the second run.
+
+    Normalizing here means live and cached responses are byte-identical, and
+    ingest sees clean primitives either way.
+    """
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
 def _to_rows(result: Any) -> list[dict[str, Any]]:
-    """Normalize any CFBD response into a list of plain dicts."""
+    """Normalize any CFBD response into a list of JSON-safe plain dicts."""
     if result is None:
         return []
     if not isinstance(result, list):
@@ -77,11 +106,12 @@ def _to_rows(result: Any) -> list[dict[str, Any]]:
     rows = []
     for item in result:
         if isinstance(item, dict):
-            rows.append(item)
+            row = item
         elif hasattr(item, "to_dict"):
-            rows.append(item.to_dict())
+            row = item.to_dict()
         else:
-            rows.append(vars(item))
+            row = vars(item)
+        rows.append({k: _jsonable(v) for k, v in row.items()})
     return rows
 
 

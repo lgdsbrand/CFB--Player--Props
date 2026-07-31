@@ -14,10 +14,12 @@ from worker.adapters.odds import (
     NullOddsAdapter,
     OddsAdapter,
     OddsAdapterError,
+    OddsPlanError,
+    OddsQuotaError,
     TheOddsApiAdapter,
     get_adapter,
 )
-from worker.adapters.odds.http import redact
+from worker.adapters.odds.http import QUOTA_ERROR_CODES, _error_code, redact
 from worker.adapters.odds.markets import (
     OUR_KEY_TO_PROVIDER,
     PROVIDER_TO_OUR_KEY,
@@ -261,6 +263,42 @@ class TestKeyHygiene:
     def test_empty_key_refuses_to_build_a_client(self):
         with pytest.raises(OddsAdapterError, match="ODDS_API_KEY is empty"):
             TheOddsApiAdapter("")
+
+
+class TestErrorClassification:
+    """HTTP 401 means two opposite things, and only the body tells them apart.
+
+    Regression: quota exhaustion was classified as an entitlement failure, so
+    the coverage memo recorded "historical odds NOT available on this plan" for
+    a plan that does carry historical — the account was simply out of credits.
+    """
+
+    def test_out_of_credits_is_a_quota_error(self):
+        body = (
+            '{"message":"Usage quota has been reached.",'
+            '"error_code":"OUT_OF_USAGE_CREDITS"}'
+        )
+        assert _error_code(body) == "OUT_OF_USAGE_CREDITS"
+
+    def test_entitlement_failure_is_not_a_quota_error(self):
+        body = (
+            '{"message":"Historical odds are only available on paid usage plans.",'
+            '"error_code":"HISTORICAL_UNAVAILABLE_ON_FREE_USAGE_PLAN"}'
+        )
+        assert _error_code(body) not in QUOTA_ERROR_CODES
+
+    def test_quota_error_is_distinguishable_from_plan_error(self):
+        # Both inherit OddsAdapterError, so a caller can still catch broadly —
+        # but a caller that cares must be able to tell them apart.
+        assert issubclass(OddsQuotaError, OddsAdapterError)
+        assert issubclass(OddsPlanError, OddsAdapterError)
+        assert not issubclass(OddsQuotaError, OddsPlanError)
+        assert not issubclass(OddsPlanError, OddsQuotaError)
+
+    def test_unparsable_body_degrades_to_no_code(self):
+        assert _error_code("not json at all") is None
+        assert _error_code("") is None
+        assert _error_code("[1,2,3]") is None
 
 
 class TestAdapterRegistry:

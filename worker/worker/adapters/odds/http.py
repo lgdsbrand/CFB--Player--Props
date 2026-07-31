@@ -27,6 +27,7 @@ from typing import Any
 from worker.adapters.odds.base import (
     OddsAdapterError,
     OddsPlanError,
+    OddsQuotaError,
     QuotaSnapshot,
 )
 from worker.logging_setup import get_logger
@@ -40,6 +41,11 @@ BASE_URL = "https://api.the-odds-api.com/v4"
 # retry loop would turn a clear entitlement answer into a timeout.
 RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 TERMINAL_PLAN_STATUSES = frozenset({401, 403, 422})
+
+# The provider returns HTTP 401 for BOTH "your plan does not include this" and
+# "you are out of credits". Those mean opposite things — one is permanent, the
+# other clears at the next reset — and only the response body tells them apart.
+QUOTA_ERROR_CODES = frozenset({"OUT_OF_USAGE_CREDITS"})
 
 DEFAULT_MIN_INTERVAL = 0.15
 DEFAULT_MAX_RETRIES = 4
@@ -63,6 +69,24 @@ def _int_header(headers: Any, name: str) -> int | None:
         return int(float(raw))
     except (TypeError, ValueError):
         return None
+
+
+def _error_code(body: str) -> str | None:
+    """Pull the provider's machine-readable error code out of a response body.
+
+    Returns None when the body is not the JSON shape we expect, so an unparsable
+    error degrades to the generic classification rather than being mislabelled.
+    """
+    if not body:
+        return None
+    try:
+        payload = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    code = payload.get("error_code")
+    return str(code) if code else None
 
 
 def _quota_from_headers(headers: Any) -> QuotaSnapshot:
@@ -156,9 +180,10 @@ class OddsHttpClient:
                     pass
 
                 if exc.code in TERMINAL_PLAN_STATUSES:
-                    raise OddsPlanError(
-                        f"HTTP {exc.code} on {safe_url}: {redact(body)}"
-                    ) from exc
+                    message = f"HTTP {exc.code} on {safe_url}: {redact(body)}"
+                    if _error_code(body) in QUOTA_ERROR_CODES:
+                        raise OddsQuotaError(message) from exc
+                    raise OddsPlanError(message) from exc
 
                 if exc.code not in RETRYABLE_STATUSES or attempt >= self.max_retries:
                     raise OddsAdapterError(

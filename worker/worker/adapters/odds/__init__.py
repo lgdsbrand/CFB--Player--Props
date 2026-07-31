@@ -15,6 +15,7 @@ from worker.adapters.odds.base import (
     OddsAdapterError,
     OddsEvent,
     OddsPlanError,
+    OddsQuotaError,
     PropQuote,
     QuotaSnapshot,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "OddsAdapterError",
     "OddsEvent",
     "OddsPlanError",
+    "OddsQuotaError",
     "PropQuote",
     "QuotaSnapshot",
     "TheOddsApiAdapter",

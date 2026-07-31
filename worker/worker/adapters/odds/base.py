@@ -40,6 +40,22 @@ class OddsPlanError(OddsAdapterError):
     """
 
 
+class OddsQuotaError(OddsAdapterError):
+    """Raised when the account is out of credits.
+
+    MUST NOT be folded into OddsPlanError even though the provider returns the
+    same HTTP 401 for both. They mean opposite things: entitlement says "this
+    plan will never serve that", quota says "this plan serves it, just not until
+    the allowance resets". Conflating them made the probe report
+    "historical odds NOT available on this plan" for a plan we had direct
+    evidence DOES carry historical — a wrong conclusion written into a memo
+    whose entire job is to be right about that.
+
+    The provider distinguishes them in the response body via `error_code`, so
+    the classification is read from there rather than inferred from the status.
+    """
+
+
 @dataclass(frozen=True)
 class QuotaSnapshot:
     """What the provider said about the account after the last request.

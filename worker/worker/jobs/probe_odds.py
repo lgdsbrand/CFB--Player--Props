@@ -35,7 +35,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from worker.adapters.odds import OddsAdapterError, OddsPlanError, TheOddsApiAdapter
+from worker.adapters.odds import (
+    OddsAdapterError,
+    OddsPlanError,
+    OddsQuotaError,
+    TheOddsApiAdapter,
+)
 from worker.adapters.odds.markets import (
     NCAAF_SPORT_KEY,
     OUR_KEY_TO_PROVIDER,
@@ -83,6 +88,27 @@ class Finding:
         lines = [f"  [{mark}] {self.name}: {self.detail}"]
         lines.extend(f"         - {n}" for n in self.notes)
         return "\n".join(lines)
+
+
+def _quota_exhausted_finding(name: str, adapter: TheOddsApiAdapter) -> Finding:
+    """Report an exhausted allowance as UNRESOLVED, never as a verdict.
+
+    The provider returns HTTP 401 both for "your plan does not include this" and
+    for "you are out of credits". Reading the second as the first is how a memo
+    ends up recording that historical odds are unavailable on a plan that
+    actually carries them.
+    """
+    return Finding(
+        name,
+        None,
+        f"UNRESOLVED — account is out of credits, so nothing was measured. "
+        f"{adapter.quota.summary()}",
+        [
+            "This is a QUOTA response (OUT_OF_USAGE_CREDITS), not an "
+            "entitlement one. It says nothing about what this plan covers.",
+            "Re-run after the monthly reset.",
+        ],
+    )
 
 
 def _describe_coverage(diagnostics: ParseDiagnostics) -> list[str]:
@@ -258,6 +284,8 @@ def probe_live_props(
         before = adapter.quota.remaining
         try:
             payload = adapter.fetch_props_raw(event.event_id)
+        except OddsQuotaError:
+            return _quota_exhausted_finding("live player props", adapter)
         except OddsPlanError as exc:
             return Finding(
                 "live player props",
@@ -346,6 +374,8 @@ def probe_historical(
     """
     try:
         snapshot = adapter.historical_events(iso_timestamp)
+    except OddsQuotaError:
+        return [_quota_exhausted_finding("historical odds", adapter)]
     except OddsPlanError as exc:
         return [
             Finding(
@@ -386,6 +416,9 @@ def probe_historical(
     before = adapter.quota.remaining
     try:
         payload = adapter.historical_props_raw(event_id, iso_timestamp)
+    except OddsQuotaError:
+        findings.append(_quota_exhausted_finding("historical player props", adapter))
+        return findings
     except OddsPlanError as exc:
         findings.append(
             Finding(

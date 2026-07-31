@@ -7,7 +7,7 @@ against live services, that:
   2. it can reach Postgres and the migrations have actually been applied,
   3. it can WRITE — the pipeline_runs row is inserted by the same code path
      every later ingest job will use,
-  4. the CFBD API key authenticates.
+  4. the CFBD API key authenticates AND carries the paid tier we depend on.
 
 Every check runs even if an earlier one fails, so first-time setup gets a full
 readout ("database OK, CFBD key missing") instead of stopping at the first
@@ -151,21 +151,101 @@ def check_row_counts() -> CheckResult:
     )
 
 
+# A season/week known to have completed games, used only as a probe target.
+# Deliberately historical rather than "current season": in the offseason a
+# current-season call returns an empty list, which is indistinguishable from a
+# broken key and would make this check flap twice a year.
+_TIER_PROBE_SEASON = 2024
+_TIER_PROBE_WEEK = 5
+
+
+def _diagnose_cfbd_denial(status: int) -> CheckResult:
+    """Tell a rejected key apart from an unentitled one after a 401/403.
+
+    Retries against a free-tier endpoint. If that works, the credential itself
+    is fine and the subscription is the problem; if it fails too, the key is
+    being rejected outright.
+    """
+    import cfbd
+
+    from worker.adapters.cfbd.client import CfbdClient
+
+    try:
+        with CfbdClient() as client:
+            client.api(cfbd.ConferencesApi).get_conferences()
+    except Exception:
+        return CheckResult(
+            "cfbd api key (paid tier)",
+            False,
+            f"HTTP {status} — CFBD rejects this key on free-tier endpoints too, "
+            "so the key itself is wrong (typo, truncated paste, or revoked) "
+            "rather than the subscription. Re-copy it from "
+            "https://collegefootballdata.com/key",
+        )
+
+    return CheckResult(
+        "cfbd api key (paid tier)",
+        False,
+        f"HTTP {status} on weather, but free-tier endpoints work — the key is "
+        "VALID and simply not entitled to weather. The paid tier is inactive or "
+        "lapsed; check the CFBD Patreon subscription (CLAUDE.md §4 requires "
+        "weather, so ingest cannot proceed on the free tier).",
+    )
+
+
 def check_cfbd() -> CheckResult:
-    """Confirm the CFBD key authenticates. One cheap call."""
+    """Confirm the CFBD key authenticates AND carries the paid tier.
+
+    Probes the weather endpoint specifically, not a generic one. The free tier
+    serves conferences, teams and games perfectly happily, so a check built on
+    those goes green on a free key — and weather is exactly the feature the paid
+    tier was bought for (CLAUDE.md §4 requires venue/weather). A green light that
+    does not cover the entitlement we depend on is worse than no light at all,
+    because the gap would surface partway through a Phase 2 weather ingest.
+
+    Still exactly one CFBD call, so this costs no more quota than the auth-only
+    check it replaces.
+    """
     try:
         import cfbd
 
         from worker.adapters.cfbd.client import CfbdClient
 
         with CfbdClient() as client:
-            conferences = client.api(cfbd.ConferencesApi).get_conferences()
+            rows = client.api(cfbd.GamesApi).get_weather(
+                year=_TIER_PROBE_SEASON, week=_TIER_PROBE_WEEK
+            )
     except ConfigError as exc:
-        return CheckResult("cfbd api key", False, str(exc))
+        return CheckResult("cfbd api key (paid tier)", False, str(exc))
     except Exception as exc:
-        return CheckResult("cfbd api key", False, f"{type(exc).__name__}: {exc}")
+        status = getattr(exc, "status", None)
+        if status in (401, 403):
+            # 401/403 is ambiguous on its own: a bad key and a valid-but-
+            # unentitled key look identical here. Disambiguate with one extra
+            # call to a FREE-tier endpoint, because "fix your key" and "renew
+            # your subscription" send you to completely different places. Only
+            # the failure path pays this second call.
+            return _diagnose_cfbd_denial(status)
+        return CheckResult(
+            "cfbd api key (paid tier)", False, f"{type(exc).__name__}: {exc}"
+        )
 
-    return CheckResult("cfbd api key", True, f"{len(conferences)} conferences returned")
+    if not rows:
+        # 200 with an empty body means entitled but no data for that week —
+        # the probe target is stale, not the credentials.
+        return CheckResult(
+            "cfbd api key (paid tier)",
+            False,
+            f"weather endpoint returned no rows for {_TIER_PROBE_SEASON} "
+            f"week {_TIER_PROBE_WEEK}; the probe target needs updating",
+        )
+
+    return CheckResult(
+        "cfbd api key (paid tier)",
+        True,
+        f"weather accessible — {len(rows)} rows for "
+        f"{_TIER_PROBE_SEASON} week {_TIER_PROBE_WEEK}",
+    )
 
 
 def run_checks() -> list[CheckResult]:

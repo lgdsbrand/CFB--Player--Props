@@ -14,6 +14,8 @@ from scipy import stats as st
 
 from worker.core.models import (
     BASELINE_PSEUDO_GAMES,
+    MAX_PSEUDO_GAMES,
+    MIN_PSEUDO_GAMES,
     MIN_RELATIVE_SD,
     Projection,
     _sd,
@@ -139,13 +141,43 @@ class TestBetaBinomialParams:
 
     def test_low_dispersion_request_collapses_to_binomial(self):
         params = beta_binomial_params(10.0, 0.6, 0.1)
+        # p is derived from the mean and the ceiling, so read it back rather
+        # than assuming it equals the success rate that was passed in.
+        p = params["a"] / (params["a"] + params["b"])
         dist = st.betabinom(n=params["n"], a=params["a"], b=params["b"])
-        binomial = st.binom(n=params["n"], p=0.6)
+        binomial = st.binom(n=params["n"], p=p)
         assert dist.var() == pytest.approx(binomial.var(), rel=0.05)
 
     def test_trials_never_round_below_one(self):
         params = beta_binomial_params(0.2, 0.5, 1.0)
         assert params["n"] >= 1
+
+    def test_outcomes_above_the_expected_trial_count_stay_possible(self):
+        """Regression, and the worst defect the first backtest surfaced.
+
+        n was the EXPECTED target count, so a receiver projected for 4 targets
+        had ~0 probability of exceeding 4 receptions. Receivers who drew 9
+        targets and caught 6 turned those near-certainties into losses:
+        receptions scored log loss 3.08 and Brier skill -0.233, well worse than
+        predicting the base rate. Confidently wrong is much more expensive than
+        vaguely wrong.
+        """
+        params = beta_binomial_params(4.0, 0.65, 1.0, trials_sd=2.0)
+        dist = st.betabinom(n=params["n"], a=params["a"], b=params["b"])
+        # Well above the mean of 2.6 must remain reachable, not impossible.
+        assert dist.sf(6) > 0.005
+        assert dist.sf(4) > 0.03
+
+    def test_ceiling_always_exceeds_the_mean(self):
+        for trials, rate in ((0.5, 0.9), (2.0, 0.8), (11.0, 0.7)):
+            params = beta_binomial_params(trials, rate, 1.0)
+            assert params["n"] > trials * rate
+
+    def test_mean_survives_the_larger_ceiling(self):
+        for trials, rate in ((0.78, 1.0), (4.4, 0.62), (9.6, 0.71)):
+            params = beta_binomial_params(trials, rate, 1.0, trials_sd=2.0)
+            dist = st.betabinom(n=params["n"], a=params["a"], b=params["b"])
+            assert dist.mean() == pytest.approx(trials * rate, rel=0.02)
 
 
 class TestMatchupMultiplier:
@@ -221,6 +253,90 @@ class TestPositionBaselines:
         assert not any(
             k.startswith(("prior_", "team_", "opp_")) for k in baselines
         )
+
+
+def _rows(position: str, stat: str, means, sd: float) -> list[dict]:
+    return [
+        {"position_group": position, f"{stat}_pg": mean, f"{stat}_sd": sd}
+        for mean in means
+    ]
+
+
+class TestEmpiricalBayesShrinkage:
+    """Regression for the second defect the first backtest surfaced.
+
+    One pseudo-count for every market was measurably wrong. Pass attempts
+    separate quarterbacks enormously — a starter throws 35 a game, a backup 5 —
+    while varying only moderately for the same player week to week. Shrinking a
+    starter halfway toward a median that includes every backup dragged the
+    projection down systematically: pass_attempts scored a Brier skill of -0.079
+    and pass_completions -0.032, both WORSE than predicting the base rate.
+
+    The shrinkage strength is now within-player variance over between-player
+    variance, estimated per stat. Nothing about the fix raises if it is reverted,
+    so it has to be pinned here.
+    """
+
+    def test_a_separating_stat_earns_little_shrinkage(self):
+        # Players differ hugely (5 to 40 attempts); each is steady (sd 3).
+        baselines = position_baselines(
+            _rows("QB", "pass_attempts", [5, 8, 12, 18, 24, 30, 35, 38, 40], 3.0)
+        )["QB"]
+        assert baselines["pass_attempts_pg__pseudo_games"] < 1.0
+
+    def test_a_noisy_stat_earns_heavy_shrinkage(self):
+        # Players barely differ (9 to 11); each swings wildly (sd 9).
+        baselines = position_baselines(
+            _rows("WR", "rec_yards", [9, 9.5, 10, 10, 10, 10.5, 11, 10.2, 9.8], 9.0)
+        )["WR"]
+        assert baselines["rec_yards_pg__pseudo_games"] > 5.0
+
+    def test_the_estimate_is_clamped_at_both_ends(self):
+        floor = position_baselines(
+            _rows("QB", "pass_attempts", [1, 6, 12, 19, 26, 33, 39, 44, 50], 0.01)
+        )["QB"]["pass_attempts_pg__pseudo_games"]
+        ceiling = position_baselines(
+            _rows("WR", "rec_yards", [10, 10, 10, 10.1, 10, 9.9, 10, 10, 10], 50.0)
+        )["WR"]["rec_yards_pg__pseudo_games"]
+        assert floor == pytest.approx(MIN_PSEUDO_GAMES)
+        assert ceiling == pytest.approx(MAX_PSEUDO_GAMES)
+
+    def test_too_few_players_falls_back_rather_than_guessing(self):
+        """A variance ratio from four players is noise wearing a number's
+        clothes. Absent means _blend_stat uses BASELINE_PSEUDO_GAMES."""
+        baselines = position_baselines(
+            _rows("TE", "receptions", [1.0, 3.0, 5.0, 7.0], 2.0)
+        )["TE"]
+        assert "receptions_pg__pseudo_games" not in baselines
+
+    def test_a_stat_without_a_measured_spread_is_left_alone(self):
+        rows = [
+            {"position_group": "QB", "pass_attempts_pg": float(m)}
+            for m in (5, 8, 12, 18, 24, 30, 35, 38, 40)
+        ]
+        assert "pass_attempts_pg__pseudo_games" not in position_baselines(rows)["QB"]
+
+    def test_a_starter_is_not_dragged_toward_a_backup_laden_median(self):
+        """The defect itself, end to end.
+
+        Three games into the season a 35-attempt starter must still project as a
+        starter. Under the fixed pseudo-count they were pulled most of the way to
+        a median that half the league's backups voted on.
+        """
+        baselines = position_baselines(
+            _rows("QB", "pass_attempts", [5, 8, 12, 18, 24, 30, 35, 38, 40], 3.0)
+        )["QB"]
+        median = baselines["pass_attempts_pg"]
+        estimated = baselines["pass_attempts_pg__pseudo_games"]
+
+        def project_starter(pseudo_games: float) -> float:
+            return blend(
+                current=35.0, current_games=3, prior=None, prior_games=0,
+                prior_weight=0.0, baseline=median, pseudo_games=pseudo_games,
+            )
+
+        assert project_starter(estimated) > project_starter(BASELINE_PSEUDO_GAMES)
+        assert project_starter(estimated) > 33.0
 
 
 class TestProjectComposition:

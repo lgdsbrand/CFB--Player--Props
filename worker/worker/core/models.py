@@ -93,6 +93,13 @@ log = get_logger(__name__)
 # baseline; by 12 games their own record dominates roughly 3:1.
 BASELINE_PSEUDO_GAMES = 4.0
 
+# Bounds on the data-driven pseudo-count. The floor stops a stat that separates
+# players enormously from receiving no shrinkage at all, which would leave a
+# one-game sample fully trusted; the ceiling stops a very noisy stat from being
+# shrunk into the population mean and losing the player entirely.
+MIN_PSEUDO_GAMES = 0.5
+MAX_PSEUDO_GAMES = 12.0
+
 # Floor on a projected standard deviation, as a fraction of the mean. Guards the
 # degenerate case where a player's handful of games happened to be near-identical
 # and the sample SD collapses toward zero — which would otherwise produce a
@@ -220,7 +227,11 @@ def lognormal_params(mean: float, sd: float, loc: float = 0.0) -> dict[str, floa
 
 
 def beta_binomial_params(
-    trials: float, success_rate: float, dispersion: float
+    trials: float,
+    success_rate: float,
+    dispersion: float,
+    *,
+    trials_sd: float | None = None,
 ) -> dict[str, float]:
     """Solve n, a, b from expected trials, a success rate and a dispersion target.
 
@@ -228,20 +239,36 @@ def beta_binomial_params(
     rho = 1/(a+b+1) the intra-class correlation. Inverting for rho and pinning
     p = a/(a+b) gives a and b.
 
-    rho collapses to ~0 when the requested dispersion is at or below the pure
-    binomial value (1-p); that is the binomial limit and a large a+b represents
-    it faithfully.
-    """
-    n = max(int(round(trials)), 1)
+    N IS A CEILING, NOT AN EXPECTATION. This is the subtle part, and getting it
+    wrong was the single worst defect the first backtest found: receptions
+    scored a log loss of 3.08 and a Brier skill of -0.233, far worse than
+    predicting the base rate.
 
-    # p must be derived from the mean AFTER n is rounded, not taken as the raw
-    # success rate. A beta-binomial's mean is n*p, so pairing a rounded n with an
-    # unrounded rate silently moves the mean — and for the small n typical of a
-    # low-usage receiver it moves it a lot. Rounding 0.78 targets to n=1 while
-    # keeping a catch rate of 1.0 produced a distribution that was certain of
-    # exactly one reception.
+    The cause was setting n to the EXPECTED target count. A beta-binomial cannot
+    produce more successes than trials, so a receiver projected for 4 targets was
+    assigned probability ~0 of exceeding 4 receptions — and receivers who drew 9
+    targets and caught 6 turned those near-certainties into losses. Confidently
+    wrong is far more expensive than vaguely wrong, and log loss says so loudly.
+
+    Targets are themselves random, so n has to cover the plausible RANGE, not the
+    point estimate: three standard deviations above expectation. p is then
+    derived from the mean, which keeps the mean exact whatever n turns out to be.
+
+    The cost is honest: a larger n with a smaller p raises the minimum achievable
+    dispersion, (1-p), so the strong under-dispersion measured for running backs
+    (0.53) is no longer reachable. That is a real loss of fidelity in exchange
+    for removing an impossible-outcome ceiling, and it is the right trade —
+    under-dispersion mis-states the width of a distribution, while the ceiling
+    made outcomes that actually happen unreachable.
+    """
     mean = max(trials * success_rate, 1e-6)
-    p = min(max(mean / n, 1e-3), 1 - 1e-3)
+
+    headroom = trials_sd if trials_sd is not None else math.sqrt(max(trials, 1.0) * 2.0)
+    n = max(int(math.ceil(trials + 3.0 * max(headroom, 0.0))), 1)
+    # Never let the ceiling sit at or below the mean itself.
+    n = max(n, int(math.ceil(mean)) + 1)
+
+    p = min(max(mean / n, 1e-4), 1 - 1e-3)
 
     binomial_dispersion = 1.0 - p
     if n <= 1 or dispersion <= binomial_dispersion:
@@ -377,6 +404,47 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
             )
         baselines[position] = resolved
 
+    # Shrinkage strength, estimated per stat rather than fixed.
+    #
+    # A single pseudo-count for every market was measurably wrong. Pass attempts
+    # separate quarterbacks enormously — a starter throws 35 a game, a backup 5 —
+    # while varying only moderately week to week for the same player. Shrinking
+    # a starter halfway to a median that includes every backup drags the
+    # projection down systematically, and the first backtest showed exactly that:
+    # pass_attempts scored a Brier skill of -0.079 and pass_completions -0.032,
+    # both WORSE than predicting the base rate, while stats without that
+    # starter/bench gulf scored well.
+    #
+    # The empirical-Bayes answer is that shrinkage should be the ratio of
+    # within-player variance to between-player variance. When players differ far
+    # more than any one player varies, believe the player; when a stat is noisy
+    # relative to how much players differ, believe the population. Both variances
+    # are already in the frame — the per-player mean and standard deviation of
+    # each stat — so this costs one pass and no new data.
+    for position, stats in by_position.items():
+        resolved = baselines.setdefault(position, {})
+        for key in list(stats.keys()):
+            means = stats[key]
+            if len(means) < 8:
+                continue
+            average = sum(means) / len(means)
+            between = sum((m - average) ** 2 for m in means) / (len(means) - 1)
+
+            sd_key = key.replace("_pg", "_sd")
+            within_values = [
+                v
+                for row in rows
+                if str(row.get("position_group") or "") == position
+                and (v := _value(row, sd_key)) is not None
+                and v > 0
+            ]
+            if not within_values or between <= 0:
+                continue
+            within = sum(v * v for v in within_values) / len(within_values)
+            resolved[f"{key}__pseudo_games"] = min(
+                max(within / between, MIN_PSEUDO_GAMES), MAX_PSEUDO_GAMES
+            )
+
     # Touchdown conversion rates are POOLED, not per-player medians: they are
     # ratios of counts, and the median of per-player ratios is dominated by
     # players with one or two chances, whose rate is 0 or 1 and neither.
@@ -421,6 +489,9 @@ def _blend_stat(
         prior_games=_value(row, "prior_games_played", 0.0) or 0.0,
         prior_weight=_value(row, "prior_weight", 0.0) or 0.0,
         baseline=baselines.get(f"{stat}_pg", 0.0),
+        pseudo_games=baselines.get(
+            f"{stat}_pg__pseudo_games", BASELINE_PSEUDO_GAMES
+        ),
     )
 
 
@@ -789,8 +860,13 @@ def project(
             return None
 
         if distribution == "beta_binomial":
+            # Spread of the TARGET count, which is what n must cover.
+            target_sd = math.sqrt(max(targets, 1.0) * _dispersion(row, "targets"))
             params = beta_binomial_params(
-                targets, catch_rate, _dispersion(row, "receptions")
+                targets,
+                catch_rate,
+                _dispersion(row, "receptions"),
+                trials_sd=target_sd,
             )
         else:
             params = negative_binomial_params(mean, _dispersion(row, "receptions"))

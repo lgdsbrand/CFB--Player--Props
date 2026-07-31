@@ -81,6 +81,13 @@ def main(argv: list[str] | None = None) -> int:
         "--skip-headroom-check", action="store_true",
         help="Bypass the free-tier storage guard.",
     )
+    parser.add_argument(
+        "--box-scores-only", action="store_true",
+        help="Load player_game_stats and stop — no play-by-play, no attribution. "
+             "For PRIOR-SEASON seasons, whose only job is to supply prior-year "
+             "features for the season after them. Costs ~17 calls and a few MB "
+             "instead of ~950 calls and ~105 MB. Leaves targets NULL.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -98,7 +105,13 @@ def main(argv: list[str] | None = None) -> int:
         log.error("%s", exc)
         return 2
 
-    if not args.skip_headroom_check and not check_headroom(len(seasons)):
+    # Box scores are a rounding error against the play tables, so the
+    # per-season storage estimate does not apply to them.
+    if (
+        not args.box_scores_only
+        and not args.skip_headroom_check
+        and not check_headroom(len(seasons))
+    ):
         return 4
 
     before = {t: count_rows(t) for t in REPORTED_TABLES}
@@ -110,7 +123,10 @@ def main(argv: list[str] | None = None) -> int:
             log.info("CFBD account: %s", status.summary())
             warn_on_missing_features(status)
 
-            estimated = sum(estimate_calls(s) for s in seasons)
+            estimated = sum(
+                estimate_calls(s, box_scores_only=args.box_scores_only)
+                for s in seasons
+            )
             log.info("Seasons %s: estimated %d API calls", seasons, estimated)
 
             try:
@@ -127,7 +143,9 @@ def main(argv: list[str] | None = None) -> int:
                 with pipeline_run(
                     JOB_NAME, metadata={"season": season}
                 ) as run_id:
-                    counts = run_stats_ingest(client, season)
+                    counts = run_stats_ingest(
+                        client, season, box_scores_only=args.box_scores_only
+                    )
                     set_rows_written(run_id, counts.total())
 
                 log.info(

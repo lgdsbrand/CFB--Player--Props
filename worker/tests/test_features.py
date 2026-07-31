@@ -63,16 +63,20 @@ def populated_week(conn):
     """
     row = conn.execute(
         """
-        select season, max(week) as week
-          from player_game_stats
-         where week >= 4
-         group by season
-         order by season desc
+        select g.season, g.week, count(*) as games
+          from games g
+         where g.week >= 4
+           -- full-ingest seasons only. EXISTS, not a join: joining games to
+           -- plays on season alone multiplies each game by every play in that
+           -- season, which is 300k+ rows of cartesian product.
+           and exists (select 1 from plays p where p.season = g.season)
+         group by g.season, g.week
+         order by count(*) desc, g.season desc
          limit 1
         """
     ).fetchone()
-    if not row or row["week"] is None:
-        pytest.skip("no ingested player_game_stats to test against")
+    if not row:
+        pytest.skip("no ingested games to test against")
     return AsOf(season=int(row["season"]), week=int(row["week"]))
 
 
@@ -368,14 +372,20 @@ class TestFeatureFrame:
         """
         from worker.core.features import build_feature_frame, prior_column_names
 
+        # FULL-INGEST seasons only. A prior-season backfill loads box scores and
+        # nothing else (`ingest_stats --box-scores-only`), so it has no defensive
+        # ratings, no Elo and no weather — and correspondingly no columns for
+        # them. That is not schema drift, it is a season we never project: it
+        # exists to supply prior-year features to the season after it. The
+        # guarantee that matters is across the seasons the backtest walks.
         seasons = [
             int(r["season"])
             for r in conn.execute(
-                "select distinct season from player_game_stats order by season"
+                "select distinct season from plays order by season"
             ).fetchall()
         ]
         if len(seasons) < 2:
-            pytest.skip("need two ingested seasons to compare schemas")
+            pytest.skip("need two full-ingest seasons to compare schemas")
 
         frames = {}
         for season in seasons:
@@ -397,6 +407,36 @@ class TestFeatureFrame:
         earliest = frames[min(frames)]
         for column in prior_column_names():
             assert column in earliest.columns
+
+    def test_prior_season_features_actually_populate(self, conn, populated_week):
+        """A season with a prior season loaded must exercise the prior blend.
+
+        The whole point of the 2023 box-score backfill: before it, the 2024 half
+        of the backtest ran with prior_weight = 0 on every row, so CLAUDE.md §6's
+        college weighting rules — down-weight prior production, halve it again
+        for transfer-portal moves — were never exercised on that season at all.
+        """
+        from worker.core.features import build_feature_frame
+
+        has_prior = conn.execute(
+            "select 1 from player_game_stats where season = %s limit 1",
+            (populated_week.prior_season,),
+        ).fetchone()
+        if not has_prior:
+            pytest.skip("no prior season ingested for this cutoff")
+
+        frame = build_feature_frame(populated_week)
+        if frame.is_empty():
+            pytest.skip("no feature rows at this cutoff")
+
+        assert frame["prior_games_played"].max() > 0, (
+            "prior season is ingested but no row picked up any prior games"
+        )
+        assert frame["prior_weight"].max() > 0
+        assert frame["changed_team"].sum() > 0, (
+            "transfer-portal detection found nobody, which is implausible in "
+            "college football"
+        )
 
     def test_no_column_name_collisions_from_joins(self, populated_week):
         """Polars silently suffixes collisions with _right.

@@ -340,9 +340,32 @@ check(G, "a feature query on as_of_week cannot reach season_final", """
 # =============================================================================
 G = "P2 completeness"
 
-check(G, "every completed game has play-by-play", """
+# Scoped to FULLY-ingested seasons. Prior-season backfills load box scores only
+# (`ingest_stats --box-scores-only`), because prior-year features are box-score
+# aggregates while play-by-play only ever feeds the split engine for the season
+# being PREDICTED. A season with no plays is therefore a deliberate scope
+# decision, not a gap — but a fully-loaded season missing play-by-play still is
+# a gap, so the check identifies full seasons by whether they have any plays at
+# all rather than by hardcoding a list.
+check(G, "every completed game in a full-ingest season has play-by-play", """
+    with full_seasons as (
+      select distinct season from plays
+    )
     select count(*) as missing from games g
+     join full_seasons f on f.season = g.season
      where g.completed and not exists (select 1 from plays p where p.game_id=g.id)
+""", lambda r: r["missing"] <= 2, ["missing"])
+
+check(G, "box-score-only seasons are complete on their own terms", """
+    with box_only as (
+      select distinct s.season from player_game_stats s
+       where not exists (select 1 from plays p where p.season = s.season)
+    )
+    select coalesce(count(*), 0) as missing
+      from games g
+      join box_only b on b.season = g.season
+     where g.completed
+       and not exists (select 1 from player_game_stats s where s.game_id = g.id)
 """, lambda r: r["missing"] <= 2, ["missing"])
 
 check(G, "every completed game has box-score rows", """
@@ -351,10 +374,17 @@ check(G, "every completed game has box-score rows", """
        and not exists (select 1 from player_game_stats s where s.game_id=g.id)
 """, lambda r: r["missing"] <= 2, ["missing"])
 
-check(G, "both seasons fully present", """
-    select count(distinct season) as seasons,
-           count(distinct (season, week)) as season_weeks from games
-""", lambda r: r["seasons"] == 2)
+# Two seasons carry play-by-play and are backtestable (2024, 2025); prior-season
+# backfills add box scores only and are not counted here.
+check(G, "two full-ingest seasons present", """
+    select count(distinct season) as seasons from plays
+""", lambda r: r["seasons"] == 2, ["seasons"])
+
+check(G, "at least one prior season supplies prior-year features", """
+    select count(distinct s.season) as seasons
+      from player_game_stats s
+     where not exists (select 1 from plays p where p.season = s.season)
+""", lambda r: r["seasons"] >= 1, ["seasons"])
 
 check(G, "FBS team counts are right (134 in 2024, 136 in 2025)", """
     select
@@ -372,10 +402,16 @@ check(G, "displayed conferences still flagged", """
     select count(*) as n from conferences where is_displayed
 """, lambda r: r["n"] == 5)
 
-check(G, "weather covers >95% of games", """
+# Weather is ingested per season alongside play-by-play, so a box-score-only
+# prior season legitimately has none. Scoped to the seasons that were loaded in
+# full, where a gap really would be a gap.
+check(G, "weather covers >95% of full-ingest games", """
+    with full_seasons as (select distinct season from plays)
     select round(100.0*count(distinct w.game_id)/count(distinct g.id),1) as pct
-      from games g left join game_weather w on w.game_id=g.id
-""", lambda r: float(r["pct"]) > 95)
+      from games g
+      join full_seasons f on f.season = g.season
+      left join game_weather w on w.game_id=g.id
+""", lambda r: float(r["pct"]) > 95, ["pct"])
 
 # =============================================================================
 # PHASE 2 — value sanity (no absurd data)

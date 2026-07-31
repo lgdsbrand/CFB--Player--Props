@@ -525,16 +525,44 @@ def backfill_targets(season: int) -> int:
 # -----------------------------------------------------------------------------
 # Orchestration
 # -----------------------------------------------------------------------------
-def estimate_calls(season: int) -> int:
-    """Per season: 1 call per week slice for plays and box scores, 1 per game."""
+def estimate_calls(season: int, *, box_scores_only: bool = False) -> int:
+    """Per season: 1 call per week slice for plays and box scores, 1 per game.
+
+    Box scores alone need only the week slices — the per-game calls are the
+    play-stats fan-out, which /plays/stats forces on us by capping responses at
+    2,000 rows and truncating silently.
+    """
     slices = len(week_slices(season))
+    if box_scores_only:
+        return slices
     games = len(fetch_all("select id from games where season = %s", (season,)))
     return slices * 2 + games
 
 
-def run_stats_ingest(client: CfbdClient, season: int) -> StatsCounts:
+def run_stats_ingest(
+    client: CfbdClient, season: int, *, box_scores_only: bool = False
+) -> StatsCounts:
+    """Ingest a season's actuals.
+
+    `box_scores_only` loads `player_game_stats` and stops. It exists for
+    PRIOR-SEASON seasons — those whose only job is to supply the prior-year
+    features for the season after them. Prior-season features are box-score
+    aggregates; play-by-play feeds the defensive split engine, and that is
+    always computed from the season being PREDICTED, never from the one before.
+    So the ~105 MB and ~950 calls of a play-by-play load buy nothing there.
+
+    One consequence to know: `targets` is derived from play attribution, so a
+    box-scores-only season leaves it NULL. Catch-rate priors therefore fall back
+    to the position baseline for that season rather than the player's own
+    history — a real but small loss, and `_blend_rate` already treats a missing
+    prior as absent rather than as zero.
+    """
     counts = StatsCounts()
-    log.info("--- season %d: building id maps ---", season)
+    log.info(
+        "--- season %d: building id maps%s ---",
+        season,
+        " (box scores only)" if box_scores_only else "",
+    )
     ctx = SeasonContext.build(season)
     log.info(
         "  %d games, %d teams, %d players, %d season positions",
@@ -543,16 +571,24 @@ def run_stats_ingest(client: CfbdClient, season: int) -> StatsCounts:
     )
 
     ingest_player_game_stats(client, ctx, counts)
-    ingest_plays(client, ctx, counts)
-    ingest_play_player_stats(client, ctx, counts)
 
-    # Must run before targets: a swapped play hides a reception, and targets are
-    # derived from receptions.
-    swapped = fix_swapped_pass_attribution(season)
-    log.info("repaired %d swapped passer/receiver attribution rows", swapped)
+    if not box_scores_only:
+        ingest_plays(client, ctx, counts)
+        ingest_play_player_stats(client, ctx, counts)
 
-    n = backfill_targets(season)
-    log.info("targets backfilled onto %d player_game_stats rows", n)
+        # Must run before targets: a swapped play hides a reception, and targets
+        # are derived from receptions.
+        swapped = fix_swapped_pass_attribution(season)
+        log.info("repaired %d swapped passer/receiver attribution rows", swapped)
+
+        n = backfill_targets(season)
+        log.info("targets backfilled onto %d player_game_stats rows", n)
+    else:
+        log.info(
+            "Skipping play-by-play, attribution and target backfill. "
+            "targets stays NULL for %d.",
+            season,
+        )
 
     if counts.skipped:
         log.info(

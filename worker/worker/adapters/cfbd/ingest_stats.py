@@ -410,6 +410,69 @@ def ingest_play_player_stats(
 # -----------------------------------------------------------------------------
 # targets backfill
 # -----------------------------------------------------------------------------
+def fix_swapped_pass_attribution(season: int) -> int:
+    """Repair plays where CFBD swaps the passer and receiver labels.
+
+    On a subset of passing-touchdown plays the source assigns 'Reception' to the
+    PASSER and 'Completion' to the RECEIVER. Observed directly in 2024: on a
+    Miami touchdown whose play_text reads "Jacolby George 4 Yd pass from Cam
+    Ward", Cam Ward (QB) holds the Reception and Jacolby George (WR) holds the
+    Completion.
+
+    Left uncorrected this is not a cosmetic blemish. It moves a receiving
+    touchdown from the receiver to the quarterback, and touchdowns are what the
+    anytime-TD market is graded on. 479 plays in 2024 — about 15% of receiving
+    touchdowns credited to the wrong player, and a matching hole in every
+    affected receiver's line.
+
+    The discriminator is the box score, which is authoritative: a player with
+    pass_attempts > 0 in that game is a passer. A play whose 'Reception' is held
+    by that game's passer, while its 'Completion' is held by someone who threw
+    nothing, is swapped. Swapping the two stat_type values restores both sides;
+    the yardage values are already correct on each row.
+
+    No unique-key collision is possible: the two rows belong to different
+    players, so each lands on a (play_id, player_id, stat_type) that was free.
+    """
+    return execute(
+        """
+        with passers as (
+            select player_id, game_id
+              from player_game_stats
+             where season = %(season)s and coalesce(pass_attempts, 0) > 0
+        ),
+        swapped_plays as (
+            select distinct rec.play_id
+              from play_player_stats rec
+              join passers p
+                on p.player_id = rec.player_id and p.game_id = rec.game_id
+             where rec.season = %(season)s
+               and rec.stat_type = 'Reception'
+               -- and the Completion on that play belongs to a non-passer
+               and exists (
+                     select 1
+                       from play_player_stats cmp
+                       left join passers p2
+                         on p2.player_id = cmp.player_id
+                        and p2.game_id = cmp.game_id
+                      where cmp.play_id = rec.play_id
+                        and cmp.stat_type = 'Completion'
+                        and p2.player_id is null
+                   )
+        )
+        update play_player_stats t
+           set stat_type = case t.stat_type
+                             when 'Reception' then 'Completion'
+                             else 'Reception'
+                           end
+          from swapped_plays s
+         where t.play_id = s.play_id
+           and t.stat_type in ('Reception', 'Completion')
+        """,
+        {"season": season},  # type: ignore[arg-type]
+    )
+
+
 def backfill_targets(season: int) -> int:
     """Populate player_game_stats.targets from attribution data.
 
@@ -482,6 +545,11 @@ def run_stats_ingest(client: CfbdClient, season: int) -> StatsCounts:
     ingest_player_game_stats(client, ctx, counts)
     ingest_plays(client, ctx, counts)
     ingest_play_player_stats(client, ctx, counts)
+
+    # Must run before targets: a swapped play hides a reception, and targets are
+    # derived from receptions.
+    swapped = fix_swapped_pass_attribution(season)
+    log.info("repaired %d swapped passer/receiver attribution rows", swapped)
 
     n = backfill_targets(season)
     log.info("targets backfilled onto %d player_game_stats rows", n)

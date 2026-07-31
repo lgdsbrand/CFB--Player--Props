@@ -365,6 +365,75 @@ class TestProbOver:
         poisson = prob_over("poisson", {"lam": mean}, far)
         assert nb > poisson
 
+    def test_gamma_location_shifts_the_floor(self):
+        """26% of QB rushing games are negative — sacks are charged as rushes.
+
+        Without a free location a gamma cannot describe that at all, which is
+        why migration 0009 had settled for normal.
+        """
+        params = {"shape": 3.0, "scale": 15.0, "loc": -20.0}
+        # Support now starts at -20, so a line there is a certainty.
+        assert prob_over("gamma", params, -20.0) == 1.0
+        # And negative outcomes carry real mass.
+        assert 0.0 < prob_over("gamma", params, -5.0) < 1.0
+        assert prob_over("gamma", params, -5.0) == pytest.approx(
+            st.gamma.sf(-5.0, a=3.0, loc=-20.0, scale=15.0)
+        )
+
+    def test_gamma_without_location_is_unchanged(self):
+        """The parameter is optional; two-parameter dicts must still work."""
+        assert prob_over("gamma", {"shape": 4.0, "scale": 20.0}, 60.5) == pytest.approx(
+            prob_over("gamma", {"shape": 4.0, "scale": 20.0, "loc": 0.0}, 60.5)
+        )
+
+    def test_lognormal_location_shifts_the_floor(self):
+        params = {"mu": 3.0, "sigma": 0.6, "loc": -10.0}
+        assert prob_over("lognormal", params, -10.0) == 1.0
+        assert prob_over("lognormal", params, 5.0) == pytest.approx(
+            st.lognorm.sf(5.0, s=0.6, loc=-10.0, scale=math.exp(3.0))
+        )
+
+    def test_beta_binomial_matches_scipy(self):
+        params = {"n": 8, "a": 4.0, "b": 3.0}
+        assert prob_over("beta_binomial", params, 4.5) == pytest.approx(
+            st.betabinom.sf(4, n=8, a=4.0, b=3.0)
+        )
+
+    def test_beta_binomial_integer_line_excludes_the_push(self):
+        params = {"n": 8, "a": 4.0, "b": 3.0}
+        assert prob_over("beta_binomial", params, 4.0) == pytest.approx(
+            prob_over("beta_binomial", params, 4.5)
+        )
+
+    def test_beta_binomial_cannot_exceed_its_trial_count(self):
+        params = {"n": 6, "a": 2.0, "b": 2.0}
+        # A receiver cannot catch more passes than were thrown at them.
+        assert prob_over("beta_binomial", params, 6.5) == pytest.approx(0.0)
+
+    def test_beta_binomial_can_be_underdispersed(self):
+        """The property that rules negative binomial out for receptions.
+
+        Measured within player, receptions have variance/mean of roughly 0.53
+        (RB) to 0.95 (WR). A negative binomial's variance always EXCEEDS its
+        mean, so it cannot reach that range at any parameterization.
+        """
+        n, a, b = 8, 20.0, 12.0
+        mean = n * a / (a + b)
+        variance = (
+            n * a * b * (a + b + n) / ((a + b) ** 2 * (a + b + 1))
+        )
+        assert variance / mean < 1.0
+
+        # And a negative binomial with the same mean cannot get there.
+        r, p = 5.0, 0.5
+        nb_mean = r * (1 - p) / p
+        nb_variance = r * (1 - p) / (p * p)
+        assert nb_variance / nb_mean > 1.0
+
+    def test_beta_binomial_requires_all_three_parameters(self):
+        with pytest.raises(ValueError, match="missing"):
+            validate_params("beta_binomial", {"n": 8, "a": 4.0})
+
     def test_unknown_family_rejected(self):
         with pytest.raises(ValueError):
             prob_over("wishful", {}, 10.0)

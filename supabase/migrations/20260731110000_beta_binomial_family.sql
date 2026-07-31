@@ -1,0 +1,35 @@
+-- =============================================================================
+-- 0014 — Add the beta-binomial distribution family
+-- =============================================================================
+-- Deliberately alone in its own migration. Postgres permits ALTER TYPE ... ADD
+-- VALUE inside a transaction, but forbids USING the new value in that same
+-- transaction, and the Supabase CLI wraps each migration file in one. Splitting
+-- the addition from its first use is what keeps 0015 able to reference it.
+--
+-- WHY THIS FAMILY EXISTS
+-- ----------------------
+-- Receptions are UNDER-dispersed. Measured within player across 2024-25, on
+-- players averaging enough usage to be projectable, the median variance/mean is:
+--
+--     receptions (RB)   0.53      79.6% of players under-dispersed
+--     receptions (TE)   0.84      60.1% under-dispersed
+--     receptions (WR)   0.95      53.5% under-dispersed
+--
+-- A negative binomial — which migration 0009 seeded for all three — has
+-- variance strictly GREATER than its mean by construction. It cannot represent
+-- any of these. It is not a poor fit; it is the wrong shape.
+--
+-- The cause is structural, and it is the reason the projection model is built in
+-- two stages. Receptions are targets passed through a catch: given n targets,
+-- receptions are Binomial(n, p), whose variance n*p*(1-p) is BELOW its mean.
+-- Targets themselves are over-dispersed (measured 1.20), and the compound gives
+--
+--     dispersion(receptions) = (1 - p) + p * dispersion(targets)
+--
+-- which the binomial thinning drags below the target dispersion. Beta-binomial
+-- is exactly that compound with the catch rate allowed to vary between games,
+-- so it spans the measured 0.53-0.95 range that neither Poisson (fixed at 1.0)
+-- nor negative binomial (> 1.0) can reach.
+-- =============================================================================
+
+alter type distribution_family add value if not exists 'beta_binomial';

@@ -85,6 +85,7 @@ DistributionFamily = Literal[
     "gamma",
     "poisson",
     "negative_binomial",
+    "beta_binomial",
     "bernoulli",
 ]
 
@@ -94,8 +95,19 @@ REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
     "gamma": ("shape", "scale"),
     "poisson": ("lam",),
     "negative_binomial": ("r", "p"),
+    "beta_binomial": ("n", "a", "b"),
     "bernoulli": ("p",),
 }
+
+# `loc` shifts a distribution's support along the x-axis. Optional, defaulting
+# to 0, so existing two-parameter params dicts keep working unchanged.
+#
+# It is not cosmetic. 26% of QB rushing games are NEGATIVE, because NCAA charges
+# a sack as a rushing loss — so a gamma anchored at zero cannot describe QB
+# rushing yards at all. With a free location it fits, and beats the normal that
+# migration 0009 had chosen precisely because normal was the only seeded family
+# admitting negatives.
+OPTIONAL_LOCATION_FAMILIES = frozenset({"gamma", "lognormal"})
 
 
 # -----------------------------------------------------------------------------
@@ -359,10 +371,16 @@ def prob_over(distribution: str, params: dict[str, Any], line: float) -> float:
         return 1.0 - _normal_cdf(line, float(params["mu"]), float(params["sigma"]))
 
     if distribution == "lognormal":
-        if line <= 0:
+        loc = float(params.get("loc", 0.0))
+        if line <= loc:
             return 1.0
-        return 1.0 - _normal_cdf(
-            math.log(line), float(params["mu"]), float(params["sigma"])
+        return float(
+            _stats.lognorm.sf(
+                line,
+                s=float(params["sigma"]),
+                loc=loc,
+                scale=math.exp(float(params["mu"])),
+            )
         )
 
     if distribution == "poisson":
@@ -378,13 +396,18 @@ def prob_over(distribution: str, params: dict[str, Any], line: float) -> float:
         return p
 
     if distribution == "gamma":
-        # Receiving yards: continuous, non-negative, right-skewed — a receiver's
-        # bad game floors at zero while a long touchdown has no ceiling.
-        if line <= 0:
+        # Yardage: right-skewed, with a bad game near the floor and no ceiling
+        # on a long touchdown. `loc` shifts the floor below zero where the stat
+        # can go negative — QB rushing, via sacks.
+        loc = float(params.get("loc", 0.0))
+        if line <= loc:
             return 1.0
         return float(
             _stats.gamma.sf(
-                line, a=float(params["shape"]), scale=float(params["scale"])
+                line,
+                a=float(params["shape"]),
+                loc=loc,
+                scale=float(params["scale"]),
             )
         )
 
@@ -401,6 +424,29 @@ def prob_over(distribution: str, params: dict[str, Any], line: float) -> float:
         return float(
             _stats.nbinom.sf(
                 math.floor(line), n=float(params["r"]), p=float(params["p"])
+            )
+        )
+
+    if distribution == "beta_binomial":
+        # Receptions. Measured within player, receptions are UNDER-dispersed
+        # (median variance/mean 0.53 for RBs, 0.84 TE, 0.95 WR), which a
+        # negative binomial cannot represent at any parameterization — its
+        # variance always exceeds its mean.
+        #
+        # The shape follows from how a reception happens: given n targets it is
+        # Binomial(n, catch rate), whose variance n*p*(1-p) sits below its mean.
+        # Letting the catch rate vary between games via a Beta prior widens that
+        # back out, spanning the measured range. This is the same two-stage
+        # structure the projection model is built on, written as one closed-form
+        # distribution.
+        if line < 0:
+            return 1.0
+        return float(
+            _stats.betabinom.sf(
+                math.floor(line),
+                n=int(params["n"]),
+                a=float(params["a"]),
+                b=float(params["b"]),
             )
         )
 

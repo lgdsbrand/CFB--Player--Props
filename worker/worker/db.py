@@ -52,6 +52,7 @@ def upsert(
     *,
     conflict_columns: Sequence[str],
     update_columns: Sequence[str] | None = None,
+    conflict_where: str | None = None,
     batch_size: int = 1000,
 ) -> int:
     """Bulk INSERT ... ON CONFLICT DO UPDATE. Returns rows affected.
@@ -68,6 +69,13 @@ def upsert(
 
     Passing an empty `update_columns` makes this DO NOTHING, for append-only
     tables where an existing row must never be rewritten.
+
+    `conflict_where` supplies the index predicate needed to target a PARTIAL
+    unique index. `team_rating_snapshots` has two — one for point-in-time rows
+    keyed on as_of_week, one for season-final rows without it — because that
+    split is what makes end-of-season ratings unusable as in-season features.
+    Postgres cannot infer which of the two an INSERT means, so the predicate has
+    to be stated.
     """
     rows = list(rows)
     if not rows:
@@ -112,6 +120,12 @@ def upsert(
     else:
         conflict_action = sql.SQL("do nothing")
 
+    conflict_target = sql.SQL("({conflict})").format(conflict=conflict_sql)
+    if conflict_where:
+        conflict_target = sql.SQL("{target} where {predicate}").format(
+            target=conflict_target, predicate=sql.SQL(conflict_where)
+        )
+
     row_placeholder = sql.SQL("({})").format(
         sql.SQL(", ").join(sql.Placeholder() for _ in columns)
     )
@@ -123,12 +137,12 @@ def upsert(
             values_sql = sql.SQL(", ").join(row_placeholder for _ in batch)
             statement = sql.SQL(
                 "insert into {table} ({cols}) values {values} "
-                "on conflict ({conflict}) {action}"
+                "on conflict {conflict} {action}"
             ).format(
                 table=sql.Identifier(table),
                 cols=col_sql,
                 values=values_sql,
-                conflict=conflict_sql,
+                conflict=conflict_target,
                 action=conflict_action,
             )
 

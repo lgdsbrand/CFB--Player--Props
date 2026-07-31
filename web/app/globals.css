@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+/* =============================================================================
+   Legends Sports theme tokens
+   =============================================================================
+   PROVISIONAL VALUES. Every hex below is the approximation recorded in
+   CLAUDE.md §7, not a measured value. Before Phase 5, pull the real values from
+   lgdsanalytics.vercel.app with DevTools and correct them HERE — nothing else in
+   the app should hardcode a colour, so this file is the only edit required.
+
+   The design is dark-only on purpose: it must sit natively alongside the
+   client's existing MLB, tennis and WNBA engines, so there is no light mode and
+   no prefers-color-scheme switching.
+   ============================================================================= */
+
+@theme {
+  /* Surfaces — each inset level sits darker than its parent */
+  --color-canvas: #070b14;
+  --color-panel: #0e1420;
+  --color-panel-inset: #0a0f19;
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-border-strong: rgba(255, 255, 255, 0.12);
+
+  /* Signature gradient — wordmark, key % values, primary CTAs */
+  --color-accent-cyan: #22d3ee;
+  --color-accent-indigo: #6366f1;
+
+  /* Semantic */
+  --color-positive: #22c55e; /* hit / over */
+  --color-negative: #f43f5e; /* miss / under */
+  --color-target: #f5a623; /* totals, weekly targets */
+
+  /* Type */
+  --color-ink: #f1f5f9;
+  --color-muted: #64748b;
+  --color-dim: #475569;
+
+  --tracking-label: 0.12em;
+  --radius-card: 14px;
+
+  /* PLACEHOLDER FONT. CLAUDE.md §7 calls for a modern geometric sans and says
+     to confirm the family from the live site. Geist ships with the scaffold and
+     is close enough to build against; swap the variable, not the usages. */
+  --font-display: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  }
+}
+
+@layer components {
+  /* Tiny uppercase tracked caption sitting above a bold value
+     (SELECTION, ODDS (BOOK), CONF …) */
+  .label-caption {
+    font-size: 0.625rem;
+    font-weight: 600;
+    line-height: 1;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-label);
+    color: var(--color-dim);
+  }
+
+  /* Bold wide-tracked uppercase section header */
+  .section-header {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-label);
+    color: var(--color-ink);
+  }
+
+  .panel {
+    background-color: var(--color-panel);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-card);
+  }
+
+  .panel-inset {
+    background-color: var(--color-panel-inset);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: calc(var(--radius-card) - 4px);
+  }
+
+  /* Cyan → indigo gradient as text fill, for hero % values and the wordmark */
+  .gradient-text {
+    background-image: linear-gradient(
+      90deg,
+      var(--color-accent-cyan),
+      var(--color-accent-indigo)
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: 9999px;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-label);
+  }
+}

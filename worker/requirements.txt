@@ -1,0 +1,27 @@
+# Runtime dependencies for the Render worker.
+#
+# Kept deliberately small: this is what Render installs on every deploy, so
+# modelling libraries are not pulled in until the phase that actually needs
+# them. Anything added here needs a justification (CLAUDE.md §0, §2).
+
+# Official CollegeFootballData client (CLAUDE.md §2, §4).
+cfbd>=5.0.0,<6.0.0
+
+# Dataframe library for the ingest and modelling pipeline (CLAUDE.md §2).
+polars>=1.0.0
+
+# Direct PostgreSQL access for the worker.
+#
+# Justification for choosing this over supabase-py: Phase 2 bulk-loads
+# play-by-play attribution at roughly 1M rows per season across all FBS. That is
+# a COPY/executemany workload, and routing it through PostgREST would be both
+# far slower and more fragile. The web app still uses @supabase/supabase-js;
+# only the worker talks to Postgres directly.
+psycopg[binary]>=3.2,<4.0
+
+# Local .env loading. No-op in production, where Render injects real env vars.
+python-dotenv>=1.0.0
+
+# --- Phase 3 (modelling + backtest). Not installed yet to keep deploys lean. ---
+# scikit-learn>=1.5
+# statsmodels>=0.14

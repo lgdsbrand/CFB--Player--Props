@@ -1,0 +1,10 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/worker/.venv/Scripts/python.exe",
+  "python.analysis.extraPaths": ["${workspaceFolder}/worker"],
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["worker"],
+  "python.testing.cwd": "${workspaceFolder}/worker",
+  "files.associations": {
+    "*.sql": "postgres"
+  }
+}

@@ -1,0 +1,65 @@
+# =============================================================================
+# Render blueprint for the Python worker.
+# =============================================================================
+# The worker ingests data, computes projections and writes to Supabase. The
+# Next.js app (deployed separately on Vercel) only ever reads from Supabase and
+# never calls a data provider directly (CLAUDE.md §2).
+#
+# Every secret is declared `sync: false`, meaning Render prompts for it in the
+# dashboard and it is never stored in this file. Do not replace any of these
+# with a literal value.
+# =============================================================================
+
+services:
+  # Phase 1 deploy proof. Verifies config, database connectivity, that the
+  # migrations are applied, that the worker can WRITE, and that the CFBD key
+  # authenticates. Daily is plenty — it is a canary, not a data job.
+  - type: cron
+    name: cfb-props-healthcheck
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 12 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.healthcheck
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SUPABASE_DB_URL
+        sync: false
+      - key: CFBD_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+  # ---------------------------------------------------------------------------
+  # Phase 2+ jobs, kept here as the intended shape rather than active services.
+  # College books post props late — often Thursday or Friday for Saturday games
+  # — so the in-week refresh runs several times a day and the model runs on all
+  # projected starters regardless of whether a line exists yet (CLAUDE.md §7).
+  # ---------------------------------------------------------------------------
+  # - type: cron
+  #   name: cfb-props-ingest-week
+  #   schedule: "0 */6 * * *"     # in-week refresh
+  #   startCommand: python -m worker.jobs.ingest_week
+  #
+  # - type: cron
+  #   name: cfb-props-project-week
+  #   schedule: "0 9 * * 2"       # Tuesday: project every projected starter
+  #   startCommand: python -m worker.jobs.project_week
+  #
+  # - type: cron
+  #   name: cfb-props-odds-refresh
+  #   schedule: "*/30 * * * *"    # attach lines as books post them
+  #   startCommand: python -m worker.jobs.refresh_odds
+  #
+  # - type: cron
+  #   name: cfb-props-ai-reads
+  #   schedule: "0 14 * * 3"      # Wednesday: one read per player per week
+  #   startCommand: python -m worker.jobs.generate_ai_reads

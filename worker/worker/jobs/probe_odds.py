@@ -60,6 +60,16 @@ DEFAULT_HISTORICAL_DATE = "2025-10-18T18:00:00Z"
 # Rough FBS slate size, for turning a measured per-event cost into a weekly one.
 GAMES_PER_WEEK = 60
 
+# How close to kickoff a game must be before an empty prop response means
+# anything. College books post props late — often Thursday or Friday for a
+# Saturday game (CLAUDE.md §7) — so "no props" a month out is the schedule
+# talking, not the plan.
+LATE_LINE_DAYS = 7.0
+
+# The provider's free allowance. Used to infer which tier a key belongs to from
+# its reported allowance, rather than trusting which env var it arrived in.
+FREE_PLAN_CREDITS = 500
+
 
 @dataclass
 class Finding:
@@ -154,16 +164,32 @@ def probe_plan(adapter: TheOddsApiAdapter) -> tuple[Finding, bool]:
         )
 
     active = bool(match.get("active"))
+    notes: list[str] = []
+    if not active:
+        notes.append(
+            "Sport is listed but INACTIVE — normal in the offseason; "
+            "live event lists will be empty until books post the slate."
+        )
+
+    # Infer the tier from the allowance rather than from which env var supplied
+    # the key. A memo that says "paid" because it read ODDS_API_KEY, when the
+    # free key happened to be pasted there, records a conclusion that is simply
+    # wrong — and every coverage finding below depends on which tier ran.
+    if quota.remaining is not None and quota.used is not None:
+        total = quota.remaining + quota.used
+        tier = "FREE" if total <= FREE_PLAN_CREDITS else "PAID"
+        notes.append(
+            f"allowance totals {total:,} credits, which indicates a {tier} plan "
+            f"— coverage findings below are only valid for that tier"
+        )
+
     return (
         Finding(
             "plan / auth",
             True,
             f"key valid, {NCAAF_SPORT_KEY} present (active={active}). "
             f"{quota.summary()}",
-            [] if active else [
-                "Sport is listed but INACTIVE — normal in the offseason; "
-                "live event lists will be empty until books post the slate."
-            ],
+            notes,
         ),
         True,
     )
@@ -219,8 +245,16 @@ def probe_live_props(
     combined = ParseDiagnostics()
     costs: list[int] = []
     probed = 0
+    lead_times: list[float] = []
 
     for event in events[:limit]:
+        if event.commence_time is not None:
+            lead_times.append(
+                (
+                    event.commence_time - datetime.now(timezone.utc)
+                ).total_seconds()
+                / 86400.0
+            )
         before = adapter.quota.remaining
         try:
             payload = adapter.fetch_props_raw(event.event_id)
@@ -265,6 +299,34 @@ def probe_live_props(
         )
 
     served = bool(combined.bookmakers)
+
+    # An empty response is NOT evidence of missing entitlement when the game is
+    # still weeks away. Books post player props in the days before kickoff —
+    # CLAUDE.md §7 is built around exactly that lateness. Calling this a failure
+    # would put a wrong conclusion in the memo, so it is reported as unresolved
+    # instead: the endpoint answered, it simply had nothing to say yet.
+    nearest = min(lead_times) if lead_times else None
+    too_early = nearest is not None and nearest > LATE_LINE_DAYS
+
+    if not served and too_early:
+        notes.insert(
+            0,
+            f"nearest probed game is {nearest:.0f} days away — books do not post "
+            f"player props this far out, so an empty response here is expected "
+            f"and says NOTHING about whether this plan covers them",
+        )
+        notes.append(
+            "the call returned 200 rather than 401/403, so the event-odds "
+            "endpoint itself is reachable on this key"
+        )
+        return Finding(
+            "live player props",
+            None,
+            f"probed {probed} event(s); no props posted yet — UNRESOLVED, re-run "
+            f"within {LATE_LINE_DAYS:.0f} days of kickoff",
+            notes,
+        )
+
     return Finding(
         "live player props",
         served,
@@ -436,6 +498,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print findings without writing docs/odds-coverage-probe.md.",
     )
+    parser.add_argument(
+        "--free",
+        action="store_true",
+        help="Spend against ODDS_API_KEY_FREE instead of the paid key. The paid "
+        "allowance is a shared pool across the client's other models and has "
+        "already run out once mid-month, so dry runs should not touch it.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -447,19 +516,34 @@ def main(argv: list[str] | None = None) -> int:
 
     configure_logging(settings.log_level)
 
-    if not settings.odds_api_key:
+    api_key = settings.odds_key(prefer_free=args.free)
+    if not api_key:
         log.error(
             "ODDS_API_KEY is not set. Add it to .env — it is required for this "
             "probe and is never stored in the repo (CLAUDE.md §0)."
         )
         return 2
 
+    # Which tier produced a finding is part of the finding. "NCAAF props not
+    # available" means something completely different on free than on paid.
+    # Names the SOURCE only. Which tier the key actually belongs to is inferred
+    # from the reported allowance in probe_plan — whichever env var it arrived
+    # in, since either key can be pasted into either slot.
+    if args.free and not settings.odds_api_key_free:
+        tier = "ODDS_API_KEY (--free requested, but ODDS_API_KEY_FREE is unset)"
+    elif args.free:
+        tier = "ODDS_API_KEY_FREE"
+    else:
+        tier = "ODDS_API_KEY"
+    log.info("Probing with the key from %s.", tier)
+
     findings: list[Finding] = []
     exit_code = 0
 
     try:
         with pipeline_run(JOB_NAME) as run_id:
-            adapter = TheOddsApiAdapter(settings.odds_api_key)
+            adapter = TheOddsApiAdapter(api_key)
+            findings.append(Finding("key source", None, f"read from {tier}"))
 
             plan_finding, plan_ok = probe_plan(adapter)
             findings.append(plan_finding)

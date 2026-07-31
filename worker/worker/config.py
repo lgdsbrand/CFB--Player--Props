@@ -31,6 +31,7 @@ _SECRET_FIELDS = frozenset(
         "cfbd_api_key",
         "supabase_service_role_key",
         "odds_api_key",
+        "odds_api_key_free",
         "anthropic_api_key",
     }
 )
@@ -83,12 +84,30 @@ class Settings:
     odds_api_key: str | None
     anthropic_api_key: str | None
 
-    environment: str
-    log_level: str
+    # Separate free-tier key, for dry runs. The paid allowance is a SHARED pool
+    # across the client's other models, and it has already been exhausted once
+    # mid-month — so proving the adapter works must not be able to spend from it
+    # by accident. Optional: falls back to the main key when unset.
+    odds_api_key_free: str | None = None
+
+    environment: str = "development"
+    log_level: str = "INFO"
 
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    def odds_key(self, *, prefer_free: bool = False) -> str | None:
+        """Pick which odds key to spend against.
+
+        Falls back to the paid key when no free key is configured, so `--free`
+        degrades to "run it anyway" rather than failing. The probe logs which
+        one it used, because a coverage finding means nothing without knowing
+        which tier produced it.
+        """
+        if prefer_free and self.odds_api_key_free:
+            return self.odds_api_key_free
+        return self.odds_api_key
 
     def require_cfbd_api_key(self) -> str:
         """Return the CFBD key, raising ConfigError with guidance if unset."""
@@ -122,6 +141,7 @@ def get_settings() -> Settings:
         supabase_url=_optional("SUPABASE_URL"),
         supabase_service_role_key=_optional("SUPABASE_SERVICE_ROLE_KEY"),
         odds_api_key=_optional("ODDS_API_KEY"),
+        odds_api_key_free=_optional("ODDS_API_KEY_FREE"),
         anthropic_api_key=_optional("ANTHROPIC_API_KEY"),
         environment=_optional("ENVIRONMENT", "development") or "development",
         log_level=_optional("LOG_LEVEL", "INFO") or "INFO",

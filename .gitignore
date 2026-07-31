@@ -29,6 +29,11 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 
+# Cached raw CFBD responses. Regenerable from the API, can reach hundreds of MB
+# once play-by-play is backfilled, and is a local iteration aid only — Render's
+# filesystem is ephemeral and production runs start cold by design.
+worker/.cache/
+
 # =============================================================================
 # Supabase CLI
 # =============================================================================

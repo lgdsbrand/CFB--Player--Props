@@ -151,101 +151,76 @@ def check_row_counts() -> CheckResult:
     )
 
 
-# A season/week known to have completed games, used only as a probe target.
-# Deliberately historical rather than "current season": in the offseason a
-# current-season call returns an empty list, which is indistinguishable from a
-# broken key and would make this check flap twice a year.
-_TIER_PROBE_SEASON = 2024
-_TIER_PROBE_WEEK = 5
-
-
-def _diagnose_cfbd_denial(status: int) -> CheckResult:
-    """Tell a rejected key apart from an unentitled one after a 401/403.
-
-    Retries against a free-tier endpoint. If that works, the credential itself
-    is fine and the subscription is the problem; if it fails too, the key is
-    being rejected outright.
-    """
-    import cfbd
-
-    from worker.adapters.cfbd.client import CfbdClient
-
-    try:
-        with CfbdClient() as client:
-            client.api(cfbd.ConferencesApi).get_conferences()
-    except Exception:
-        return CheckResult(
-            "cfbd api key (paid tier)",
-            False,
-            f"HTTP {status} — CFBD rejects this key on free-tier endpoints too, "
-            "so the key itself is wrong (typo, truncated paste, or revoked) "
-            "rather than the subscription. Re-copy it from "
-            "https://collegefootballdata.com/key",
-        )
-
-    return CheckResult(
-        "cfbd api key (paid tier)",
-        False,
-        f"HTTP {status} on weather, but free-tier endpoints work — the key is "
-        "VALID and simply not entitled to weather. The paid tier is inactive or "
-        "lapsed; check the CFBD Patreon subscription (CLAUDE.md §4 requires "
-        "weather, so ingest cannot proceed on the free tier).",
-    )
+# Warn when the monthly allowance drops below this fraction. A two-season
+# backfill is a few hundred calls, so 15% of 30k is still comfortable headroom —
+# this is an early warning, not a red line.
+_QUOTA_WARN_FRACTION = 0.15
 
 
 def check_cfbd() -> CheckResult:
-    """Confirm the CFBD key authenticates AND carries the paid tier.
+    """Confirm the key authenticates, carries the entitlements we need, and has
+    quota left.
 
-    Probes the weather endpoint specifically, not a generic one. The free tier
-    serves conferences, teams and games perfectly happily, so a check built on
-    those goes green on a free key — and weather is exactly the feature the paid
-    tier was bought for (CLAUDE.md §4 requires venue/weather). A green light that
-    does not cover the entitlement we depend on is worse than no light at all,
-    because the gap would surface partway through a Phase 2 weather ingest.
+    Uses /info rather than exercising a paid endpoint. Two earlier versions of
+    this check were weaker:
 
-    Still exactly one CFBD call, so this costs no more quota than the auth-only
-    check it replaces.
+      * `get_conferences()` proved only that the key was accepted — the FREE
+        tier serves it, so the check went green on a key with no entitlement to
+        weather, which CLAUDE.md §4 requires.
+      * A weather call proved entitlement, but only by inference from a
+        successful response, and it needed a hardcoded historical season/week
+        as a probe target that would eventually go stale.
+
+    /info states the tier and the per-feature entitlements outright, AND returns
+    the remaining monthly call count — so the canary can warn before a backfill
+    runs into the ceiling rather than after. Still exactly one call.
     """
     try:
-        import cfbd
-
         from worker.adapters.cfbd.client import CfbdClient
+        from worker.adapters.cfbd.quota import fetch_account_status
 
         with CfbdClient() as client:
-            rows = client.api(cfbd.GamesApi).get_weather(
-                year=_TIER_PROBE_SEASON, week=_TIER_PROBE_WEEK
-            )
+            status = fetch_account_status(client)
     except ConfigError as exc:
-        return CheckResult("cfbd api key (paid tier)", False, str(exc))
+        return CheckResult("cfbd account", False, str(exc))
     except Exception as exc:
-        status = getattr(exc, "status", None)
-        if status in (401, 403):
-            # 401/403 is ambiguous on its own: a bad key and a valid-but-
-            # unentitled key look identical here. Disambiguate with one extra
-            # call to a FREE-tier endpoint, because "fix your key" and "renew
-            # your subscription" send you to completely different places. Only
-            # the failure path pays this second call.
-            return _diagnose_cfbd_denial(status)
-        return CheckResult(
-            "cfbd api key (paid tier)", False, f"{type(exc).__name__}: {exc}"
-        )
+        http_status = getattr(exc, "status", None)
+        if http_status in (401, 403):
+            return CheckResult(
+                "cfbd account",
+                False,
+                f"HTTP {http_status} on /info — CFBD is rejecting this key "
+                "outright (typo, truncated paste, or revoked). Re-copy it from "
+                "https://collegefootballdata.com/key",
+            )
+        return CheckResult("cfbd account", False, f"{type(exc).__name__}: {exc}")
 
-    if not rows:
-        # 200 with an empty body means entitled but no data for that week —
-        # the probe target is stale, not the credentials.
+    missing = status.missing_required_features
+    if missing:
         return CheckResult(
-            "cfbd api key (paid tier)",
+            "cfbd account",
             False,
-            f"weather endpoint returned no rows for {_TIER_PROBE_SEASON} "
-            f"week {_TIER_PROBE_WEEK}; the probe target needs updating",
+            f"{status.summary()} — but required feature(s) {missing} are NOT "
+            "enabled on this key. The paid tier is inactive, lapsed, or "
+            "downgraded; ingest cannot proceed without them.",
         )
 
-    return CheckResult(
-        "cfbd api key (paid tier)",
-        True,
-        f"weather accessible — {len(rows)} rows for "
-        f"{_TIER_PROBE_SEASON} week {_TIER_PROBE_WEEK}",
-    )
+    if (
+        status.remaining_calls is not None
+        and status.monthly_limit
+        and status.remaining_calls < status.monthly_limit * _QUOTA_WARN_FRACTION
+    ):
+        return CheckResult(
+            "cfbd account",
+            False,
+            f"{status.summary()} — below {_QUOTA_WARN_FRACTION:.0%} of the "
+            "monthly allowance. Backfills should wait for the reset.",
+        )
+
+    detail = status.summary()
+    if status.missing_optional_features:
+        detail += f" (optional features unavailable: {status.missing_optional_features})"
+    return CheckResult("cfbd account", True, detail)
 
 
 def run_checks() -> list[CheckResult]:

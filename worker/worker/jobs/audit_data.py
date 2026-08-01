@@ -107,9 +107,9 @@ def rejects(group: str, name: str, statement: str, params, constraint: str):
 # =============================================================================
 G = "P1 schema"
 
-check(G, "all 27 tables present", """
+check(G, "all 28 tables present", """
     select count(*) as n from pg_tables where schemaname='public'
-""", lambda r: r["n"] >= 27)
+""", lambda r: r["n"] >= 28)
 
 check(G, "RLS enabled on every public table", """
     select count(*) as without_rls from pg_tables t
@@ -127,7 +127,7 @@ check(G, "closed tables have no policy (deny-all)", """
      where schemaname='public'
        and tablename in ('plays','play_player_stats','model_runs',
                          'pipeline_runs','backtests','backtest_predictions',
-                         'calibration_bins')
+                         'calibration_bins','backtest_metrics')
 """, lambda r: r["policies"] == 0)
 
 check(G, "lookahead CHECK on team_rating_snapshots is live", """
@@ -942,6 +942,55 @@ check(G, "every stored prediction respects the knowledge cutoff (LOOKAHEAD)", ""
 check(G, "no stored prediction was graded before the model could see 2 games", """
     select count(*) as bad from backtest_predictions where as_of_week < 2
 """, lambda r: r["bad"] == 0)
+
+# -----------------------------------------------------------------------------
+# Stored metrics — the record that makes two runs comparable
+# -----------------------------------------------------------------------------
+check(G, "the latest backtest stored its headline metrics", """
+    select count(*) as n from backtest_metrics
+     where backtest_id = (select id from backtests order by created_at desc limit 1)
+""", lambda r: r["n"] >= 1, ["n"])
+
+check(G, "every run has exactly one overall row", """
+    select count(*) as bad from (
+      select backtest_id, count(*) as n from backtest_metrics
+       where group_kind = 'overall' group by 1 having count(*) <> 1) x
+""", lambda r: r["bad"] == 0)
+
+# The stored summary and the stored curve are written from the same run, so a
+# disagreement between them means one of the two writes is looking at a
+# different population than the other.
+check(G, "stored n agrees with the calibration bins for the same run", """
+    with latest as (select id from backtests order by created_at desc limit 1)
+    select (select n from backtest_metrics m, latest l
+             where m.backtest_id = l.id and m.group_kind = 'overall') as metric_n,
+           (select coalesce(sum(n), 0) from calibration_bins c, latest l
+             where c.backtest_id = l.id and c.market_key is null) as bin_n
+""", lambda r: r["metric_n"] == r["bin_n"])
+
+check(G, "per-market stored n sums to the overall stored n", """
+    with latest as (select id from backtests order by created_at desc limit 1)
+    select (select n from backtest_metrics m, latest l
+             where m.backtest_id = l.id and m.group_kind = 'overall') as overall,
+           (select coalesce(sum(n), 0) from backtest_metrics m, latest l
+             where m.backtest_id = l.id and m.group_kind = 'market') as by_market
+""", lambda r: r["overall"] == r["by_market"])
+
+# Brier is a mean squared error on probabilities, so it cannot exceed 1. A value
+# above that means outcomes or probabilities were stored on the wrong scale.
+check(G, "stored Brier scores are on the probability scale", """
+    select count(*) as bad from backtest_metrics
+     where brier > 1 or brier < 0 or base_rate > 1 or ece > 1
+""", lambda r: r["bad"] == 0)
+
+# Deliberately NOT constrained to be positive. A confidently wrong model scores
+# arbitrarily negative, and that signal is the whole reason the metric is kept.
+check(G, "brier_skill is stored unclamped so a regression stays visible", """
+    select count(*) as n from information_schema.check_constraints c
+      join information_schema.constraint_column_usage u
+        on u.constraint_name = c.constraint_name
+     where u.table_name = 'backtest_metrics' and u.column_name = 'brier_skill'
+""", lambda r: r["n"] == 0)
 
 # -----------------------------------------------------------------------------
 # Grading, re-derived in SQL from the raw stored rows

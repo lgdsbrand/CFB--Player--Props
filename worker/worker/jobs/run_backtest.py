@@ -3,9 +3,16 @@
     python -m worker.jobs.run_backtest
     python -m worker.jobs.run_backtest --seasons 2024 --max-week 8
     python -m worker.jobs.run_backtest --persist-predictions
+    python -m worker.jobs.run_backtest --render-only     # no walk, from stored
 
 This is the Phase 3 deliverable and the client review gate (CLAUDE.md §8). It
 produces docs/calibration-report.html.
+
+ON RE-RENDERING. Every run stores its headline metrics in `backtest_metrics`
+and its curves in `calibration_bins`, so `--render-only` rebuilds the report
+from a finished run without walking two seasons again. Before that existed,
+changing one sentence of the report cost forty minutes, because the numbers
+lived nowhere but inside the HTML.
 
 ON PERSISTENCE. `calibration_bins` and the `backtests` header are always stored:
 they are small and they are what a later run needs to compare against. Individual
@@ -27,17 +34,21 @@ from pathlib import Path
 from typing import Any
 
 from worker.core import report as report_module
+from worker.core.calibration import Calibration
 from worker.core.backtest import (
     MIN_USAGE_FRACTION_OF_BASELINE,
+    CalibrationBin,
     Metrics,
     Prediction,
     compute_metrics,
     group_metrics,
+    market_catalogue,
     season_phase,
     walk_forward,
 )
+from worker.core.models import can_rescale
 from worker.config import ConfigError, get_settings
-from worker.db import execute, fetch_all, get_config_value, pipeline_run
+from worker.db import execute, fetch_all, fetch_one, get_config_value, pipeline_run
 from worker.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -77,20 +88,27 @@ def resolve_seasons(explicit: list[int] | None) -> list[int]:
     return [int(r["season"]) for r in rows]
 
 
-def _caveats(predictions: list[Prediction], seasons: list[int]) -> list[str]:
-    """Everything a reader needs in order not to over-read the numbers."""
-    per_game = {}
-    for prediction in predictions:
-        per_game.setdefault(
-            (prediction.player_id, prediction.game_id, prediction.market_key), 0
-        )
-        per_game[
-            (prediction.player_id, prediction.game_id, prediction.market_key)
-        ] += 1
-    lines_per_projection = (
-        sum(per_game.values()) / len(per_game) if per_game else 0.0
-    )
+def _lines_per_projection(predictions: list[Prediction]) -> float:
+    """Average number of lines each projection was graded at.
 
+    Recorded into the run's config so the report can state it without the
+    predictions in hand — they are not persisted by default, and the caveat
+    about correlated observations is not optional.
+    """
+    per_game: dict[tuple[int, int, str], int] = {}
+    for prediction in predictions:
+        key = (prediction.player_id, prediction.game_id, prediction.market_key)
+        per_game[key] = per_game.get(key, 0) + 1
+    return sum(per_game.values()) / len(per_game) if per_game else 0.0
+
+
+def _stored_caveats(config: dict[str, Any], seasons: list[int]) -> list[str]:
+    """Caveats for a run being re-rendered from the database."""
+    return _caveats(float(config.get("lines_per_projection") or 0.0), seasons)
+
+
+def _caveats(lines_per_projection: float, seasons: list[int]) -> list[str]:
+    """Everything a reader needs in order not to over-read the numbers."""
     return [
         "<strong>Correlated observations.</strong> Each projection is graded at "
         f"about {lines_per_projection:.1f} lines, and those share one outcome. "
@@ -187,6 +205,174 @@ def _store_bins(backtest_id: uuid.UUID, label: str, metrics: Metrics) -> None:
         )
 
 
+def _load_run(backtest_id: uuid.UUID | None) -> dict[str, Any] | None:
+    """Rebuild a finished run's report inputs from the database.
+
+    The reason `backtest_metrics` exists. Before it, changing a sentence in the
+    report meant re-walking two seasons to regenerate the HTML, because the
+    numbers lived only inside that HTML. Now the run is reconstructible: the
+    headline metrics come from `backtest_metrics`, the curves from
+    `calibration_bins`, and the caveats from the config recorded alongside.
+    """
+    row = fetch_one(
+        """
+        select b.id, b.seasons, b.config, b.created_at
+          from backtests b
+         where (%s::uuid is null or b.id = %s::uuid)
+           and exists (select 1 from backtest_metrics m where m.backtest_id = b.id)
+         order by b.created_at desc
+         limit 1
+        """,
+        (backtest_id, backtest_id),
+    )
+    if row is None:
+        return None
+
+    bins: dict[str | None, list[CalibrationBin]] = {}
+    for entry in fetch_all(
+        "select market_key, bin_lower, bin_upper, n, mean_predicted_probability, "
+        "       observed_rate from calibration_bins where backtest_id = %s "
+        " order by market_key nulls first, bin_lower",
+        (row["id"],),
+    ):
+        bins.setdefault(entry["market_key"], []).append(
+            CalibrationBin(
+                lower=float(entry["bin_lower"]),
+                upper=float(entry["bin_upper"]),
+                count=int(entry["n"]),
+                mean_predicted=float(entry["mean_predicted_probability"]),
+                observed_rate=float(entry["observed_rate"]),
+            )
+        )
+
+    groups: dict[str, dict[str, Metrics]] = {}
+    overall: Metrics | None = None
+    for entry in fetch_all(
+        "select group_kind, group_key, n, base_rate, brier, brier_skill, "
+        "       log_loss, ece, sharpness from backtest_metrics "
+        " where backtest_id = %s order by group_kind, group_key",
+        (row["id"],),
+    ):
+        metrics = Metrics(
+            n=int(entry["n"]),
+            base_rate=float(entry["base_rate"]),
+            brier=float(entry["brier"]),
+            brier_skill=float(entry["brier_skill"]),
+            log_loss=float(entry["log_loss"]),
+            ece=float(entry["ece"]),
+            sharpness=float(entry["sharpness"]),
+            bins=bins.get(
+                entry["group_key"] if entry["group_kind"] == "market" else None, []
+            ),
+        )
+        if entry["group_kind"] == "overall":
+            overall = metrics
+        else:
+            groups.setdefault(entry["group_kind"], {})[entry["group_key"]] = metrics
+
+    if overall is None:
+        return None
+    return {
+        "overall": overall,
+        "groups": groups,
+        "seasons": [int(s) for s in row["seasons"]],
+        "config": row["config"] or {},
+    }
+
+
+def _store_metrics(
+    backtest_id: uuid.UUID,
+    overall: Metrics,
+    groups: dict[str, dict[str, Metrics]],
+) -> int:
+    """Persist every headline number this run produced.
+
+    Without this the only record of a run's results is the rendered HTML, so
+    telling whether a model change helped means diffing a report — and
+    regenerating one costs a full walk.
+    """
+    rows: list[tuple[Any, ...]] = [
+        (backtest_id, "overall", "", overall.n, overall.base_rate, overall.brier,
+         overall.brier_skill, overall.log_loss, overall.ece, overall.sharpness)
+    ]
+    for kind, entries in groups.items():
+        for key, metrics in entries.items():
+            rows.append(
+                (backtest_id, kind, str(key), metrics.n, metrics.base_rate,
+                 metrics.brier, metrics.brier_skill, metrics.log_loss,
+                 metrics.ece, metrics.sharpness)
+            )
+
+    values = ",".join(["(" + ",".join(["%s"] * 10) + ")"] * len(rows))
+    params: list[Any] = []
+    for row in rows:
+        params.extend(row)
+    execute(
+        "insert into backtest_metrics "
+        "(backtest_id, group_kind, group_key, n, base_rate, brier, "
+        " brier_skill, log_loss, ece, sharpness) values " + values,
+        tuple(params),
+    )
+    return len(rows)
+
+
+def _log_comparison(backtest_id: uuid.UUID) -> None:
+    """Log this run against the previous one, metric by metric.
+
+    The point of storing metrics at all. `skill` and `ece` move in opposite
+    directions when they improve, so the arrows are computed per metric rather
+    than assumed — reading a table of raw deltas and mentally flipping the sign
+    on half of them is how a regression gets called an improvement.
+    """
+    previous = fetch_all(
+        """
+        select group_kind, group_key, n, brier_skill, log_loss, ece, sharpness
+          from backtest_metrics
+         where backtest_id = (
+           select b.id from backtests b
+             join backtest_metrics m on m.backtest_id = b.id
+            where b.id <> %s
+            group by b.id, b.created_at
+            order by b.created_at desc
+            limit 1)
+        """,
+        (backtest_id,),
+    )
+    if not previous:
+        log.info("No earlier run with stored metrics — nothing to compare against.")
+        return
+
+    current = {
+        (r["group_kind"], r["group_key"]): r
+        for r in fetch_all(
+            "select group_kind, group_key, n, brier_skill, log_loss, ece, "
+            "       sharpness from backtest_metrics where backtest_id = %s",
+            (backtest_id,),
+        )
+    }
+
+    log.info("vs previous run (+ = better):")
+    for row in sorted(previous, key=lambda r: (r["group_kind"] != "overall",
+                                               r["group_kind"], r["group_key"])):
+        key = (row["group_kind"], row["group_key"])
+        now = current.get(key)
+        if now is None:
+            continue
+        if row["group_kind"] not in ("overall", "market"):
+            continue
+        skill = float(now["brier_skill"]) - float(row["brier_skill"])
+        # Lower is better for these two, so negate to make + mean improvement.
+        ece = float(row["ece"]) - float(now["ece"])
+        loss = float(row["log_loss"]) - float(now["log_loss"])
+        label = row["group_key"] or "OVERALL"
+        log.info(
+            "  %-18s skill %+.4f   ece %+.4f   logloss %+.4f%s",
+            label, skill, ece, loss,
+            "" if int(now["n"]) == int(row["n"]) else
+            f"   (n {row['n']:,} -> {now['n']:,})",
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seasons", type=int, nargs="+")
@@ -197,6 +383,17 @@ def main(argv: list[str] | None = None) -> int:
              "Hundreds of thousands of rows on a 500 MB tier — off by default.",
     )
     parser.add_argument("--no-report", action="store_true")
+    parser.add_argument(
+        "--no-calibration", "--no-variance-calibration",
+        dest="no_variance_calibration", action="store_true",
+        help="Grade with raw projections, skipping the point-in-time bias and "
+             "width corrections. This is the before side of the comparison.",
+    )
+    parser.add_argument(
+        "--render-only", nargs="?", const="latest", metavar="BACKTEST_ID",
+        help="Re-render the report from a stored run instead of walking. "
+             "Defaults to the most recent run that has stored metrics.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -207,6 +404,32 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     configure_logging(settings.log_level)
+
+    if args.render_only:
+        target = None if args.render_only == "latest" else uuid.UUID(args.render_only)
+        stored = _load_run(target)
+        if stored is None:
+            log.error(
+                "No stored run to render. Run the backtest once first — only "
+                "runs that wrote backtest_metrics can be re-rendered."
+            )
+            return 1
+        REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        REPORT_PATH.write_text(
+            report_module.render(
+                overall=stored["overall"],
+                by_market=stored["groups"].get("market", {}),
+                by_position=stored["groups"].get("position", {}),
+                by_phase=stored["groups"].get("phase", {}),
+                by_season=stored["groups"].get("season", {}),
+                seasons=stored["seasons"],
+                config=stored["config"],
+                caveats=_stored_caveats(stored["config"], stored["seasons"]),
+            ),
+            encoding="utf-8",
+        )
+        log.info("Rendered %s from stored run (no walk)", REPORT_PATH)
+        return 0
 
     seasons = resolve_seasons(args.seasons)
     if not seasons:
@@ -243,14 +466,45 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             log.info("Walking forward across %s...", seasons)
+            calibration = None if args.no_variance_calibration else Calibration()
             predictions = walk_forward(
                 seasons,
                 max_week=args.max_week,
                 prior_season_weight_max=prior_ceiling,
+                calibration=calibration,
             )
             if not predictions:
                 log.error("No predictions produced.")
                 return 1
+
+            if calibration is not None:
+                # A family whose variance is pinned to its mean can be measured
+                # but not corrected, so say which those are rather than printing
+                # a scale that was never applied. The MEAN correction has no
+                # such limit — every family can be moved.
+                fixed_width = {
+                    m["market_key"]
+                    for m in market_catalogue()
+                    if not can_rescale(m["distribution_family"])
+                }
+                learned = calibration.snapshot()
+                for market, entry in learned["width"].items():
+                    if market.split("@")[0].split(":")[0] in fixed_width:
+                        entry["applied"] = False
+                        entry["reason"] = "family has no free width parameter"
+                config["calibration"] = learned
+
+                for kind, field in (("mean", "multiplier"), ("width", "scale")):
+                    for market, entry in sorted(learned[kind].items()):
+                        note = ""
+                        if not entry["applied"]:
+                            note = ", NOT applied (%s)" % entry.get(
+                                "reason", "still learning"
+                            )
+                        log.info(
+                            "  %-5s %-28s x%.3f  (n=%s%s)",
+                            kind, market, entry[field], f"{entry['n']:,}", note,
+                        )
 
             overall = compute_metrics(predictions)
             assert overall is not None
@@ -271,6 +525,13 @@ def main(argv: list[str] | None = None) -> int:
             for name, metrics in by_market.items():
                 log.info("  %-18s %s", name, metrics.summary())
 
+            # Recorded so a later --render-only can state the correlated-
+            # observation caveat without the predictions, which are not
+            # persisted by default.
+            config["lines_per_projection"] = round(
+                _lines_per_projection(predictions), 3
+            )
+
             execute(
                 """
                 insert into backtests
@@ -289,6 +550,19 @@ def main(argv: list[str] | None = None) -> int:
             _store_bins(backtest_id, "overall", overall)
             for market, metrics in by_market.items():
                 _store_bins(backtest_id, f"market:{market}", metrics)
+
+            written = _store_metrics(
+                backtest_id,
+                overall,
+                {
+                    "market": by_market,
+                    "position": by_position,
+                    "phase": by_phase,
+                    "season": {str(k): v for k, v in by_season.items()},
+                },
+            )
+            log.info("stored %d metric rows", written)
+            _log_comparison(backtest_id)
 
             if args.persist_predictions:
                 written = _persist(backtest_id, predictions, devig_method)
@@ -311,7 +585,9 @@ def main(argv: list[str] | None = None) -> int:
                         by_season=by_season,
                         seasons=seasons,
                         config=config,
-                        caveats=_caveats(predictions, seasons),
+                        caveats=_caveats(
+                            _lines_per_projection(predictions), seasons
+                        ),
                     ),
                     encoding="utf-8",
                 )

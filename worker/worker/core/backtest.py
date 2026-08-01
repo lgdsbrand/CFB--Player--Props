@@ -53,12 +53,26 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from worker.core.calibration import Calibration
 from worker.core.features import AsOf, build_feature_frame
-from worker.core.models import Projection, position_baselines, project
+from worker.core.models import (
+    Projection,
+    position_baselines,
+    project,
+    rescale,
+    shift_mean,
+)
+from worker.core.probability import distribution_sd
 from worker.db import fetch_all
 from worker.logging_setup import get_logger
 
 log = get_logger(__name__)
+
+# One graded outcome as the calibration layer needs it:
+# (market, position, actual, mean it was graded at, raw mean, raw SD, games).
+# Both the raw and the shifted mean travel together because the two corrections
+# are estimated against different centres — see `Calibration`.
+Observation = tuple[str, str, float, float, float, float, float]
 
 # Offsets from the trailing centre, in projected standard deviations. Chosen to
 # spread model probabilities across roughly [0.15, 0.85] so the confident bins
@@ -228,26 +242,34 @@ def backtest_week(
     catalogue: Sequence[dict[str, Any]],
     *,
     prior_season_weight_max: float = 0.5,
-) -> list[Prediction]:
-    """Project every player-market for one week and grade against the result."""
+    calibration: Calibration | None = None,
+) -> tuple[list[Prediction], list[Observation]]:
+    """Project every player-market for one week and grade against the result.
+
+    Returns the graded predictions and the standardized-residual observations
+    the caller should fold into `calibration` AFTERWARDS. The split is what keeps
+    the correction point-in-time: this week is graded with a width learned from
+    earlier weeks only, and only once it is graded does it inform the next.
+    """
     frame = build_feature_frame(
         as_of, prior_season_weight_max=prior_season_weight_max
     )
     if frame.is_empty():
-        return []
+        return [], []
 
     rows = frame.to_dicts()
     baselines = position_baselines(rows)
     actuals = load_actuals(as_of.season, as_of.week)
     if not actuals:
         log.warning("%s: no actuals to grade against", as_of)
-        return []
+        return [], []
 
     by_position: dict[str, list[dict[str, Any]]] = {}
     for market in catalogue:
         by_position.setdefault(market["position_group"], []).append(market)
 
     predictions: list[Prediction] = []
+    observations: list[Observation] = []
     for row in rows:
         position = str(row.get("position_group") or "")
         if (row.get("games_played") or 0) < MIN_GAMES_TO_GRADE:
@@ -277,6 +299,10 @@ def backtest_week(
             if centre is None and not market["is_binary"]:
                 continue
 
+            # Lines are placed using the UNCORRECTED spread. They stand in for
+            # what a book would post, which cannot depend on a correction we
+            # applied to our own distribution — and holding them fixed is what
+            # makes this run comparable to the one before it.
             lines = candidate_lines(
                 centre if centre is not None else projection.mean,
                 _projection_sigma(projection),
@@ -287,6 +313,38 @@ def backtest_week(
                     else None
                 ),
             )
+
+            games_played = float(row.get("games_played") or 0)
+            raw_mean = projection.mean
+            raw_sd = distribution_sd(projection.distribution, projection.params)
+
+            # BIAS FIRST, THEN WIDTH. The order matters and is not arbitrary:
+            # E[(actual - mean)^2] is variance plus squared bias, so measuring
+            # the width against an uncorrected mean would fold the bias into the
+            # width and widen a distribution that is merely misplaced.
+            if calibration is not None:
+                projection = shift_mean(
+                    projection,
+                    calibration.mean.multiplier(market["market_key"], games_played),
+                )
+                projection = rescale(
+                    projection,
+                    calibration.variance.scale(
+                        market["market_key"], position, games_played
+                    ),
+                )
+
+            # Both are recorded against the RAW projection, so each estimate is
+            # read off directly rather than compounding week over week.
+            observations.append((
+                market["market_key"],
+                position,
+                float(actual),
+                projection.mean,
+                raw_mean,
+                raw_sd,
+                games_played,
+            ))
 
             for line in lines:
                 probability = projection.probability_over(line)
@@ -311,7 +369,7 @@ def backtest_week(
                         hit=(outcome_over if side == "over" else not outcome_over),
                     )
                 )
-    return predictions
+    return predictions, observations
 
 
 def _project_safely(
@@ -362,8 +420,15 @@ def walk_forward(
     *,
     max_week: int | None = None,
     prior_season_weight_max: float = 0.5,
+    calibration: Calibration | None = None,
 ) -> list[Prediction]:
-    """Run the whole backtest, one week at a time, in order."""
+    """Run the whole backtest, one week at a time, in order.
+
+    `calibration` accumulates as the walk proceeds, so each week is graded with
+    a width learned only from the weeks before it. Pass a fresh instance to
+    learn from scratch; pass None to disable the correction entirely, which is
+    how the before/after comparison is made.
+    """
     catalogue = market_catalogue()
     if not catalogue:
         raise RuntimeError("no active markets — did the seed migration run?")
@@ -386,10 +451,16 @@ def walk_forward(
 
         for week in weeks:
             as_of = AsOf(season=season, week=week)
-            weekly = backtest_week(
-                as_of, catalogue, prior_season_weight_max=prior_season_weight_max
+            weekly, observations = backtest_week(
+                as_of,
+                catalogue,
+                prior_season_weight_max=prior_season_weight_max,
+                calibration=calibration,
             )
             predictions.extend(weekly)
+            # Only AFTER this week is graded does it inform the next one.
+            if calibration is not None:
+                calibration.observe_many(observations)
             log.info("%s: %d graded predictions", as_of, len(weekly))
 
     return predictions

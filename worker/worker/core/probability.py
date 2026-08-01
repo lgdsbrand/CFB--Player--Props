@@ -357,6 +357,56 @@ def validate_params(distribution: str, params: dict[str, Any]) -> None:
         )
 
 
+def distribution_sd(distribution: str, params: dict[str, Any]) -> float:
+    """Standard deviation of a fitted distribution, whatever its family.
+
+    Needed to compare families on one scale. The variance calibration measures
+    how wide each projected distribution turned out to be against what actually
+    happened, and that question has one answer per family only if there is a
+    single notion of width — `sigma` for a normal, but a derived quantity for
+    every other family we fit.
+
+    Returns 0.0 for a degenerate distribution rather than raising, since a
+    caller dividing by this is asking "how many SDs out was the result", and a
+    zero-width projection has no meaningful answer to give.
+    """
+    validate_params(distribution, params)
+
+    if distribution == "normal":
+        return abs(float(params["sigma"]))
+
+    if distribution == "lognormal":
+        sigma = float(params["sigma"])
+        mu = float(params["mu"])
+        variance = (math.exp(sigma * sigma) - 1.0) * math.exp(2.0 * mu + sigma * sigma)
+        return math.sqrt(max(variance, 0.0))
+
+    if distribution == "gamma":
+        return math.sqrt(float(params["shape"])) * float(params["scale"])
+
+    if distribution == "poisson":
+        return math.sqrt(max(float(params["lam"]), 0.0))
+
+    if distribution == "bernoulli":
+        p = float(params["p"])
+        return math.sqrt(max(p * (1.0 - p), 0.0))
+
+    if distribution == "negative_binomial":
+        r, p = float(params["r"]), float(params["p"])
+        return math.sqrt(max(r * (1.0 - p), 0.0)) / p
+
+    if distribution == "beta_binomial":
+        n, a, b = float(params["n"]), float(params["a"]), float(params["b"])
+        total = a + b
+        if total <= 0 or n <= 0:
+            return 0.0
+        p = a / total
+        variance = n * p * (1.0 - p) * (n + total) / (1.0 + total)
+        return math.sqrt(max(variance, 0.0))
+
+    raise ValueError(f"Unknown distribution family: {distribution!r}")
+
+
 def prob_over(distribution: str, params: dict[str, Any], line: float) -> float:
     """P(outcome > line) — the number every card is built from.
 

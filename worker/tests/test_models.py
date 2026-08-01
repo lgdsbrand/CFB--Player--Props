@@ -596,6 +596,77 @@ class TestAnytimeTdProjection:
         assert p is not None
         assert p.params["p"] < 1.0
 
+    @staticmethod
+    def _league_with_rates():
+        return {
+            "WR": {
+                "goal_line_conversion": 0.30,
+                "open_field_conversion": 0.035,
+                "goal_line_chances_pg": 0.42,
+                "open_field_chances_pg": 5.1,
+            }
+        }
+
+    def test_no_goal_line_history_is_not_a_claim_of_never(self):
+        """The largest error the first backtest found in this market.
+
+        Conversion rates were shrunk toward the position; opportunity COUNTS
+        were not. A player with four games and no goal-line carries got a
+        goal-line rate of exactly zero — a confident claim he will never get
+        one. Measured on 2024-25, receivers with no goal-line work through week
+        6 went on to score in 19.6% of games, tight ends 21.1%. The bottom two
+        bins hold 44.6% of all anytime-TD predictions and said 6% where 16.5%
+        happened.
+        """
+        none_yet = project_anytime_td(
+            self._row(
+                position_group="WR", games_played=4,
+                goal_line_opportunities=0, goal_line_tds=0,
+                open_field_opportunities=18, open_field_tds=1,
+            ),
+            {},
+            self._league_with_rates(),
+        )
+        assert none_yet is not None
+        # Some goal-line expectation must survive, and the total probability has
+        # to be in the neighbourhood of what such players actually do.
+        assert none_yet.params["p"] > 0.12
+
+    def test_goal_line_history_still_moves_the_answer(self):
+        """Shrinkage must not flatten the signal into a position average."""
+        without = project_anytime_td(
+            self._row(position_group="WR", games_played=6,
+                      goal_line_opportunities=0, goal_line_tds=0,
+                      open_field_opportunities=30, open_field_tds=2),
+            {}, self._league_with_rates(),
+        )
+        heavy = project_anytime_td(
+            self._row(position_group="WR", games_played=6,
+                      goal_line_opportunities=9, goal_line_tds=3,
+                      open_field_opportunities=30, open_field_tds=2),
+            {}, self._league_with_rates(),
+        )
+        assert without is not None and heavy is not None
+        assert heavy.params["p"] > without.params["p"] * 1.15
+
+    def test_more_games_without_opportunity_lowers_the_estimate(self):
+        """Four games with no goal-line work is thin evidence; twelve is real
+        evidence of a role that does not include the goal line."""
+        early = project_anytime_td(
+            self._row(position_group="WR", games_played=4,
+                      goal_line_opportunities=0, goal_line_tds=0,
+                      open_field_opportunities=20, open_field_tds=1),
+            {}, self._league_with_rates(),
+        )
+        late = project_anytime_td(
+            self._row(position_group="WR", games_played=12,
+                      goal_line_opportunities=0, goal_line_tds=0,
+                      open_field_opportunities=60, open_field_tds=3),
+            {}, self._league_with_rates(),
+        )
+        assert early is not None and late is not None
+        assert late.params["p"] < early.params["p"]
+
 
 class TestProjectionObject:
     def test_probability_over_delegates_to_the_distribution(self):

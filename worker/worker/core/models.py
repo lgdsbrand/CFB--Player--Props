@@ -83,7 +83,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from worker.core.probability import prob_over, validate_params
+from worker.core.probability import distribution_sd, prob_over, validate_params
 from worker.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -328,6 +328,210 @@ def finalize(
     )
 
 
+# Families with a width that can be turned independently of the mean. Poisson's
+# variance IS its mean and a Bernoulli's is fixed by p, so for those two a
+# measured miscalibration is real information but not something a rescale can
+# act on — it has to be reported rather than silently dropped.
+RESCALABLE_FAMILIES = frozenset(
+    {"normal", "gamma", "lognormal", "negative_binomial", "beta_binomial"}
+)
+
+
+def can_rescale(distribution: str) -> bool:
+    return distribution in RESCALABLE_FAMILIES
+
+
+def rescale(projection: Projection, scale: float) -> Projection:
+    """Re-solve a projection at `scale` times its width, holding the mean.
+
+    Applies the correction from `worker.core.calibration`: the projected spread
+    is the player's own game-to-game variation, which omits the error in the
+    projected mean itself, and the backtest measured that omission market by
+    market.
+
+    The mean must not move. The over/under call and the confidence both come
+    from probability mass either side of a line, so shifting the centre while
+    claiming to fix the width would trade a calibration error for a bias.
+
+    Two families cannot express this and are returned untouched. A Poisson's
+    variance IS its mean, and a Bernoulli's is fixed by p, so neither has a
+    width to turn independently. That is not a silent failure: both are the
+    markets the diagnostic found were already close (pass_tds at 5.3% tail mass,
+    anytime_td graded at a single line), and changing family to gain a free
+    parameter would break the family recorded in `projections.distribution`.
+    """
+    if scale <= 0 or not math.isfinite(scale) or abs(scale - 1.0) < 1e-9:
+        return projection
+
+    distribution = projection.distribution
+    params = dict(projection.params)
+    mean = projection.mean
+
+    if distribution in ("poisson", "bernoulli"):
+        return projection
+
+    if distribution == "normal":
+        params["sigma"] = max(float(params["sigma"]) * scale, 1e-6)
+
+    elif distribution in ("gamma", "lognormal"):
+        # LOCATION-SCALE, not a re-solve at a bigger SD.
+        #
+        # Re-solving was the first attempt and it was wrong in a way that only
+        # the backtest could show. Holding the mean while inflating the variance
+        # of a RIGHT-SKEWED family drags its median down, and P(over) at a line
+        # near the centre is governed by the median. rec_yards is gamma and
+        # lognormal, and its middle bins went from +0.002 to +0.060 -- a
+        # calibration error traded for a bias. pass_yards is normal, symmetric,
+        # and had no such problem, which is what identified the cause.
+        #
+        # Both families are closed under Y = m + s(X - m), which scales every
+        # deviation from the mean without touching the shape:
+        #
+        #   gamma      shape k unchanged, scale -> s*scale,
+        #              loc -> s*loc + m*(1-s)
+        #   lognormal  sigma unchanged,   mu -> mu + ln(s),
+        #              loc -> s*loc + m*(1-s)
+        #
+        # so the mean is preserved exactly, the SD scales by s, and the median
+        # keeps its position relative to the mean.
+        #
+        # The cost is that `loc` goes negative for s > 1, giving a little
+        # probability to impossible negative yardage. That is the honest trade:
+        # a small amount of misplaced mass at the floor against a systematic
+        # bias through the entire middle of the range, which is where most
+        # lines actually sit.
+        loc = float(params.get("loc", 0.0))
+        shifted_loc = scale * loc + mean * (1.0 - scale)
+        if distribution == "gamma":
+            params = {
+                "shape": float(params["shape"]),
+                "scale": max(float(params["scale"]) * scale, 1e-9),
+                "loc": shifted_loc,
+            }
+        else:
+            params = {
+                "mu": float(params["mu"]) + math.log(scale),
+                "sigma": float(params["sigma"]),
+                "loc": shifted_loc,
+            }
+
+    elif distribution == "negative_binomial":
+        # variance = mean * dispersion, so the width scales with sqrt(dispersion).
+        p = float(params["p"])
+        dispersion = 1.0 / p if p > 0 else 2.0
+        params = negative_binomial_params(mean, dispersion * scale * scale)
+
+    elif distribution == "beta_binomial":
+        # var = n*p*(1-p)*(1 + (n-1)*rho). Hold n and p, move rho.
+        n, a, b = float(params["n"]), float(params["a"]), float(params["b"])
+        total = a + b
+        if n <= 1 or total <= 0:
+            return projection
+        p = a / total
+        rho = 1.0 / (total + 1.0)
+        target = (scale * scale * (1.0 + (n - 1.0) * rho) - 1.0) / (n - 1.0)
+        # rho -> 0 is the binomial limit and the narrowest this family reaches;
+        # receptions is under-dispersed, so that floor is a real constraint
+        # rather than a formality.
+        rho_new = min(max(target, 1e-6), 1.0 - 1e-6)
+        total_new = 1.0 / rho_new - 1.0
+        params = {
+            "n": n,
+            "a": max(p * total_new, 1e-6),
+            "b": max((1.0 - p) * total_new, 1e-6),
+        }
+
+    else:
+        return projection
+
+    return Projection(
+        market_key=projection.market_key,
+        distribution=distribution,
+        params=params,
+        mean=mean,
+        quantiles=_quantiles(distribution, params, mean),
+        volume=projection.volume,
+        efficiency=projection.efficiency,
+        matchup_multiplier=projection.matchup_multiplier,
+    )
+
+
+def shift_mean(projection: Projection, multiplier: float) -> Projection:
+    """Scale a projection by `multiplier`, keeping its shape and relative width.
+
+    Applies the bias correction from `worker.core.calibration`. Unlike
+    `rescale`, which turns the width at a fixed centre, this moves the whole
+    distribution: X -> kX. The coefficient of variation is preserved, which is
+    the right behaviour for a volume correction — a quarterback who throws 10%
+    more than projected is not thereby 10% more predictable.
+
+    Every family supports this, including the two that have no free width
+    parameter: scaling a Poisson's lambda or a Bernoulli's p moves the mean,
+    which is exactly what is wanted here.
+    """
+    if (
+        multiplier <= 0
+        or not math.isfinite(multiplier)
+        or abs(multiplier - 1.0) < 1e-9
+    ):
+        return projection
+
+    distribution = projection.distribution
+    params = dict(projection.params)
+    mean = projection.mean * multiplier
+
+    if distribution == "normal":
+        params = {
+            "mu": float(params["mu"]) * multiplier,
+            "sigma": max(float(params["sigma"]) * multiplier, 1e-6),
+        }
+    elif distribution == "gamma":
+        params = {
+            "shape": float(params["shape"]),
+            "scale": max(float(params["scale"]) * multiplier, 1e-9),
+            "loc": float(params.get("loc", 0.0)) * multiplier,
+        }
+    elif distribution == "lognormal":
+        params = {
+            "mu": float(params["mu"]) + math.log(multiplier),
+            "sigma": float(params["sigma"]),
+            "loc": float(params.get("loc", 0.0)) * multiplier,
+        }
+    elif distribution == "poisson":
+        params = {"lam": max(float(params["lam"]) * multiplier, 1e-9)}
+    elif distribution == "negative_binomial":
+        p = float(params["p"])
+        dispersion = 1.0 / p if p > 0 else 2.0
+        params = negative_binomial_params(mean, dispersion)
+    elif distribution == "beta_binomial":
+        # n is a ceiling on the trial count, so it scales with the mean too;
+        # holding it fixed would reintroduce the impossible-outcome ceiling that
+        # the beta-binomial fix removed.
+        n, a, b = float(params["n"]), float(params["a"]), float(params["b"])
+        total = a + b
+        if total <= 0:
+            return projection
+        scaled_n = max(math.ceil(n * multiplier), 1)
+        p = min(max((n * a / total) * multiplier / scaled_n, 1e-4), 1 - 1e-3)
+        params = {"n": float(scaled_n), "a": p * total, "b": (1.0 - p) * total}
+    elif distribution == "bernoulli":
+        params = {"p": min(max(float(params["p"]) * multiplier, 1e-4), 1 - 1e-4)}
+        mean = params["p"]
+    else:
+        return projection
+
+    return Projection(
+        market_key=projection.market_key,
+        distribution=distribution,
+        params=params,
+        mean=mean,
+        quantiles=_quantiles(distribution, params, mean),
+        volume=projection.volume,
+        efficiency=projection.efficiency,
+        matchup_multiplier=projection.matchup_multiplier,
+    )
+
+
 # -----------------------------------------------------------------------------
 # Matchup
 # -----------------------------------------------------------------------------
@@ -461,6 +665,11 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
             "open_field_tds",
         ):
             bucket[key] = bucket.get(key, 0.0) + (_value(row, key, 0.0) or 0.0)
+        # Games are accumulated in the same pass so the opportunity rates below
+        # divide by the right denominator without a second scan.
+        bucket["games"] = bucket.get("games", 0.0) + (
+            _value(row, "games_played", 0.0) or 0.0
+        )
 
     for position, counts in totals.items():
         resolved = baselines.setdefault(position, {})
@@ -474,6 +683,10 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
             resolved["open_field_conversion"] = (
                 counts.get("open_field_tds", 0.0) / open_chances
             )
+        games = counts.get("games", 0.0)
+        if games > 0:
+            resolved["goal_line_chances_pg"] = goal_line_chances / games
+            resolved["open_field_chances_pg"] = open_chances / games
 
     return baselines
 
@@ -647,13 +860,40 @@ def project_anytime_td(
     if games <= 0:
         return None
 
-    goal_line_chances = (_value(row, "goal_line_opportunities", 0.0) or 0.0) / games
+    raw_goal_line = _value(row, "goal_line_opportunities", 0.0) or 0.0
+    raw_open = _value(row, "open_field_opportunities", 0.0) or 0.0
     goal_line_tds = _value(row, "goal_line_tds", 0.0) or 0.0
-    open_chances = (_value(row, "open_field_opportunities", 0.0) or 0.0) / games
     open_tds = _value(row, "open_field_tds", 0.0) or 0.0
 
-    if goal_line_chances <= 0 and open_chances <= 0:
+    if raw_goal_line <= 0 and raw_open <= 0:
         return None
+
+    # OPPORTUNITY RATES ARE SHRUNK, not taken raw. The first backtest showed why:
+    # the bottom two bins hold 44.6% of every anytime-TD prediction, and both
+    # were badly underconfident — the model said 6% where 16.5% actually scored.
+    #
+    # The cause was that conversion rates were shrunk toward the position while
+    # opportunity COUNTS were not. A player with four games and no goal-line
+    # carries got a goal-line rate of exactly zero, which is a confident claim
+    # that he will never get one. He will. Measured on 2024-25, players with no
+    # goal-line work through week 6 went on to score in 19.6% of games as
+    # receivers, 21.1% as tight ends and 17.5% as running backs. For tight ends
+    # that is barely different from those WITH goal-line history (23.1%), so
+    # treating the distinction as absolute was the single largest error in the
+    # market.
+    #
+    # Same empirical-Bayes shape used everywhere else: observed counts plus a
+    # position-typical rate worth OPPORTUNITY_PRIOR_GAMES games of evidence.
+    def opportunity_rate(observed: float, baseline_key: str) -> float:
+        baseline = (league.get(position) or {}).get(baseline_key)
+        if baseline is None:
+            baseline = baselines.get(baseline_key, 0.0)
+        return (observed + baseline * OPPORTUNITY_PRIOR_GAMES) / (
+            games + OPPORTUNITY_PRIOR_GAMES
+        )
+
+    goal_line_chances = opportunity_rate(raw_goal_line, "goal_line_chances_pg")
+    open_chances = opportunity_rate(raw_open, "open_field_chances_pg")
 
     # Conversion rates, shrunk toward the position baseline by opportunity count.
     def conversion(scored: float, chances_total: float, fallback: float) -> float:
@@ -708,6 +948,14 @@ def project_anytime_td(
 # carries and one score is not a 33% finisher, and anytime TD is the market
 # where an overconfident rate is most expensive.
 TD_RATE_PRIOR_CHANCES = 12.0
+
+# Games of position-typical opportunity worth crediting a player who has not
+# generated that opportunity himself yet. Deliberately smaller than
+# TD_RATE_PRIOR_CHANCES because opportunity is a role, which is more stable and
+# more quickly evident than a conversion rate: three games of goal-line usage
+# says considerably more about the next game than three goal-line carries say
+# about a finish rate.
+OPPORTUNITY_PRIOR_GAMES = 3.0
 
 # League-wide fallbacks, measured 2024-25 across all skill positions.
 DEFAULT_GOAL_LINE_CONVERSION = 0.35

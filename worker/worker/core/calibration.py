@@ -85,6 +85,59 @@ MIN_SCALE = 0.6
 MAX_SCALE = 2.5
 
 
+def shrink_toward_one(raw: float, standard_error: float) -> float:
+    """Damp a correction by how well it is actually measured.
+
+    WHY THIS EXISTS. The first version applied every measurement at full
+    strength. A market measured at x0.96 from a sample whose uncertainty
+    comfortably spanned 1.0 still got moved 4%, which is noise applied as
+    signal — and it showed: `receptions` (x0.96) and `rush_yards` both came out
+    slightly WORSE after correction, while markets with large, well-measured
+    deviations like `rec_yards` (x1.66) improved substantially.
+
+    The estimator subtracts the noise variance from the observed deviation,
+    which is the standard way to stop measurement error masquerading as effect:
+
+        w = max(0, d^2 - se^2) / d^2,      adjusted = 1 + d * w
+
+    where d is the raw deviation from 1.0. If the deviation is no larger than
+    its own standard error, w is 0 and the correction is dropped entirely; if it
+    dwarfs the error, w approaches 1 and the full correction survives. Nothing
+    in between is arbitrary — it is the share of the observed deviation that the
+    noise cannot account for.
+    """
+    deviation = raw - 1.0
+    if deviation == 0.0 or not math.isfinite(deviation):
+        return 1.0
+    if not math.isfinite(standard_error) or standard_error <= 0:
+        return raw
+    signal = deviation * deviation - standard_error * standard_error
+    if signal <= 0:
+        return 1.0
+    return 1.0 + deviation * (signal / (deviation * deviation))
+
+
+def _scale_and_error(cell: list[float]) -> tuple[float, float]:
+    """Width multiplier and its standard error, from [sum z^2, sum z^4, n].
+
+    The multiplier is sqrt(mean(z^2)). Its error comes from the variance of that
+    mean — var(z^2)/n, computed from the fourth moment — carried through the
+    square root by the delta method. Using the observed fourth moment rather
+    than the normal-theory value of 2 matters here: these residuals are heavy
+    tailed, which is the very thing being corrected, and assuming normality
+    would understate the error exactly where the sample is least trustworthy.
+    """
+    total_sq, total_quad, n = cell
+    if n <= 1 or total_sq <= 0:
+        return 1.0, 0.0
+    mean_sq = total_sq / n
+    variance_of_sq = max(total_quad / n - mean_sq * mean_sq, 0.0)
+    scale = math.sqrt(mean_sq)
+    # d(sqrt(x))/dx = 1/(2 sqrt(x))
+    error = math.sqrt(variance_of_sq / n) / (2.0 * scale) if scale > 0 else 0.0
+    return scale, error
+
+
 class VarianceCalibration:
     """Accumulates standardized residuals and reports the width correction.
 
@@ -103,7 +156,10 @@ class VarianceCalibration:
     """
 
     def __init__(self) -> None:
-        # key -> [sum of z squared, count], at three levels of specificity
+        # key -> [sum z^2, sum z^4, count], at three levels of specificity.
+        # The fourth moment is carried so the estimator's own standard error can
+        # be computed from the data rather than by assuming the residuals are
+        # normal — they are not, which is the entire reason this class exists.
         self._market: dict[str, list[float]] = {}
         self._by_history: dict[tuple[str, str], list[float]] = {}
         self._by_position: dict[tuple[str, str, str], list[float]] = {}
@@ -133,9 +189,10 @@ class VarianceCalibration:
             (self._by_history, (market_key, bucket)),
             (self._by_position, (market_key, bucket, position_group)),
         ):
-            cell = store.setdefault(key, [0.0, 0.0])  # type: ignore[arg-type]
+            cell = store.setdefault(key, [0.0, 0.0, 0.0])  # type: ignore[arg-type]
             cell[0] += squared
-            cell[1] += 1.0
+            cell[1] += squared * squared
+            cell[2] += 1.0
 
     # -- report ---------------------------------------------------------------
     def scale(
@@ -161,8 +218,8 @@ class VarianceCalibration:
             (self._market, market_key, MIN_RESIDUALS),
         ):
             cell = store.get(key)  # type: ignore[arg-type]
-            if cell is not None and cell[1] >= threshold:
-                return _clamp(math.sqrt(cell[0] / cell[1]))
+            if cell is not None and cell[2] >= threshold:
+                return _clamp(shrink_toward_one(*_scale_and_error(cell)))
         return 1.0
 
     def snapshot(self) -> dict[str, dict[str, float]]:
@@ -173,25 +230,27 @@ class VarianceCalibration:
         """
         result: dict[str, dict[str, float]] = {}
 
-        def record(label: str, total: float, count: float, applied: bool) -> None:
-            if count <= 0:
+        def record(label: str, cell: list[float], applied: bool) -> None:
+            if cell[2] <= 0:
                 return
+            raw, error = _scale_and_error(cell)
             result[label] = {
-                "scale": round(_clamp(math.sqrt(total / count)), 4),
-                "n": int(count),
+                "scale": round(_clamp(shrink_toward_one(raw, error)), 4),
+                "raw": round(raw, 4),
+                "n": int(cell[2]),
                 "applied": applied,
             }
 
-        for market_key, (total, count) in sorted(self._market.items()):
-            record(market_key, total, count, count >= MIN_RESIDUALS)
-        for (market_key, bucket), (total, count) in sorted(self._by_history.items()):
-            if count >= MIN_CELL_RESIDUALS:
-                record(f"{market_key}@{bucket}", total, count, True)
-        for (market_key, bucket, position), (total, count) in sorted(
+        for market_key, cell in sorted(self._market.items()):
+            record(market_key, cell, cell[2] >= MIN_RESIDUALS)
+        for (market_key, bucket), cell in sorted(self._by_history.items()):
+            if cell[2] >= MIN_CELL_RESIDUALS:
+                record(f"{market_key}@{bucket}", cell, True)
+        for (market_key, bucket, position), cell in sorted(
             self._by_position.items()
         ):
-            if count >= MIN_CELL_RESIDUALS:
-                record(f"{market_key}@{bucket}:{position}", total, count, True)
+            if cell[2] >= MIN_CELL_RESIDUALS:
+                record(f"{market_key}@{bucket}:{position}", cell, True)
         return result
 
 
@@ -234,7 +293,10 @@ class MeanCalibration:
     """
 
     def __init__(self) -> None:
-        # key -> [sum actual, sum projected, count]
+        # key -> [sum y, sum x, sum y^2, sum xy, sum x^2, n] where y is actual
+        # and x projected. The cross-products are what let a RATIO estimator
+        # report its own standard error, so a 4% correction measured on noise
+        # can be told apart from a 4% correction that is real.
         self._market: dict[str, list[float]] = {}
         self._cells: dict[tuple[str, str], list[float]] = {}
 
@@ -254,10 +316,15 @@ class MeanCalibration:
             (self._market, market_key),
             (self._cells, (market_key, bucket)),
         ):
-            cell = store.setdefault(key, [0.0, 0.0, 0.0])  # type: ignore[arg-type]
+            cell = store.setdefault(  # type: ignore[arg-type]
+                key, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            )
             cell[0] += actual
             cell[1] += projected
-            cell[2] += 1.0
+            cell[2] += actual * actual
+            cell[3] += actual * projected
+            cell[4] += projected * projected
+            cell[5] += 1.0
 
     def multiplier(self, market_key: str, games_played: float = 0.0) -> float:
         bucket = history_bucket(games_played)
@@ -266,31 +333,54 @@ class MeanCalibration:
             (self._market, market_key, MIN_RESIDUALS),
         ):
             cell = store.get(key)  # type: ignore[arg-type]
-            if cell is not None and cell[2] >= threshold and cell[1] > 0:
-                return _clamp_mean(cell[0] / cell[1])
+            if cell is not None and cell[5] >= threshold and cell[1] > 0:
+                return _clamp_mean(shrink_toward_one(*_ratio_and_error(cell)))
         return 1.0
 
     def snapshot(self) -> dict[str, dict[str, float]]:
         result: dict[str, dict[str, float]] = {}
-        for market_key, (actual, projected, count) in sorted(self._market.items()):
-            if projected <= 0:
-                continue
-            result[market_key] = {
-                "multiplier": round(_clamp_mean(actual / projected), 4),
-                "n": int(count),
-                "applied": count >= MIN_RESIDUALS,
+
+        def record(label: str, cell: list[float], applied: bool) -> None:
+            if cell[1] <= 0:
+                return
+            raw, error = _ratio_and_error(cell)
+            result[label] = {
+                "multiplier": round(_clamp_mean(shrink_toward_one(raw, error)), 4),
+                "raw": round(raw, 4),
+                "n": int(cell[5]),
+                "applied": applied,
             }
-        for (market_key, bucket), (actual, projected, count) in sorted(
-            self._cells.items()
-        ):
-            if count < MIN_CELL_RESIDUALS or projected <= 0:
-                continue
-            result[f"{market_key}@{bucket}"] = {
-                "multiplier": round(_clamp_mean(actual / projected), 4),
-                "n": int(count),
-                "applied": True,
-            }
+
+        for market_key, cell in sorted(self._market.items()):
+            record(market_key, cell, cell[5] >= MIN_RESIDUALS)
+        for (market_key, bucket), cell in sorted(self._cells.items()):
+            if cell[5] >= MIN_CELL_RESIDUALS:
+                record(f"{market_key}@{bucket}", cell, True)
         return result
+
+
+def _ratio_and_error(cell: list[float]) -> tuple[float, float]:
+    """Ratio-of-sums multiplier and its standard error.
+
+    R = sum(actual) / sum(projected). The textbook ratio-estimator variance is
+
+        var(R) ~ sum((y_i - R*x_i)^2) / (n (n-1) xbar^2)
+
+    which is expanded here from the stored cross-products rather than a second
+    pass over the observations. It correctly reflects that a market whose
+    outcomes track their projections closely has a well-determined ratio even
+    from a modest sample, while a noisy one does not.
+    """
+    sum_y, sum_x, sum_yy, sum_xy, sum_xx, n = cell
+    if n <= 1 or sum_x <= 0:
+        return 1.0, 0.0
+    ratio = sum_y / sum_x
+    residual_ss = sum_yy - 2.0 * ratio * sum_xy + ratio * ratio * sum_xx
+    mean_x = sum_x / n
+    if residual_ss <= 0 or mean_x <= 0:
+        return ratio, 0.0
+    variance = residual_ss / (n * (n - 1.0) * mean_x * mean_x)
+    return ratio, math.sqrt(max(variance, 0.0))
 
 
 def _clamp_mean(multiplier: float) -> float:

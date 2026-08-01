@@ -25,6 +25,7 @@ from worker.core.calibration import (
     MeanCalibration,
     VarianceCalibration,
     history_bucket,
+    shrink_toward_one,
 )
 from worker.core.models import Projection, rescale, shift_mean
 from worker.core.probability import distribution_sd
@@ -159,6 +160,81 @@ class TestSnapshot:
         assert snap["rec_yards"]["n"] == MIN_RESIDUALS + 10
         # Reported even when unused, so a thin market is visible rather than absent.
         assert snap["pass_tds"]["applied"] is False
+
+
+class TestShrinkTowardOne:
+    """Damping a correction by how well it is measured.
+
+    The first version applied every measurement at full strength, and it showed:
+    `receptions` (measured x0.96) and `rush_yards` both came out slightly WORSE
+    after correction, while large well-measured deviations like `rec_yards`
+    (x1.66) improved substantially. A 4% correction from a sample whose
+    uncertainty spans 1.0 is noise being applied as signal.
+    """
+
+    def test_a_deviation_smaller_than_its_error_is_dropped_entirely(self):
+        assert shrink_toward_one(0.96, standard_error=0.08) == 1.0
+        assert shrink_toward_one(1.05, standard_error=0.10) == 1.0
+
+    def test_a_deviation_far_larger_than_its_error_survives_almost_intact(self):
+        out = shrink_toward_one(1.66, standard_error=0.02)
+        assert out == pytest.approx(1.66, abs=0.01)
+
+    def test_damping_is_partial_in_between(self):
+        out = shrink_toward_one(1.30, standard_error=0.15)
+        assert 1.0 < out < 1.30
+
+    def test_the_same_deviation_survives_or_dies_on_its_error_alone(self):
+        """The whole point: identical measured effects, different certainty."""
+        certain = shrink_toward_one(1.10, standard_error=0.01)
+        uncertain = shrink_toward_one(1.10, standard_error=0.30)
+        assert certain > 1.09
+        assert uncertain == 1.0
+
+    def test_direction_is_never_flipped(self):
+        for raw in (0.7, 0.9, 1.1, 1.4):
+            out = shrink_toward_one(raw, standard_error=0.05)
+            assert (out - 1.0) * (raw - 1.0) >= 0
+
+    def test_an_unmeasurable_error_leaves_the_estimate_alone(self):
+        assert shrink_toward_one(1.4, standard_error=0.0) == 1.4
+        assert shrink_toward_one(1.4, standard_error=float("nan")) == 1.4
+
+
+class TestStandardErrors:
+    def test_the_width_error_falls_as_the_sample_grows(self):
+        small, large = VarianceCalibration(), VarianceCalibration()
+        _feed(small, "m", "WR", 500, spread=1.3)
+        _feed(large, "m", "WR", 20000, spread=1.3)
+        # Both measure the same effect; only the larger one should keep it whole.
+        assert large.scale("m", "WR", 10.0) > small.scale("m", "WR", 10.0)
+        assert large.scale("m", "WR", 10.0) == pytest.approx(1.3, abs=0.05)
+
+    def test_a_tiny_real_effect_needs_a_big_sample_to_survive(self):
+        small, large = VarianceCalibration(), VarianceCalibration()
+        _feed(small, "m", "WR", 600, spread=1.03)
+        _feed(large, "m", "WR", 60000, spread=1.03)
+        assert small.scale("m", "WR", 10.0) == 1.0
+        assert large.scale("m", "WR", 10.0) > 1.0
+
+    def test_the_ratio_error_reflects_how_tightly_outcomes_track(self):
+        """A market whose outcomes hug their projections has a well-determined
+        ratio from a modest sample; a scattered one does not."""
+        tight, loose = MeanCalibration(), MeanCalibration()
+        for i in range(3000):
+            wobble = 1.0 if i % 2 else -1.0
+            tight.observe("m", 33.0 + 0.5 * wobble, 30.0, 10.0)
+            loose.observe("m", 33.0 + 25.0 * wobble, 30.0, 10.0)
+        assert tight.multiplier("m", 10.0) > loose.multiplier("m", 10.0)
+        assert tight.multiplier("m", 10.0) == pytest.approx(1.1, abs=0.02)
+
+    def test_snapshot_reports_raw_alongside_the_damped_value(self):
+        c = VarianceCalibration()
+        _feed(c, "m", "WR", 600, spread=1.02)
+        entry = c.snapshot()["m"]
+        # Raw is preserved so a dropped correction is visible rather than absent.
+        assert entry["raw"] == pytest.approx(1.02, abs=0.03)
+        assert entry["scale"] == 1.0
 
 
 class TestMeanCalibration:

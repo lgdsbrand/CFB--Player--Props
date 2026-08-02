@@ -142,6 +142,44 @@ def normalize_season_type(raw: str | None) -> str:
     return SEASON_TYPE_MAP.get(str(raw).strip().lower(), "regular")
 
 
+# -----------------------------------------------------------------------------
+# The season time axis
+# -----------------------------------------------------------------------------
+# CFBD numbers postseason games from 1 under seasonType='postseason', so a bowl
+# played on 19 December arrives as "week 1" — the same label as the season
+# opener. `games.week` is the time axis every point-in-time cutoff in this
+# schema is defined against, and storing CFBD's number verbatim put a December
+# result inside week 1. Every "through week N" aggregation for N >= 2 then read
+# it: real lookahead, of exactly the kind CLAUDE.md §4 calls disqualifying.
+#
+# It survived eight lookahead checks in `audit_data` because all of them
+# verified that cutoffs were applied correctly AGAINST the week column. None
+# asked whether the week column ordered games by time. The guard was perfectly
+# consistent with the bug.
+#
+# A FIXED OFFSET, NOT max(regular week) + n. The maximum regular week is a
+# moving target — mid-season it is however much of the schedule has been
+# ingested, so a bowl stored against it in September would collide with a real
+# week in November. 20 clears any regular season (the longest here is 16) and
+# leaves an obvious gap, so a week in the twenties reads as postseason on sight.
+POSTSEASON_WEEK_OFFSET = 20
+
+
+def week_on_season_axis(week: int, season_type: str) -> int:
+    """CFBD's week number placed on this schema's monotone season axis."""
+    return week + POSTSEASON_WEEK_OFFSET if season_type == "postseason" else week
+
+
+def week_for_api(week: int, season_type: str) -> int:
+    """The inverse: our stored week back to the number CFBD's API expects.
+
+    Every per-week endpoint is queried as (season_type, week) with CFBD's own
+    numbering, and those calls are driven from our `games` table. Without this
+    the stats ingest would ask for postseason week 21 and get nothing back.
+    """
+    return week - POSTSEASON_WEEK_OFFSET if season_type == "postseason" else week
+
+
 def inches_or_none(value: object) -> int | None:
     """CFBD heights are already inches, but arrive as int, str or None."""
     if value in (None, ""):

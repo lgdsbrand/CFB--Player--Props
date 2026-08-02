@@ -404,6 +404,22 @@ def compute_ratings(season: int, max_week: int | None = None) -> int:
 
             payload.extend(rows_this_cut)
 
+    # REPLACE, NOT MERGE. An upsert alone leaves orphans: a cell that used to be
+    # rated and no longer is keeps its old row forever, because nothing writes
+    # over it. That is not hypothetical — correcting the postseason week axis
+    # (migration 0020) removed a team's only prior "game" at as_of_week = 2, the
+    # engine correctly declined to rate it, and the contaminated row from the
+    # previous run survived the rebuild with games_included = 1 against zero
+    # games. Ratings are derived, so a rebuild for a season has to be the whole
+    # truth for that season and version.
+    stale = execute(
+        "delete from defense_position_ratings "
+        " where season = %s and adjustment_version = %s",
+        (season, ADJUSTMENT_VERSION),
+    )
+    if stale:
+        log.info("defense_position_ratings %d: cleared %d prior rows", season, stale)
+
     n = upsert(
         "defense_position_ratings",
         payload,

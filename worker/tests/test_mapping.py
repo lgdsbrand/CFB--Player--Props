@@ -21,8 +21,11 @@ from worker.adapters.cfbd.mapping import (
     inches_or_none,
     normalize_classification,
     normalize_season_type,
+    POSTSEASON_WEEK_OFFSET,
     pounds_or_none,
     smallint_or_none,
+    week_for_api,
+    week_on_season_axis,
 )
 
 # ------------------------------------------------------------------- positions
@@ -150,3 +153,43 @@ def test_smallint_guards_postgres_range():
     assert smallint_or_none(-32769) is None
     assert smallint_or_none("12") == 12
     assert smallint_or_none(None) is None
+
+
+# ----------------------------------------------------------------- season axis
+def test_regular_weeks_are_stored_as_the_source_numbers_them():
+    assert week_on_season_axis(1, "regular") == 1
+    assert week_on_season_axis(16, "regular") == 16
+
+
+def test_postseason_weeks_are_pushed_past_any_regular_season():
+    """The bug this exists to prevent.
+
+    CFBD restarts week numbering at 1 for the postseason, so a bowl played in
+    December arrived labelled the same as the season opener. `games.week` is the
+    time axis every point-in-time cutoff is defined against, so a December
+    result sitting in week 1 leaked into every "through week N" aggregation for
+    N >= 2 — the disqualifying lookahead of CLAUDE.md §4.
+    """
+    assert week_on_season_axis(1, "postseason") == 21
+    assert week_on_season_axis(2, "postseason") == 22
+
+
+def test_no_postseason_week_can_collide_with_a_regular_one():
+    """The offset must clear the longest regular season, with room to spare."""
+    regular = {week_on_season_axis(w, "regular") for w in range(1, 20)}
+    postseason = {week_on_season_axis(w, "postseason") for w in range(1, 6)}
+    assert regular.isdisjoint(postseason)
+    assert min(postseason) > POSTSEASON_WEEK_OFFSET
+
+
+def test_the_api_week_round_trips():
+    """Per-week endpoints are driven from our own games table.
+
+    Without the inverse the stats ingest asks CFBD for postseason week 21 and
+    gets an empty list back — no error, just a season quietly missing its bowl
+    games.
+    """
+    for season_type in ("regular", "postseason"):
+        for week in range(1, 17):
+            stored = week_on_season_axis(week, season_type)
+            assert week_for_api(stored, season_type) == week

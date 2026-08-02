@@ -42,6 +42,7 @@ from worker.adapters.cfbd.mapping import (
     normalize_season_type,
     pounds_or_none,
     smallint_or_none,
+    week_on_season_axis,
 )
 from worker.db import fetch_id_map, upsert
 from worker.logging_setup import get_logger
@@ -270,12 +271,19 @@ def ingest_games(client: CfbdClient, season: int, counts: IngestCounts) -> None:
                 skipped_unknown_team += 1
                 continue
 
+            # CFBD restarts week numbering at 1 for the postseason, so a bowl
+            # arrives labelled the same as the season opener. `games.week` is
+            # the time axis every cutoff in this schema is defined against, so
+            # it has to be monotone in time — see `week_on_season_axis`.
+            row_season_type = normalize_season_type(r.get("seasonType"))
+            week = week_on_season_axis(week, row_season_type)
+
             payload.append(
                 {
                     "cfbd_id": r.get("id"),
                     "season": season,
                     "week": week,
-                    "season_type": normalize_season_type(r.get("seasonType")),
+                    "season_type": row_season_type,
                     "start_date": r.get("startDate"),
                     "start_time_tbd": bool(r.get("startTimeTBD")),
                     "neutral_site": bool(r.get("neutralSite")),

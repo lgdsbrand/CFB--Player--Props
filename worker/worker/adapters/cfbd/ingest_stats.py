@@ -62,7 +62,11 @@ import cfbd
 
 from worker.adapters.cfbd.boxscore import BoxScoreParser
 from worker.adapters.cfbd.client import CfbdClient
-from worker.adapters.cfbd.mapping import bigint_or_none, smallint_or_none
+from worker.adapters.cfbd.mapping import (
+    bigint_or_none,
+    smallint_or_none,
+    week_for_api,
+)
 from worker.db import copy_into, execute, fetch_all, upsert
 from worker.logging_setup import get_logger
 
@@ -160,7 +164,13 @@ class SeasonContext:
 
 
 def week_slices(season: int) -> list[tuple[str, int]]:
-    """(season_type, week) pairs that actually have games, from our own games."""
+    """(season_type, week) pairs to query, in CFBD's own week numbering.
+
+    Driven from our `games` table, which stores postseason weeks offset onto a
+    monotone season axis (see `week_on_season_axis`). CFBD's per-week endpoints
+    expect its own numbering, so the offset is undone here — asking for
+    postseason week 21 returns nothing at all, silently.
+    """
     rows = fetch_all(
         """
         select distinct season_type::text as season_type, week
@@ -168,7 +178,9 @@ def week_slices(season: int) -> list[tuple[str, int]]:
         """,
         (season,),
     )
-    return [(r["season_type"], r["week"]) for r in rows]
+    return [
+        (r["season_type"], week_for_api(r["week"], r["season_type"])) for r in rows
+    ]
 
 
 # -----------------------------------------------------------------------------

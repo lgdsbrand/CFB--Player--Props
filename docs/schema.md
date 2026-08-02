@@ -11,7 +11,22 @@ self-documenting once the migrations are applied.
 
 CLAUDE.md §4 calls applying end-of-season data to earlier games "a silent,
 disqualifying bug" and asks for the schema to enforce this rather than hope for
-it. Three mechanisms do that:
+it. Four mechanisms do that:
+
+**The week axis is monotone in time.**
+Everything below defines a cutoff against `games.week`, so that column has to
+order games by *when they were played*. CFBD numbers postseason games from 1
+under `seasonType='postseason'`, and storing that verbatim put December bowl
+games in week 1 — where every "through week N" aggregation for N ≥ 2 read them.
+Postseason weeks are therefore offset past any regular season (`week > 20`,
+`POSTSEASON_WEEK_OFFSET`) under a CHECK constraint, and `audit_data` asserts the
+property directly: no game may start before the last game of an earlier week.
+
+That check was missing for two phases and the bug survived eight lookahead
+checks, all of which verified that cutoffs were applied correctly *against* the
+week column and none of which asked whether the column meant what it said. The
+lesson is in the mechanism, not just the fix: **a guard has to test the property
+you care about, not the code path you happen to have written.**
 
 **Observation is separated from inference.**
 `defense_position_game_splits` holds what one defense allowed to one position in
@@ -79,7 +94,7 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 | `teams` | Identity + chip colours. No logo assets anywhere (trademarked) |
 | `team_seasons` | Conference/classification per season — realignment makes these season-scoped |
 | `venues` | `is_dome`, lat/lon for the Open-Meteo weather fallback |
-| `games` | `week` is the time axis for every cutoff in the schema |
+| `games` | `week` is the time axis for every cutoff in the schema — monotone in time, postseason offset past week 20 |
 | `players` | Identity across schools |
 | `player_team_seasons` | Roster membership per season — the transfer-portal table |
 

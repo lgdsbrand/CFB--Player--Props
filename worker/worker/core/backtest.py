@@ -397,12 +397,22 @@ def walk_forward(
 
     predictions: list[Prediction] = []
     for season in seasons:
+        # REGULAR SEASON ONLY, and this is a deliberate choice rather than an
+        # accident of the data. Before migration 0020 postseason games were
+        # mislabelled week 1, which is below MIN_BACKTEST_WEEK, so bowls were
+        # never graded. Correcting the week axis makes them ordinary weeks, and
+        # letting them in would quietly change the population these calibration
+        # numbers are measured over — while the fix was supposed to change only
+        # the features. Bowls are also a different regime (long layoffs,
+        # opt-outs), so mixing them into a headline figure for an in-season
+        # weekly tool would understate what it is actually calibrated for.
         weeks = [
             int(r["week"])
             for r in fetch_all(
                 """
                 select distinct week from games
                  where season = %s and completed and week >= %s
+                   and season_type = 'regular'
                  order by week
                 """,
                 (season, MIN_BACKTEST_WEEK),

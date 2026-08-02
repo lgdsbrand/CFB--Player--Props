@@ -120,8 +120,18 @@ def projectable_weeks(season: int) -> list[int]:
     return [
         int(r["week"])
         for r in fetch_all(
-            "select distinct week from games where season = %s and week >= %s "
-            "order by week",
+            # REGULAR SEASON ONLY. Postseason weeks are stored offset past the
+            # regular season (migration 0020), which makes them ordinary weeks
+            # on the time axis and therefore projectable — they were not before,
+            # because they were mislabelled as week 1 and week 1 is below the
+            # floor. Silently gaining bowl games as a side effect of a bug fix
+            # would be a scope change nobody asked for, and bowls are a
+            # different regime anyway: month-long layoffs and opt-outs. Whether
+            # to project them is a product decision; dropping this predicate is
+            # all it takes.
+            "select distinct week from games "
+            " where season = %s and week >= %s and season_type = 'regular' "
+            " order by week",
             (season, first),
         )
     ]

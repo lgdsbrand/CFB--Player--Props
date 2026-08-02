@@ -330,6 +330,56 @@ check(G, "no duplicate split rows", """
 # =============================================================================
 G = "P2 lookahead"
 
+# THE CHECK THIS GROUP WAS MISSING, and the reason a real lookahead bug lived
+# here for two phases. Every other check below verifies that a cutoff was
+# applied correctly AGAINST games.week. None of them asked whether games.week
+# orders games by TIME — so when CFBD's postseason numbering put a December bowl
+# in week 1, all eight passed and every "through week N" aggregation for N >= 2
+# quietly read a December result. A guard that is consistent with the bug it is
+# meant to catch is worse than no guard, because it is reassuring.
+#
+# Stated as the property rather than as "no postseason in week 1": any future
+# source quirk that breaks time ordering fails this too.
+check(G, "games.week orders games by TIME, not by source label", """
+    select count(*) as violations,
+           min(a.season) as season,
+           min(a.week)   as week
+      from games a
+      join games b
+        on b.season = a.season and b.week < a.week
+     where a.start_date is not null and b.start_date is not null
+       and a.start_date < b.start_date
+""", lambda r: r["violations"] == 0)
+
+check(G, "postseason weeks sit past any regular-season week", """
+    select count(*) as bad from games
+     where season_type = 'postseason' and week <= 20
+""", lambda r: r["bad"] == 0)
+
+check(G, "denormalized week copies agree with games.week", """
+    select
+      (select count(*) from player_game_stats s join games g on g.id=s.game_id
+        where s.week <> g.week or s.season <> g.season)
+    + (select count(*) from defense_position_game_splits s join games g on g.id=s.game_id
+        where s.week <> g.week or s.season <> g.season)
+    + (select count(*) from plays p join games g on g.id=p.game_id
+        where p.week <> g.week or p.season <> g.season)
+    + (select count(*) from play_player_stats p join games g on g.id=p.game_id
+        where p.week <> g.week or p.season <> g.season)
+      as drifted
+""", lambda r: r["drifted"] == 0)
+
+check(G, "no model output targets a postseason week", """
+    select
+      (select count(*) from projections p join games g on g.id=p.game_id
+        where g.season_type='postseason')
+    + (select count(*) from picks p join games g on g.id=p.game_id
+        where g.season_type='postseason')
+    + (select count(*) from backtest_predictions b join games g on g.id=b.game_id
+        where g.season_type='postseason')
+      as targeted
+""", lambda r: r["targeted"] == 0)
+
 check(G, "season_final ratings never carry a week", """
     select count(*) as bad from team_rating_snapshots
      where snapshot_kind='season_final' and as_of_week is not null
@@ -802,6 +852,12 @@ rejects(G, "backtest_predictions rejects as_of_week > week (LOOKAHEAD)", """
     values (gen_random_uuid(), -1, -1, 'rec_yards', 'WR', 2024,
             6, 7, 50.5, 'over', 0.6, 0.6)
 """, None, "backtest_predictions_as_of_matches_week")
+
+rejects(G, "games rejects a postseason row at a regular-season week", """
+    insert into games
+      (cfbd_id, season, week, season_type, home_team_id, away_team_id)
+    values (-1, 2024, 1, 'postseason', -1, -2)
+""", None, "games_postseason_week_offset")
 
 rejects(G, "projections rejects as_of_week < 1", """
     insert into projections

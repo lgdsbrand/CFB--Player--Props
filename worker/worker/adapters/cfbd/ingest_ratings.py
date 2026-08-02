@@ -48,7 +48,11 @@ import cfbd
 from psycopg.types.json import Json
 
 from worker.adapters.cfbd.client import CfbdClient
-from worker.adapters.cfbd.mapping import bigint_or_none, smallint_or_none
+from worker.adapters.cfbd.mapping import (
+    bigint_or_none,
+    smallint_or_none,
+    week_for_api,
+)
 from worker.db import fetch_all, upsert
 from worker.logging_setup import get_logger
 
@@ -264,9 +268,13 @@ def ingest_weather(
 
     payload: dict[int, dict[str, Any]] = {}
     for s in slices:
+        # `games.week` carries postseason weeks offset onto a monotone season
+        # axis; CFBD's endpoint wants its own numbering back.
         rows = client.fetch(
             "/games/weather", cfbd.GamesApi, "get_weather",
-            year=season, week=s["week"], season_type=s["season_type"],
+            year=season,
+            week=week_for_api(s["week"], s["season_type"]),
+            season_type=s["season_type"],
             classification="fbs", max_age=IMMUTABLE,
         )
 

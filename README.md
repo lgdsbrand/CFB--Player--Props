@@ -184,6 +184,21 @@ cd worker && pytest tests/test_probability.py
 
 Pure unit tests, no database needed.
 
+### 4. Does the web read layer still match the database?
+
+```bash
+cd web
+npm run check:schema     # selects every column the app reads, against the live DB
+npm run typecheck
+npm run test             # hit-rate maths, via node --test (no test framework)
+```
+
+`lib/core/types.ts` is hand-written — the Supabase CLI is not installed and the
+project is not linked, so there are no generated types. Hand-written types keep
+compiling perfectly after the view beneath them changes, which TypeScript cannot
+detect. `check:schema` closes that gap by asking the database directly, and it
+also proves the anon role can still read what the app needs.
+
 ## Rules that are not negotiable
 
 These are enforced in the schema or the tests, not left to memory. Full

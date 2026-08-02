@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"lib/**/*.test.ts\"",
+    "check:schema": "node scripts/check-schema.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.111.0",

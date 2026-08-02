@@ -1216,6 +1216,106 @@ check(G, "app_config is readable but not writable from the app role", """
 """, lambda r: r["write_policies"] == 0)
 
 # =============================================================================
+# PHASE 4 — what the application reads
+# =============================================================================
+# The app only ever reads Supabase (CLAUDE.md §2), so every one of its failure
+# modes is a property of the data or the views, and every one of them renders as
+# something plausible rather than as an error: a missing rank shows no pill, a
+# missing team shows an em-dash chip, a rank read from the wrong cutoff shows a
+# number that is simply wrong. None of that throws. These state the properties
+# the pages depend on so the pipeline fails before a reader sees the page.
+G = "P4 app"
+
+# THE LOOKAHEAD CHECK FOR THE APPLICATION LAYER. `v_board_rows` joins the
+# opponent rating on as_of_week = the projection's week, so a historical board
+# shows the rank as it stood entering that week. Rewriting that join to "the
+# latest rating" would silently make every past board better-informed than it
+# was, which is the same class of bug as the bowl-week collision. Recomputed
+# here from the base tables rather than trusted from the view.
+check(G, "the board's opponent rank is pinned to its own week (LOOKAHEAD)", """
+    select count(*) as compared,
+           count(*) filter (where b.opponent_rank_vs_position
+                                  is distinct from d.rank_vs_position) as wrong
+      from v_board_rows b
+      join players pl on pl.id = b.player_id
+      left join defense_position_ratings d
+             on d.defense_team_id = b.opponent_team_id
+            and d.season          = b.season
+            and d.as_of_week      = b.week
+            and d.position_group  = pl.position_group
+""", lambda r: r["compared"] > 0 and r["wrong"] == 0)
+
+# A team with no team_seasons row still plays games, still appears in the
+# weekly-targets panel, and renders as an em-dash chip with no conference — so
+# it also silently escapes the conference filter.
+check(G, "every team on a slate has a season row to be named and filtered by", """
+    select count(*) as orphans from (
+      select home_team_id as team_id, season from games
+      union
+      select away_team_id, season from games
+    ) t
+    where not exists (
+      select 1 from team_seasons ts
+       where ts.team_id = t.team_id and ts.season = t.season
+    )
+""", lambda r: r["orphans"] == 0)
+
+# The headline claim of the product (CLAUDE.md §1): the call is the side holding
+# most of the distribution, and the confidence is that side's mass. `picks` has
+# CHECK constraints for this; the board reads through a view, and this asserts
+# the view surfaces the same thing rather than a column that drifted.
+check(G, "every board call agrees with the confidence shown beside it", """
+    select count(*) as calls,
+           count(*) filter (
+             where (side = 'over'  and confidence <> model_prob_over)
+                or (side = 'under' and confidence <> 1 - model_prob_over)
+                or confidence < 0.5
+           ) as inconsistent
+      from v_board_rows where has_call
+""", lambda r: r["calls"] > 0 and r["inconsistent"] == 0)
+
+# The week strip and the board header read their counts straight from this view.
+# If it drifts from the tables it summarises, the page states a game and
+# projection count that no query behind it agrees with.
+check(G, "v_slate_weeks counts agree with the tables they summarise", """
+    select count(*) as weeks, count(*) filter (
+             where v.projections <> (select count(*) from projections p
+                                      where p.season = v.season and p.week = v.week)
+                or v.players <> (select count(distinct p.player_id) from projections p
+                                  where p.season = v.season and p.week = v.week)
+           ) as wrong
+      from v_slate_weeks v
+""", lambda r: r["weeks"] > 0 and r["wrong"] == 0)
+
+# The board's position tabs are fixed; the data behind them is not. A position
+# with no projections renders an empty tab that looks like a filter bug.
+check(G, "every position tab has rows in the latest slate week", """
+    select count(distinct pl.position_group) as positions
+      from projections pr join players pl on pl.id = pr.player_id
+     where (pr.season, pr.week) = (
+       select season, week from v_slate_weeks order by season desc, week desc limit 1
+     )
+""", lambda r: r["positions"] == 4)
+
+# Every source the read layer names must be readable by the anon role. `unwrap`
+# turns a denied read into a thrown error rather than an empty board, so this is
+# loud when it happens — but it happens on a page view, in front of whoever is
+# looking, which is later than here.
+check(G, "every table the app reads is readable by the anon role", """
+    select count(*) as missing from unnest(array[
+      'conferences','teams','team_seasons','games','players',
+      'player_game_stats','defense_position_game_splits',
+      'defense_position_ratings','markets','market_positions','sportsbooks',
+      'player_prop_lines','projections','picks','ai_reads','app_config'
+    ]) as t(name)
+    where not exists (
+      select 1 from pg_policies p
+       where p.schemaname = 'public' and p.tablename = t.name
+         and p.cmd in ('SELECT','ALL') and 'anon' = any(p.roles)
+    )
+""", lambda r: r["missing"] == 0)
+
+# =============================================================================
 # Report
 # =============================================================================
 groups: dict[str, list] = {}

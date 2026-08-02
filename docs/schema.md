@@ -169,8 +169,8 @@ everything, so anything not explicitly granted is closed.
 
 | `app_config` key | Default | Status |
 |---|---|---|
-| `hit_rate_basis` | `"threshold"` | §9.2 — open. `player_prop_lines` already keeps full history, so switching to `closing_line` needs no re-ingest of anything but odds |
-| `odds_adapter` | `"none"` | §9.1 — source confirmed as The Odds API; coverage and quota pending the `probe_odds` job |
+| `hit_rate_basis` | `"threshold"` | **Settled 2026-08-01** (migration 0017), on merit. Closing-line grading would leave the L10 chart mostly gaps, because college books post props late and selectively — and a gap reads as "did not play" rather than "no line existed". `player_prop_lines` still keeps full history, so the switch needs no re-ingest of anything but odds |
+| `odds_adapter` | `"none"` | §9.1 — source confirmed as The Odds API; NCAAF prop coverage cannot be established until books post, around late August |
 | `devig_method` | `"shin"` | **Settled 2026-07-31.** Chosen on merit — the requirement to match the client's MLB model was withdrawn |
 | `edge_threshold` | `0.05` | Starting value, to be tuned from the backtest |
 

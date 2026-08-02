@@ -58,11 +58,16 @@ from worker.core.features import AsOf, build_feature_frame
 from worker.core.models import (
     Projection,
     position_baselines,
-    project,
     rescale,
     shift_mean,
 )
 from worker.core.probability import distribution_sd
+from worker.core.projections import (
+    MIN_GAMES_TO_PROJECT,
+    MIN_USAGE_FRACTION_OF_BASELINE,
+    market_catalogue,
+    project_row,
+)
 from worker.db import fetch_all
 from worker.logging_setup import get_logger
 
@@ -93,23 +98,17 @@ MIN_BACKTEST_WEEK = 3
 
 CALIBRATION_BINS = 10
 
-# A projection must reach this fraction of its position's typical output to be
-# graded. Books post props for contributors, not for the fourth-string receiver
-# averaging a target every other game, and CLAUDE.md §7 scopes the board to
-# projected starters and high-usage skill players.
+# THE GRADED POPULATION IS THE PUBLISHED POPULATION, and deliberately so: both
+# rules are defined once, in `core.projections`, and imported here.
 #
-# Expressed against the position baseline rather than as per-market constants so
-# it scales with whatever the data says a typical player at that position does,
-# instead of encoding a dozen magic numbers that quietly rot.
+# Padding the sample with players nobody could bet would improve every aggregate
+# number while telling us nothing about the picks the product actually shows. The
+# converse is worse — if the board published a population the report never
+# scored, every number would still look reasonable while describing a different
+# set of players from the one +0.186 skill was measured on.
 #
-# It is also what keeps the report honest: padding the sample with players nobody
-# could bet would improve every aggregate number while telling us nothing about
-# the picks the product will actually show.
-MIN_USAGE_FRACTION_OF_BASELINE = 0.5
-
-# Below this many games a player has essentially no within-season record and the
-# projection is almost entirely prior and baseline.
-MIN_GAMES_TO_GRADE = 2
+# `MIN_GAMES_TO_GRADE` is kept as the name this module and its tests already use.
+MIN_GAMES_TO_GRADE = MIN_GAMES_TO_PROJECT
 
 
 @dataclass
@@ -216,24 +215,6 @@ def load_actuals(season: int, week: int) -> dict[tuple[int, int], dict[str, Any]
     return {(int(r["player_id"]), int(r["game_id"])): r for r in rows}
 
 
-def market_catalogue() -> list[dict[str, Any]]:
-    """Markets with their position applicability and resolved family."""
-    return fetch_all(
-        """
-        select mp.market_key,
-               mp.position_group::text as position_group,
-               m.stat_column,
-               m.is_binary,
-               m.default_line,
-               resolve_distribution_family(mp.market_key, mp.position_group)::text
-                 as distribution_family
-          from market_positions mp
-          join markets m on m.key = mp.market_key
-         where m.is_active
-        """
-    )
-
-
 # -----------------------------------------------------------------------------
 # The walk
 # -----------------------------------------------------------------------------
@@ -287,7 +268,7 @@ def backtest_week(
             if actual is None:
                 continue
 
-            projection = _project_safely(row, market, baselines)
+            projection = project_row(row, market, baselines)
             if projection is None:
                 continue
 
@@ -370,25 +351,6 @@ def backtest_week(
                     )
                 )
     return predictions, observations
-
-
-def _project_safely(
-    row: dict[str, Any], market: dict[str, Any], baselines: dict[str, dict[str, float]]
-) -> Projection | None:
-    position = str(row.get("position_group") or "")
-    try:
-        return project(
-            row,
-            market["market_key"],
-            market["distribution_family"],
-            baselines.get(position, {}),
-            baselines,
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.debug(
-            "projection failed for %s/%s: %s", market["market_key"], position, exc
-        )
-        return None
 
 
 def _trailing_centre(row: dict[str, Any], stat_column: str) -> float | None:

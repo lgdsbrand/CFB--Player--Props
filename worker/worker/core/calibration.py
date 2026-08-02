@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
+from typing import Any, Protocol, runtime_checkable
 
 # Residuals needed before a market's own measurement is trusted at all. Below
 # this the estimate is noisier than the error it corrects, so the projection is
@@ -389,6 +390,40 @@ def _clamp_mean(multiplier: float) -> float:
     return min(max(multiplier, MIN_MEAN_MULTIPLIER), MAX_MEAN_MULTIPLIER)
 
 
+@runtime_checkable
+class MeanCorrection(Protocol):
+    """Anything that can report a bias multiplier."""
+
+    def multiplier(self, market_key: str, games_played: float = 0.0) -> float: ...
+
+
+@runtime_checkable
+class WidthCorrection(Protocol):
+    """Anything that can report a width scale."""
+
+    def scale(
+        self, market_key: str, position_group: str, games_played: float = 0.0
+    ) -> float: ...
+
+
+@runtime_checkable
+class Corrections(Protocol):
+    """What a projection run needs in order to correct a distribution.
+
+    Two things satisfy this and they are used in different places. `Calibration`
+    LEARNS as it walks and is what the backtest passes, so week N is graded
+    against weeks before it. `StoredCalibration` REPLAYS what a finished walk
+    learned and is what the live weekly run passes, because a season that has
+    not started yet has no residuals to learn from.
+
+    Stating the shared shape as a protocol rather than a base class keeps both
+    honest: they have nothing in common except the two questions asked of them.
+    """
+
+    mean: MeanCorrection
+    variance: WidthCorrection
+
+
 class Calibration:
     """Both corrections, learned together and applied in the right order.
 
@@ -423,3 +458,104 @@ class Calibration:
 
     def snapshot(self) -> dict[str, dict[str, dict[str, float]]]:
         return {"mean": self.mean.snapshot(), "width": self.variance.snapshot()}
+
+
+# -----------------------------------------------------------------------------
+# Replaying a finished measurement
+# -----------------------------------------------------------------------------
+class _StoredMean:
+    """Bias multipliers read back from a snapshot."""
+
+    def __init__(self, entries: dict[str, Any]) -> None:
+        self._entries = entries
+
+    def multiplier(self, market_key: str, games_played: float = 0.0) -> float:
+        bucket = history_bucket(games_played)
+        for key in (f"{market_key}@{bucket}", market_key):
+            value = _applied(self._entries.get(key), "multiplier")
+            if value is not None:
+                return _clamp_mean(value)
+        return 1.0
+
+
+class _StoredWidth:
+    """Width scales read back from a snapshot."""
+
+    def __init__(self, entries: dict[str, Any]) -> None:
+        self._entries = entries
+
+    def scale(
+        self, market_key: str, position_group: str, games_played: float = 0.0
+    ) -> float:
+        bucket = history_bucket(games_played)
+        for key in (
+            f"{market_key}@{bucket}:{position_group}",
+            f"{market_key}@{bucket}",
+            market_key,
+        ):
+            value = _applied(self._entries.get(key), "scale")
+            if value is not None:
+                return _clamp(value)
+        return 1.0
+
+
+def _applied(entry: Any, field: str) -> float | None:
+    """The correction in `entry`, or None if it was never fit to be applied.
+
+    `applied` is not decoration. The snapshot records every cell it measured,
+    including ones held back — a market under `MIN_RESIDUALS`, or a Poisson or
+    Bernoulli whose width is pinned to its mean and cannot be turned. Reading
+    the number while ignoring the flag would apply corrections the backtest
+    itself declined to apply, so the live board would not be showing the
+    distributions the calibration report scored.
+    """
+    if not isinstance(entry, dict) or not entry.get("applied"):
+        return None
+    value = entry.get(field)
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+class StoredCalibration:
+    """Corrections a completed backtest measured, applied to a live week.
+
+    WHY A LIVE RUN CANNOT LEARN ITS OWN. `Calibration` estimates from graded
+    outcomes, and grading needs results. Entering week 1 of a new season there
+    are none, and the corrections are largest exactly there — the `thin` bucket
+    measured x2.10 for rec_yards against x1.33 once a player is established.
+    Starting from 1.0 would put the board's most uncertain projections on screen
+    with the overconfidence Phase 3 exists to have removed.
+
+    So the weekly run replays the snapshot the last walk wrote into
+    `backtests.config`. That is not lookahead: every scale in it was estimated
+    from weeks strictly before the one it was applied to, and a 2025 season is
+    wholly in the past relative to a 2026 game.
+
+    LOOKUP ORDER MIRRORS THE LEARNED ONE — narrowest cell that was actually
+    applied, widening outwards. If the two disagreed, a live projection would be
+    corrected differently from the identical backtest projection, and the
+    calibration report would no longer describe the board.
+    """
+
+    def __init__(self, snapshot: dict[str, Any] | None) -> None:
+        snapshot = snapshot or {}
+        mean_entries = dict(snapshot.get("mean") or {})
+        width_entries = dict(snapshot.get("width") or {})
+        self.mean = _StoredMean(mean_entries)
+        self.variance = _StoredWidth(width_entries)
+        self.entry_count = len(mean_entries) + len(width_entries)
+
+    @property
+    def is_empty(self) -> bool:
+        """True when nothing would be corrected.
+
+        The caller is expected to treat this as a failure rather than a default:
+        silently projecting uncorrected is the one outcome that looks like
+        success and is not.
+        """
+        return self.entry_count == 0

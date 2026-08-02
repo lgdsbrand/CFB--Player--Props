@@ -15,19 +15,39 @@ before contributing. The schema design notes are in [docs/schema.md](docs/schema
 
 ## Status
 
-**Phase 1 (Foundations) — complete.** Scaffolding, schema, migrations, worker
-skeleton, env wiring.
+**Phase 3 (Model + backtest) — complete.** The deliverable is
+[docs/calibration-report.html](docs/calibration-report.html): Brier skill
+**+0.186**, ECE **0.019** over 328,005 graded predictions across 2024–25.
 
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Foundations: schema, migrations, scaffolding, env | done |
-| 2 | CFBD ingest, position-split engine, opponent adjustment | not started |
-| 3 | Per-market distribution models, anytime-TD model, **calibration report** | not started |
-| 4 | Board, filters, player detail, defense detail, weekly targets | not started |
+| 2 | CFBD ingest, position-split engine, opponent adjustment | done |
+| 3 | Per-market distribution models, anytime-TD model, **calibration report** | done |
+| 4 | Board, filters, player detail, defense detail, weekly targets | in progress |
 | 5 | Odds ingestion, weekly AI reads, reskin, monitoring | not started |
 
-No UI work begins until the schema and the Phase 3 calibration report have been
-reviewed.
+Phase 4 begins with the worker, not the UI. Phase 3 validated a model and
+persisted no projections — `backtest_predictions` holds graded probabilities,
+which is not a board row — so `projections` was empty and `v_board_rows`
+returned nothing. `run_projections` is what fills it:
+
+```bash
+python -m worker.jobs.run_projections --season 2025 --weeks 10
+```
+
+It writes one distribution per player-market, and a pick wherever there is a
+line to call against. Yardage markets show the model's lean until a book posts;
+anytime TD is callable immediately because its line is structural (over 0.5).
+That split is the late-line behaviour CLAUDE.md §7 requires.
+
+**`--synthetic-lines` is a development aid and its edges are meaningless.** No
+real prop line exists yet, so the flag posts −110/−110 quotes at each player's
+trailing average under a book named `DEV (synthetic)`. Those de-vig to exactly
+0.500, which makes `edge` a restatement of the model's own confidence rather
+than a disagreement with a market. It exists so the OVER/UNDER card can be
+built and reviewed before books post in late August; it refuses to run outside
+`ENVIRONMENT=development`.
 
 ## Layout
 

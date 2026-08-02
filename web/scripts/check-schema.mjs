@@ -105,6 +105,11 @@ const EXPECTED = {
     "id", "season", "week", "start_date", "neutral_site", "home_team_id",
     "away_team_id",
   ],
+  // Conference membership is season-scoped because realignment moves teams
+  // between the seasons this project covers, so the weekly-targets directory
+  // reads it here and never from `teams`.
+  team_seasons: ["team_id", "season", "conference_id"],
+  teams: ["id", "school", "abbreviation", "color", "alt_color"],
 };
 
 /** RPCs, which need their argument names checked as well as their columns. */

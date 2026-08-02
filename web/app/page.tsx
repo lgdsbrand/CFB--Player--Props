@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { BoardControls } from "@/components/board/board-controls";
 import { PlayerCard } from "@/components/board/player-card";
+import { WeeklyTargets } from "@/components/board/weekly-targets";
 import { SiteHeader } from "@/components/site-header";
 import { WeekStrip } from "@/components/week-strip";
 import {
@@ -13,6 +14,7 @@ import {
 import { groupIntoCards } from "@/lib/core/board-view";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount, formatDateRange } from "@/lib/core/format";
+import { buildWeeklyTargets } from "@/lib/core/targets";
 import {
   getBoardCardKeys,
   getBoardCounts,
@@ -21,8 +23,10 @@ import {
 } from "@/lib/data/board";
 import { getConferences, getMarkets } from "@/lib/data/catalogue";
 import { getAppConfig } from "@/lib/data/config";
+import { getDefenseRatings } from "@/lib/data/defense";
 import { getGameLogsByPlayer } from "@/lib/data/players";
 import { findWeek, getSlateGames, getSlateWeeks } from "@/lib/data/slate";
+import { getTeamDirectory } from "@/lib/data/teams";
 
 /**
  * The main board (CLAUDE.md §7).
@@ -103,10 +107,13 @@ export default async function Home({
     sort: resolved.sort,
   };
 
-  const [counts, games, cardKeys] = await Promise.all([
+  const [counts, games, cardKeys, ratings] = await Promise.all([
     getBoardCounts(active.season, active.week, config.edgeThreshold),
     getSlateGames(active.season, active.week),
     getBoardCardKeys(filters),
+    // Pinned to as_of_week = the week on screen, never "the latest": a rating
+    // from a later cutoff knows results the reader is being asked to predict.
+    getDefenseRatings(active.season, active.week),
   ]);
 
   const totalPages = Math.max(
@@ -130,10 +137,26 @@ export default async function Home({
     (a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0),
   );
 
-  const gameLogs = await getGameLogsByPlayer(
-    cards.map((card) => card.playerId),
-    { season: active.season, before: active.week },
-  );
+  const [gameLogs, teamDirectory] = await Promise.all([
+    getGameLogsByPlayer(
+      cards.map((card) => card.playerId),
+      { season: active.season, before: active.week },
+    ),
+    getTeamDirectory(
+      active.season,
+      games.flatMap((game) => [game.homeTeamId, game.awayTeamId]),
+    ),
+  ]);
+
+  // The conference filter applies to the OFFENSE, matching the board: someone
+  // narrowed to the SEC wants SEC players to look at, and the soft defense is a
+  // fact about whoever they are playing.
+  const targets = buildWeeklyTargets(games, ratings, {
+    includeOffense: resolved.conference
+      ? (teamId) =>
+          teamDirectory.get(teamId)?.conferenceName === resolved.conference
+      : undefined,
+  });
 
   const marketsByKey = new Map(markets.map((market) => [market.key, market]));
   const leansOnly = counts.withCall - counts.withBookLine;
@@ -250,6 +273,14 @@ export default async function Home({
           </PageLink>
         </nav>
       ) : null}
+
+      <WeeklyTargets
+        targets={targets}
+        teams={teamDirectory}
+        params={resolved}
+        conferenceLabel={resolved.conference ?? null}
+        asOfWeek={active.week}
+      />
 
       <p className="text-dim text-xs">
         Opponent rank 1 allows the most to the position — a low number is the

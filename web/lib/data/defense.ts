@@ -23,7 +23,7 @@ import type {
   DefenseSplitRow,
   PositionGroup,
 } from "@/lib/core/types";
-import { type DbRow, unwrap } from "@/lib/data/query";
+import { type DbRow, MAX_ROWS_PER_REQUEST, unwrap } from "@/lib/data/query";
 
 /**
  * Cumulative raw allowances to each position, through weeks BEFORE `week`.
@@ -169,7 +169,21 @@ export async function getDefenseRatings(
 
   if (positionGroup) query = query.eq("position_group", positionGroup);
 
-  return unwrap<DbRow[]>(await query, "defense_position_ratings").map(toRating);
+  const rows = unwrap<DbRow[]>(await query, "defense_position_ratings");
+
+  // All four positions at one cutoff is ~544 rows today (136 FBS × 4), well
+  // under the cap — but a truncated read is indistinguishable from a short one,
+  // and the failure would be a targets list quietly missing a position. Cheaper
+  // to fail loudly than to page a query that should never need it.
+  if (rows.length >= MAX_ROWS_PER_REQUEST) {
+    throw new Error(
+      `defense_position_ratings returned ${rows.length} rows, at or past ` +
+        `PostgREST's ${MAX_ROWS_PER_REQUEST}-row cap — the result is probably ` +
+        `truncated. Filter by position or page the read.`,
+    );
+  }
+
+  return rows.map(toRating);
 }
 
 /** Key for a (defense, cutoff week) pair. */

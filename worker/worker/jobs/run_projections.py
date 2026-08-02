@@ -575,9 +575,19 @@ def _insert_picks(
         # book_prob_over is de-vigged IN SQL so app_config.devig_method governs
         # it. Recomputing the de-vig in Python would be a second definition of
         # the number `picks.edge` is generated from, and the two would drift.
+        #
+        # The METHOD is stamped alongside the number for the same reason the
+        # schema gives it a column: a de-vigged probability is not self-
+        # describing. `app_config.devig_method` is meant to be changed, and a
+        # pick that records 0.54 without saying it came from Shin would be
+        # silently reinterpreted as multiplicative the next time someone
+        # compared old edges to new ones. Read once per week, not per row, so
+        # every pick in a run agrees.
+        devig_method = str(get_config_value("devig_method") or "shin")
+
         placeholder = (
             "(" + ",".join(["%s"] * 11) + ",%s::bet_side,%s,"
-            "devig_two_way(%s::integer, %s::integer),%s,%s)"
+            "devig_two_way(%s::integer, %s::integer),%s,%s,%s)"
         )
         with conn.cursor() as cur:
             for start in range(0, len(rows), BATCH):
@@ -585,12 +595,20 @@ def _insert_picks(
                 params: list[Any] = []
                 for row_values in chunk:
                     params.extend(row_values)
+                    # NULL where there is no two-sided price, matching the
+                    # column's contract: a method name beside a NULL
+                    # probability would describe a de-vig that never happened.
+                    # Indices 13/14 are over_price / under_price.
+                    two_sided = (
+                        row_values[13] is not None and row_values[14] is not None
+                    )
+                    params.append(devig_method if two_sided else None)
                 cur.execute(
                     "insert into picks "
                     "(projection_id, line_id, sportsbook_id, player_id, game_id, "
                     " team_id, opponent_team_id, market_key, season, week, line, "
                     " side, model_prob_over, book_prob_over, over_price, "
-                    " under_price) values "
+                    " under_price, devig_method) values "
                     + ",".join([placeholder] * len(chunk)),
                     tuple(params),
                 )

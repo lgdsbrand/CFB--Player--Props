@@ -17,7 +17,15 @@ before contributing. The schema design notes are in [docs/schema.md](docs/schema
 
 **Phase 3 (Model + backtest) — complete.** The deliverable is
 [docs/calibration-report.html](docs/calibration-report.html): Brier skill
-**+0.186**, ECE **0.019** over 328,005 graded predictions across 2024–25.
+**+0.180**, ECE **0.019** over 320,125 graded predictions across 2024–25.
+
+> Those numbers were **+0.186 over 328,005** until 2026-08-02, when a lookahead
+> bug was found and fixed: CFBD numbers postseason games from 1, so bowl games
+> were stored as week 1 and leaked into every earlier week's features. The
+> corrected model scores slightly *worse*, which is the point — the old figure
+> was flattered by knowing what happened in December. **ECE is unchanged**, so
+> calibration never depended on the leak. See the commit message on
+> `1f4c781` for the full account.
 
 | Phase | Scope | State |
 |---|---|---|

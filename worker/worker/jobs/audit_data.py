@@ -551,9 +551,18 @@ check(G, "offensive_tds excludes passing TDs", """
        and offensive_tds <> 0
 """, lambda r: r["bad"] == 0)
 
-check(G, "weeks are within a plausible range", """
+# Split by season_type since migration 0020. A single range over both would
+# have to be wide enough to admit a postseason week, which would stop it
+# catching the very thing it exists for — a regular-season week landing at 21.
+check(G, "regular-season weeks are within a plausible range", """
     select min(week) as min_wk, max(week) as max_wk from games
+     where season_type = 'regular'
 """, lambda r: r["min_wk"] >= 1 and r["max_wk"] <= 20)
+
+check(G, "postseason weeks are offset but not absurd", """
+    select coalesce(min(week), 21) as min_wk, coalesce(max(week), 21) as max_wk
+      from games where season_type = 'postseason'
+""", lambda r: r["min_wk"] >= 21 and r["max_wk"] <= 25)
 
 check(G, "Elo ratings are in a plausible band", """
     select min(rating) as lo, max(rating) as hi from team_rating_snapshots

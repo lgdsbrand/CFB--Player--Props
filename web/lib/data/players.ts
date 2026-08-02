@@ -14,7 +14,8 @@ import { type DbRow, unwrap } from "@/lib/data/query";
 
 const COLUMNS =
   "player_id, game_id, season, week, position_group, is_home, " +
-  "opponent_abbreviation, opponent_school, start_date, neutral_site, " +
+  "opponent_team_id, opponent_abbreviation, opponent_school, start_date, " +
+  "neutral_site, " +
   "pass_attempts, pass_completions, pass_yards, pass_tds, interceptions, " +
   "rush_attempts, rush_yards, rush_tds, targets, receptions, rec_yards, " +
   "rec_tds, offensive_tds";
@@ -49,6 +50,43 @@ export async function getPlayerGameLog(
   if (before !== undefined) query = query.lt("week", before);
 
   return unwrap<DbRow[]>(await query, "v_player_game_log").map(toGameLogRow);
+}
+
+export type PlayerIdentity = {
+  id: number;
+  name: string;
+  positionGroup: PositionGroup;
+};
+
+/**
+ * A player's name and position, independent of any slate.
+ *
+ * The detail page gets everything else from the board rows, which is the right
+ * source — team, opponent and position are all season- or game-scoped. This
+ * exists for the one case those cannot cover: an id with no rows in the
+ * requested week. That has to render "not on this slate" under the player's
+ * actual name, and it has to be distinguishable from an id that does not exist,
+ * which is a 404.
+ */
+export async function getPlayerIdentity(
+  playerId: number,
+): Promise<PlayerIdentity | null> {
+  const supabase = createServerSupabaseClient();
+  const rows = unwrap<DbRow[]>(
+    await supabase
+      .from("players")
+      .select("id, name, position_group")
+      .eq("id", playerId)
+      .limit(1),
+    "players (identity)",
+  );
+  if (rows.length === 0) return null;
+
+  return {
+    id: rows[0].id as number,
+    name: rows[0].name as string,
+    positionGroup: rows[0].position_group as PositionGroup,
+  };
 }
 
 /**
@@ -113,6 +151,7 @@ function toGameLogRow(row: Record<string, unknown>): PlayerGameLogRow {
     week: row.week as number,
     positionGroup: (row.position_group as PositionGroup | null) ?? null,
     isHome: row.is_home as boolean,
+    opponentTeamId: row.opponent_team_id as number,
     opponentAbbreviation: (row.opponent_abbreviation as string | null) ?? null,
     opponentSchool: row.opponent_school as string,
     startDate: (row.start_date as string | null) ?? null,

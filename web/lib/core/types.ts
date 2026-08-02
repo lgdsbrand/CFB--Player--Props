@@ -114,6 +114,8 @@ export type PlayerGameLogRow = {
   week: number;
   positionGroup: PositionGroup | null;
   isHome: boolean;
+  /** The defense faced. Needed to look up its rank as it stood THAT week. */
+  opponentTeamId: number;
   opponentAbbreviation: string | null;
   opponentSchool: string;
   startDate: string | null;
@@ -171,6 +173,38 @@ export type BookQuote = {
   underPrice: number | null;
   bookProbOver: number | null;
   capturedAt: string;
+};
+
+/**
+ * What one defense conceded to one position in ONE game.
+ *
+ * RAW AND OPPONENT-UNADJUSTED. This is the observation; `DefenseRating` is the
+ * inference drawn from a set of them. Anywhere the two appear together, each
+ * has to say which it is — the adjusted figure is the one the model uses and
+ * the one nobody can look up (CLAUDE.md §5).
+ */
+export type DefenseGameRow = {
+  splitId: number;
+  gameId: number;
+  defenseTeamId: number;
+  offenseTeamId: number;
+  offenseSchool: string;
+  offenseAbbreviation: string | null;
+  season: number;
+  week: number;
+  positionGroup: PositionGroup;
+  startDate: string | null;
+  neutralSite: boolean;
+  defenseIsHome: boolean;
+
+  plays: number | null;
+  rushAttempts: number | null;
+  rushYardsAllowed: number | null;
+  rushTdsAllowed: number | null;
+  targets: number | null;
+  receptionsAllowed: number | null;
+  recYardsAllowed: number | null;
+  recTdsAllowed: number | null;
 };
 
 /** What one defense has conceded to one position, cumulative to a cutoff. */

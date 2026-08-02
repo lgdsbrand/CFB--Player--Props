@@ -42,6 +42,7 @@ function game(
     week,
     positionGroup: "WR",
     isHome: true,
+    opponentTeamId: 500 + week,
     opponentAbbreviation: "OPP",
     opponentSchool: "Opponent",
     startDate: null,

@@ -1,6 +1,9 @@
+import Link from "next/link";
+
 import { MarketRow } from "@/components/board/market-row";
 import { TeamChip } from "@/components/board/team-chip";
 import { formatKickoff } from "@/lib/core/format";
+import { playerHref } from "@/lib/core/player-params";
 import { gradeFor, gradeToneToken } from "@/lib/core/grade";
 import { gradeGames, hitRate, type HitRateSummary } from "@/lib/core/hit-rate";
 import type { PlayerCard as PlayerCardData } from "@/lib/core/board-view";
@@ -34,12 +37,28 @@ export function PlayerCard({
   const grade = gradeFor(card.topConfidence);
   const tone = gradeToneToken(grade);
 
+  // CLAUDE.md §7 says the detail view opens "on row click". A stretched link
+  // gives the whole card that behaviour while keeping exactly one anchor, so
+  // the card is not a nest of links and the accessible name is the player's.
+  const href = playerHref({
+    playerId: card.playerId,
+    season: card.markets[0].season,
+    week: card.markets[0].week,
+  });
+
   return (
-    <article className="panel flex flex-col gap-3 p-4">
+    <article className="panel relative flex flex-col gap-3 p-4">
       <header className="flex flex-wrap items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-sm font-bold">{card.playerName}</h3>
+            <h3 className="truncate text-sm font-bold">
+              <Link
+                href={href}
+                className="hover:text-accent-cyan transition-colors after:absolute after:inset-0 after:content-['']"
+              >
+                {card.playerName}
+              </Link>
+            </h3>
             {card.positionGroup ? (
               <span className="pill bg-accent-indigo/15 text-accent-cyan">
                 {card.positionGroup}

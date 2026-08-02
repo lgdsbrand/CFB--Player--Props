@@ -72,6 +72,7 @@ export type GradedGame = {
   outcome: GameOutcome;
   /** Did the CALLED side win this game? Null on a push. */
   hit: boolean | null;
+  opponentTeamId: number;
   opponentAbbreviation: string | null;
   isHome: boolean;
   neutralSite: boolean;
@@ -120,6 +121,7 @@ export function gradeGames(
         line,
         outcome,
         hit: outcome === "push" ? null : outcome === side,
+        opponentTeamId: game.opponentTeamId,
         opponentAbbreviation: game.opponentAbbreviation,
         isHome: game.isHome,
         neutralSite: game.neutralSite,

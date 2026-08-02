@@ -24,6 +24,16 @@ const COLUMNS =
   "line_id, game_id, player_id, market_key, sportsbook_key, sportsbook_name, " +
   "line, over_price, under_price, book_prob_over, captured_at";
 
+/**
+ * The development book the projection job writes under `--synthetic-lines`.
+ *
+ * Must match `SYNTHETIC_BOOK_KEY` in `worker/jobs/run_projections.py`. It is a
+ * display concern here and nothing more: any surface showing an EDGE against
+ * this book has to say the edge is an artifact, because a −110/−110 quote
+ * de-vigs to exactly 0.500 and turns edge into confidence minus 50%.
+ */
+export const SYNTHETIC_BOOK_KEY = "dev";
+
 /** Every book's current quote for one player in one week. */
 export async function getPlayerQuotes(
   playerId: number,

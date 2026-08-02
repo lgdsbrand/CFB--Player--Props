@@ -64,11 +64,21 @@ const EXPECTED = {
   ],
   v_player_game_log: [
     "player_id", "game_id", "season", "week", "position_group", "is_home",
-    "opponent_abbreviation", "opponent_school", "start_date", "neutral_site",
+    "opponent_team_id", "opponent_abbreviation", "opponent_school",
+    "start_date", "neutral_site",
     "pass_attempts", "pass_completions", "pass_yards", "pass_tds",
     "interceptions", "rush_attempts", "rush_yards", "rush_tds", "targets",
     "receptions", "rec_yards", "rec_tds", "offensive_tds",
   ],
+  v_defense_position_game_log: [
+    "split_id", "game_id", "defense_team_id", "offense_team_id",
+    "offense_school", "offense_abbreviation", "season", "week",
+    "position_group", "start_date", "neutral_site", "defense_is_home", "plays",
+    "rush_attempts", "rush_yards_allowed", "rush_tds_allowed", "targets",
+    "receptions_allowed", "rec_yards_allowed", "rec_tds_allowed",
+  ],
+  players: ["id", "name", "position_group"],
+  ai_reads: ["content", "model", "prompt_version", "generated_at"],
   v_latest_prop_lines: [
     "line_id", "game_id", "player_id", "market_key", "sportsbook_key",
     "sportsbook_name", "line", "over_price", "under_price", "book_prob_over",

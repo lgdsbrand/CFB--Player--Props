@@ -108,6 +108,73 @@ export function defenseStatForMarket(statColumn: string): DefenseStat | null {
   }
 }
 
+/**
+ * What a defense's `rank_vs_position` actually measures, per position.
+ *
+ * MIRRORS `RANK_METRICS` IN `worker/core/splits.py`, which is where the rank is
+ * computed. RB and QB rank on adjusted rushing yards allowed; WR and TE on
+ * adjusted receiving yards. Anything displaying a rank should say which, because
+ * "softest vs QB" reads as a passing claim and is not one.
+ *
+ * THE QB CAVEAT IS LOAD-BEARING, not a footnote. QB position splits are rushing
+ * only by construction (see `defenseStatsFor`), so a QB rank is a rushing rank —
+ * it says nothing about pass yards, completions or attempts, which are four of
+ * the five QB markets. Ranking QB defenses on the receiving column instead was a
+ * real bug that survived two phases precisely because nothing on screen ever
+ * stated what the number was built from.
+ */
+export type RankBasis = {
+  /** Which adjusted per-game column the rank orders on. */
+  key: "rush" | "rec";
+  /** Compact column heading. */
+  short: string;
+  /** What the rank is built from, for a caption. */
+  label: string;
+  /** Set where the rank measures less than a reader would assume. */
+  caveat: string | null;
+};
+
+export function rankBasis(position: PositionGroup): RankBasis {
+  switch (position) {
+    case "QB":
+      return {
+        key: "rush",
+        short: "Rush yds/g",
+        label: "opponent-adjusted rushing yards allowed to QBs",
+        caveat:
+          "QB ranks are rushing only — the position split cannot measure " +
+          "passing, so this says nothing about pass yards or completions.",
+      };
+    case "RB":
+      return {
+        key: "rush",
+        short: "Rush yds/g",
+        label: "opponent-adjusted rushing yards allowed to RBs",
+        caveat: null,
+      };
+    default:
+      return {
+        key: "rec",
+        short: "Rec yds/g",
+        label: `opponent-adjusted receiving yards allowed to ${position}s`,
+        caveat: null,
+      };
+  }
+}
+
+/** The adjusted figure a rank was built from, given a rating row. */
+export function rankedValue(
+  rating: {
+    adjRushYardsAllowedPg: number | null;
+    adjRecYardsAllowedPg: number | null;
+  },
+  position: PositionGroup,
+): number | null {
+  return rankBasis(position).key === "rush"
+    ? rating.adjRushYardsAllowedPg
+    : rating.adjRecYardsAllowedPg;
+}
+
 /** Per-game mean of a column across the games shown, or null if none carry it. */
 export function perGame(
   rows: DefenseGameRow[],

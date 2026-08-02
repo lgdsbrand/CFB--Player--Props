@@ -2,6 +2,7 @@ import { TeamChip } from "@/components/board/team-chip";
 import {
   defenseStatsFor,
   perGame,
+  rankBasis,
   rankFraction,
   type DefenseStat,
 } from "@/lib/core/defense-view";
@@ -46,6 +47,7 @@ export function DefenseDetail({
 }) {
   const stats = defenseStatsFor(position);
   const fraction = rank !== null ? rankFraction(rank, rankedDefenses) : null;
+  const basis = rankBasis(position);
 
   return (
     <section className="panel flex flex-col gap-3 p-4">
@@ -75,6 +77,11 @@ export function DefenseDetail({
             {gamesRated !== null ? ` · ${gamesRated} games rated` : ""}
           </span>
         </div>
+
+        {/* What the rank is built from. Without this a reader cannot tell a
+            rushing rank from a receiving one, which is how a QB rank on the
+            wrong column went unnoticed for two phases. */}
+        <p className="text-dim text-[0.625rem]">Ranked on {basis.label}.</p>
 
         {rank !== null ? (
           <>
@@ -216,11 +223,13 @@ export function DefenseDetail({
 
       {position === "QB" ? (
         <p className="text-dim max-w-prose text-[0.625rem]">
-          Quarterback splits are <strong>rushing only</strong>. The position
-          split exists to break a defense apart by who it concedes to, and since
-          the quarterback is the only passer, &ldquo;pass yards allowed to
-          QBs&rdquo; would just be team pass defense — the single number the
-          split is meant to disaggregate.
+          Quarterback splits are <strong>rushing only</strong>, and so is the
+          rank above. The position split exists to break a defense apart by who
+          it concedes to, and since the quarterback is the only passer,
+          &ldquo;pass yards allowed to QBs&rdquo; would just be team pass
+          defense — the single number the split is meant to disaggregate. A soft
+          rank here means soft against a <em>running</em> quarterback; it makes
+          no claim about pass yards, completions or attempts.
         </p>
       ) : null}
     </section>

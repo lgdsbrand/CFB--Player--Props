@@ -592,6 +592,46 @@ check(G, "ranks are dense 1..N per cutoff with no gaps or ties", """
     ) x where teams <> ranks or lo <> 1 or hi <> teams
 """, lambda r: r["bad"] == 0)
 
+# THE CHECK ABOVE IS NOT ENOUGH, AND THE WAY IT FAILED IS WORTH KEEPING.
+#
+# It asks whether rank_vs_position is a valid permutation. It always was. What
+# it never asked is whether the permutation orders on a column that MEANS
+# anything, and for two phases QB defenses were ranked by receiving yards
+# allowed to quarterbacks — a trick-play statistic averaging 0.46 yards a game,
+# non-positive in 1,110 of 5,559 rated rows, uncorrelated (r = -0.06) with the
+# rushing figure that is the only genuine QB position split. Dense, 1..N, no
+# ties, and pure noise. Same shape as the bowl-week bug: a guard consistent with
+# the defect is worse than no guard, because it reassures.
+#
+# So the property is stated twice, from both directions.
+
+check(G, "rank_vs_position orders by the metric that position is measured on", """
+    with ranked as (
+      select rank_vs_position as stored,
+             row_number() over (
+               partition by season, as_of_week, position_group
+               order by case when position_group in ('QB','RB')
+                             then adj_rush_yards_allowed_pg
+                             else adj_rec_yards_allowed_pg end desc
+             ) as expected
+        from defense_position_ratings
+    )
+    select count(*) as bad from ranked where stored <> expected
+""", lambda r: r["bad"] == 0)
+
+# The independent half: no appeal to what the code ranked on, just the fact that
+# a per-game yards-allowed figure a rank is built from cannot be zero or
+# negative across a season. The old QB metric fails this outright.
+check(G, "every ranking metric is a real quantity, not noise around zero", """
+    select count(*) as rated, count(*) filter (where m <= 5.0) as implausible,
+           round(min(m), 2) as lowest
+      from (
+        select case when position_group in ('QB','RB') then adj_rush_yards_allowed_pg
+                    else adj_rec_yards_allowed_pg end as m
+          from defense_position_ratings
+      ) x
+""", lambda r: r["rated"] > 0 and r["implausible"] == 0)
+
 # =============================================================================
 # PHASE 2 — cross-source reconciliation
 # =============================================================================

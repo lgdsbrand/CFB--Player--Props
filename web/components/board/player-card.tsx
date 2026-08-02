@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { MarketRow } from "@/components/board/market-row";
 import { TeamChip } from "@/components/board/team-chip";
+import { rankBasis } from "@/lib/core/defense-view";
 import { formatKickoff } from "@/lib/core/format";
 import { playerHref } from "@/lib/core/player-params";
 import { gradeFor, gradeToneToken } from "@/lib/core/grade";
@@ -94,7 +95,13 @@ export function PlayerCard({
           {card.opponentRankVsPosition !== null ? (
             <span
               className="pill bg-panel-inset text-muted"
-              title="Opponent rank vs this position — 1 allows the most, so a LOW number is the softer matchup"
+              title={
+                "Opponent rank vs this position — 1 allows the most, so a LOW " +
+                "number is the softer matchup." +
+                (card.positionGroup
+                  ? ` Ranked on ${rankBasis(card.positionGroup).label}.`
+                  : "")
+              }
             >
               Rk {card.opponentRankVsPosition}
             </span>

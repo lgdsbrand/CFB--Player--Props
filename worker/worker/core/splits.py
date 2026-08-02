@@ -83,6 +83,30 @@ FIT_ITERATIONS = 10
 # season, one blowout should not make a defense look historically bad.
 SHRINKAGE_GAMES = 4.0
 
+# The metric each position's rank_vs_position orders by — the stat that position
+# is actually measured on.
+#
+# STATED AS A TABLE RATHER THAN A RULE. This was previously the ternary "rushing
+# if RB, else receiving", which silently ranked QB defenses by receiving yards
+# allowed to quarterbacks: a stat averaging 0.56 yards a game, negative for 22 of
+# 136 defenses after adjustment, and uncorrelated (r = -0.06) with the rushing
+# figure that is the only real QB position split. The resulting "softest vs QB"
+# list was noise — its top team allowed BELOW-average QB rushing. A rule with one
+# exception invites a second position to inherit the wrong branch by default; a
+# table has to be answered for every position that is added.
+#
+# QB IS RUSHING BY NECESSITY, NOT PREFERENCE. The position split disaggregates a
+# defense by who it conceded to, and since the quarterback is the only passer,
+# "pass yards allowed to QBs" is just team pass defense. Rushing is the only
+# genuine QB split there is, so a QB rank means "softest vs QB RUSHING" and every
+# surface showing it must say so.
+RANK_METRICS = {
+    "QB": "adj_rush_yards_allowed_pg",
+    "RB": "adj_rush_yards_allowed_pg",
+    "WR": "adj_rec_yards_allowed_pg",
+    "TE": "adj_rec_yards_allowed_pg",
+}
+
 # Metrics that get opponent-adjusted, mapped to their split-table source column.
 ADJUSTED_METRICS = {
     "rush_yards_allowed": "rush_yards_allowed",
@@ -391,11 +415,11 @@ def compute_ratings(season: int, max_week: int | None = None) -> int:
             # "weekly targets / who to target" list and the opponent-rank sort
             # in CLAUDE.md §7 — so it is the opposite of a conventional
             # defensive ranking where 1 is best.
-            rank_metric = (
-                "adj_rush_yards_allowed_pg"
-                if position == "RB"
-                else "adj_rec_yards_allowed_pg"
-            )
+            #
+            # Indexing RANK_METRICS raises KeyError for an unmapped position,
+            # deliberately: a new position group must state what it ranks on
+            # rather than silently inherit somebody else's metric.
+            rank_metric = RANK_METRICS[position]
             rows_this_cut.sort(
                 key=lambda r, m=rank_metric: r.get(m) or 0.0, reverse=True
             )
@@ -445,6 +469,7 @@ def run_split_engine(season: int, goal_line_yards: int = 10) -> dict[str, int]:
 
 __all__ = [
     "ADJUSTMENT_VERSION",
+    "RANK_METRICS",
     "SKILL_POSITIONS",
     "compute_game_splits",
     "compute_ratings",

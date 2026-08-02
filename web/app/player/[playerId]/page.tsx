@@ -11,7 +11,7 @@ import { MarketTabs } from "@/components/player/market-tabs";
 import { SplitGrid } from "@/components/player/split-grid";
 import { SiteHeader } from "@/components/site-header";
 import type { RawParams } from "@/lib/core/board-params";
-import { defenseStatForMarket } from "@/lib/core/defense-view";
+import { defenseStatForMarket, rankBasis } from "@/lib/core/defense-view";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import {
   formatAmericanOdds,
@@ -305,7 +305,7 @@ export default async function PlayerDetail({
                     note={
                       `Bands are thirds of the ${ranked.length} defenses rated vs ${position}, ` +
                       `each opponent taken at the rank it held entering that week. ` +
-                      `Rank 1 allows the most.` +
+                      `Rank 1 allows the most, on ${rankBasis(position).label}.` +
                       (byRank.unranked > 0
                         ? ` ${byRank.unranked} game${byRank.unranked === 1 ? "" : "s"} set aside as unrated.`
                         : "")

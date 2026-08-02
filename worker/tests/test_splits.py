@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from worker.core.splits import (
     ADJUSTMENT_VERSION,
+    RANK_METRICS,
     SHRINKAGE_GAMES,
     SKILL_POSITIONS,
     Observation,
@@ -153,3 +154,26 @@ def test_configuration_constants():
     # Part of the ratings unique key, so a change must be deliberate: it lets a
     # revised method be computed alongside the old one instead of overwriting.
     assert ADJUSTMENT_VERSION == "v1_iterative_additive"
+
+
+def test_every_position_ranks_on_a_metric_it_actually_produces():
+    """The rank must order by a stat the position genuinely generates.
+
+    QB is why this test exists. Ranking a QB defense by RECEIVING yards allowed
+    to quarterbacks passes every structural check — the ranks still come out
+    dense, 1..N, no ties — while ordering on trick-play noise averaging half a
+    yard a game. The defect is invisible to any guard that only asks whether the
+    rank is a valid permutation, so the property has to be stated as "ranks on
+    the right column", not "ranks".
+    """
+    assert set(RANK_METRICS) == set(SKILL_POSITIONS)
+
+    # Quarterbacks throw; they do not catch. Rushing is the ONLY real QB split.
+    assert RANK_METRICS["QB"] == "adj_rush_yards_allowed_pg"
+    assert RANK_METRICS["RB"] == "adj_rush_yards_allowed_pg"
+    assert RANK_METRICS["WR"] == "adj_rec_yards_allowed_pg"
+    assert RANK_METRICS["TE"] == "adj_rec_yards_allowed_pg"
+
+    # Each names a real adjusted column on defense_position_ratings.
+    for metric in RANK_METRICS.values():
+        assert metric.startswith("adj_") and metric.endswith("_pg")

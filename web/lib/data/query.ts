@@ -47,11 +47,17 @@ export function unwrap<T>(
 }
 
 /**
- * PostgREST caps a response at 1,000 rows unless a range is given, and does so
- * SILENTLY — a truncated board looks exactly like a short one. Every list query
- * states its own ceiling so the cap is a decision rather than a default.
+ * Rows PostgREST will return in ONE response, no matter what range is asked
+ * for. This is Supabase's `db-max-rows` and it is a server setting, not a
+ * client default — `range(0, 11999)` returns 1,000 rows and reports a count of
+ * 3,788 without complaint.
+ *
+ * Verified against the live project rather than assumed, because getting it
+ * wrong is silent: a truncated result looks exactly like a short one. Anything
+ * that must see a whole week has to page in chunks of this size and compare
+ * what it got against the exact count.
  */
-export const MAX_ROWS = 2000;
+export const MAX_ROWS_PER_REQUEST = 1000;
 
 /** Numeric columns arrive as JSON numbers, but nullable ones arrive as null. */
 export function num(value: unknown): number | null {

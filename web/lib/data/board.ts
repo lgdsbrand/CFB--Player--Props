@@ -14,7 +14,7 @@
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import type { BetSide, BoardRow, PositionGroup } from "@/lib/core/types";
-import { type DbRow, MAX_ROWS, unwrap } from "@/lib/data/query";
+import { type DbRow, MAX_ROWS_PER_REQUEST, unwrap } from "@/lib/data/query";
 
 /** How the board orders rows. Mirrors the sort-priority switch in §7. */
 export type BoardSort = "edge" | "confidence" | "opponent_rank";
@@ -73,14 +73,20 @@ export type BoardPage = {
   total: number;
 };
 
-export async function getBoardRows(filters: BoardFilters): Promise<BoardPage> {
+/**
+ * Build a filtered board query.
+ *
+ * ONE definition of "which rows match", shared by the row read and the card-key
+ * scan. Those two must agree exactly — the scan decides which players make the
+ * page and the read fills their cards — and two copies of a dozen predicates
+ * would eventually disagree about an edge case and paginate wrongly.
+ */
+function buildBoardQuery(select: string, filters: BoardFilters, count?: "exact") {
   const supabase = createServerSupabaseClient();
-  const limit = Math.min(filters.limit ?? 200, MAX_ROWS);
-  const offset = filters.offset ?? 0;
 
   let query = supabase
     .from("v_board_rows")
-    .select(COLUMNS, { count: "exact" })
+    .select(select, count ? { count } : undefined)
     .eq("season", filters.season)
     .eq("week", filters.week);
 
@@ -115,27 +121,49 @@ export async function getBoardRows(filters: BoardFilters): Promise<BoardPage> {
     query = query.lte("opponent_rank_vs_position", filters.maxOpponentRank);
   }
 
-  // `nullsFirst: false` everywhere: a row with no book line has a null edge and
-  // a row with an unrated opponent has a null rank. Neither is a strong pick,
-  // and Postgres sorts NULLs first on DESC by default, which would put exactly
-  // the least informative rows at the top of the board.
+  return query;
+}
+
+type BoardQuery = ReturnType<typeof buildBoardQuery>;
+
+/**
+ * Apply the sort switch (CLAUDE.md §7).
+ *
+ * `nullsFirst: false` everywhere: a row with no book line has a null edge and a
+ * row with an unrated opponent has a null rank. Neither is a strong pick, and
+ * Postgres sorts NULLs first on DESC by default, which would put exactly the
+ * least informative rows at the top of the board.
+ */
+function applySort(query: BoardQuery, sort: BoardSort = "edge"): BoardQuery {
   const desc = { ascending: false, nullsFirst: false } as const;
-  switch (filters.sort ?? "edge") {
+  let sorted = query;
+
+  switch (sort) {
     case "confidence":
-      query = query.order("confidence", desc);
+      sorted = sorted.order("confidence", desc);
       break;
     case "opponent_rank":
-      query = query.order("opponent_rank_vs_position", {
+      sorted = sorted.order("opponent_rank_vs_position", {
         ascending: true,
         nullsFirst: false,
       });
       break;
     default:
-      query = query.order("edge", desc).order("confidence", desc);
+      sorted = sorted.order("edge", desc).order("confidence", desc);
   }
+
   // A stable tiebreak, so paging through a week cannot repeat or skip a row.
-  query = query.order("projection_id", { ascending: true });
-  query = query.range(offset, offset + limit - 1);
+  return sorted.order("projection_id", { ascending: true });
+}
+
+export async function getBoardRows(filters: BoardFilters): Promise<BoardPage> {
+  const limit = Math.min(filters.limit ?? 200, MAX_ROWS_PER_REQUEST);
+  const offset = filters.offset ?? 0;
+
+  const query = applySort(
+    buildBoardQuery(COLUMNS, filters, "exact"),
+    filters.sort,
+  ).range(offset, offset + limit - 1);
 
   const result = await query;
   const rows = unwrap<DbRow[]>(result, "v_board_rows");
@@ -144,6 +172,144 @@ export async function getBoardRows(filters: BoardFilters): Promise<BoardPage> {
     rows: rows.map(toBoardRow),
     total: result.count ?? rows.length,
   };
+}
+
+export type CardKey = { playerId: number; gameId: number };
+
+export type CardKeyPage = {
+  keys: CardKey[];
+  /** True when the scan hit the row cap, so `keys` is not the whole week. */
+  truncated: boolean;
+};
+
+/**
+ * The player-games matching the filters, in board order.
+ *
+ * WHY THIS EXISTS RATHER THAN PAGINATING ROWS. The board is one card per
+ * player, but the read layer returns one row per player-MARKET. Slicing rows
+ * into pages would cut a player's markets across a page boundary, so a card
+ * would silently show three of a player's five markets and look complete.
+ *
+ * So pagination works in two steps: this establishes which players belong on
+ * the page and in what order, and `getRowsForCards` then fetches every row for
+ * exactly those players. Two cheap queries instead of one wrong one.
+ *
+ * Selecting two columns keeps the scan light even at the row cap.
+ */
+/**
+ * Ceiling on the card-key scan, in rows.
+ *
+ * Deduplicating player-games means scanning every matching ROW, and PostgREST
+ * returns at most `MAX_ROWS_PER_REQUEST` per response regardless of the range
+ * asked for — so a whole week takes several requests.
+ *
+ * THE BUG THIS REPLACES IS WORTH RECORDING. A single request with a 2,000-row
+ * range returned 1,000 rows and a count of 3,788, without error. The board
+ * showed 694 cards unfiltered and 827 when filtered to one market — MORE cards
+ * from a narrower query, because fewer rows per player fit under the cap. A
+ * filter that increases the result count is what silent truncation looks like
+ * from the outside.
+ *
+ * The largest week ingested is ~7,000 rows across all FBS; this clears it.
+ */
+const KEY_SCAN_MAX_ROWS = 12000;
+
+export async function getBoardCardKeys(
+  filters: BoardFilters,
+  maxRows: number = KEY_SCAN_MAX_ROWS,
+): Promise<CardKeyPage> {
+  const chunk = (offset: number, withCount: boolean) =>
+    applySort(
+      buildBoardQuery("player_id, game_id", filters, withCount ? "exact" : undefined),
+      filters.sort,
+    ).range(offset, offset + MAX_ROWS_PER_REQUEST - 1);
+
+  // The first request also reports the exact total, which is what says how many
+  // more are needed — rather than paging until a short response, which cannot
+  // tell "that was the end" from "the server capped me".
+  const head = await chunk(0, true);
+  const first = unwrap<DbRow[]>(head, "v_board_rows (card keys)");
+  const total = head.count ?? first.length;
+
+  const wanted = Math.min(total, maxRows);
+  const offsets: number[] = [];
+  for (
+    let offset = MAX_ROWS_PER_REQUEST;
+    offset < wanted;
+    offset += MAX_ROWS_PER_REQUEST
+  ) {
+    offsets.push(offset);
+  }
+
+  // Order is deterministic (the sort ends in a projection_id tiebreak), so the
+  // chunks can be fetched in parallel and concatenated by offset.
+  const rest = await Promise.all(
+    offsets.map(async (offset) =>
+      unwrap<DbRow[]>(await chunk(offset, false), "v_board_rows (card keys)"),
+    ),
+  );
+
+  const seen = new Set<string>();
+  const keys: CardKey[] = [];
+  let scanned = 0;
+  for (const rows of [first, ...rest]) {
+    scanned += rows.length;
+    for (const row of rows) {
+      const playerId = row.player_id as number;
+      const gameId = row.game_id as number;
+      const id = `${playerId}-${gameId}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      keys.push({ playerId, gameId });
+    }
+  }
+
+  return { keys, truncated: total > scanned };
+}
+
+/**
+ * Every row for a specific set of player-games.
+ *
+ * The market and position filters still apply — they decide which sub-cards a
+ * card shows — but the row-level filters that pick WHICH players make the page
+ * (edge, confidence, rank) deliberately do NOT. A player who earns his place
+ * with a 72% receiving-yards call should show his other markets too; hiding
+ * them would make the card claim he has one market this week.
+ */
+export async function getRowsForCards(
+  keys: CardKey[],
+  filters: Pick<
+    BoardFilters,
+    "season" | "week" | "marketKey" | "positionGroup"
+  >,
+): Promise<BoardRow[]> {
+  if (keys.length === 0) return [];
+
+  const supabase = createServerSupabaseClient();
+  let query = supabase
+    .from("v_board_rows")
+    .select(COLUMNS)
+    .eq("season", filters.season)
+    .eq("week", filters.week)
+    .in("player_id", [...new Set(keys.map((key) => key.playerId))])
+    .in("game_id", [...new Set(keys.map((key) => key.gameId))]);
+
+  if (filters.marketKey) query = query.eq("market_key", filters.marketKey);
+  if (filters.positionGroup) {
+    query = query.eq("position_group", filters.positionGroup);
+  }
+
+  const rows = unwrap<DbRow[]>(
+    await query.order("market_key"),
+    "v_board_rows (cards)",
+  );
+
+  // The `in` pair above is a cross product, so it can return a player paired
+  // with someone else's game. Keep only the pairs actually asked for.
+  const wanted = new Set(keys.map((key) => `${key.playerId}-${key.gameId}`));
+  return rows
+    .map(toBoardRow)
+    .filter((row) => wanted.has(`${row.playerId}-${row.gameId}`));
 }
 
 export type BoardCounts = {

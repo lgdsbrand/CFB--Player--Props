@@ -51,6 +51,59 @@ export async function getPlayerGameLog(
   return unwrap<DbRow[]>(await query, "v_player_game_log").map(toGameLogRow);
 }
 
+/**
+ * Players per batch when loading logs for a board page.
+ *
+ * PostgREST caps a response at 1,000 rows and truncates SILENTLY. A board page
+ * of 25 players across a full season is ~300 rows, but the cap is close enough
+ * that it has to be a decision rather than an accident: a truncated log would
+ * quietly shorten someone's L5 and change the hit rate on screen.
+ */
+const LOG_BATCH_PLAYERS = 40;
+
+/**
+ * Game logs for many players at once, keyed by player.
+ *
+ * The board's last-5 row needs a log for every player on the page. One read per
+ * card would be 25 round trips per render; this is one or two.
+ *
+ * `before` applies the same rule as the single-player read: grading a week 10
+ * projection against week 10's own result would be marking the model's homework
+ * with the answers visible.
+ */
+export async function getGameLogsByPlayer(
+  playerIds: number[],
+  { season, before }: { season: number; before?: number },
+): Promise<Map<number, PlayerGameLogRow[]>> {
+  const byPlayer = new Map<number, PlayerGameLogRow[]>();
+  if (playerIds.length === 0) return byPlayer;
+
+  const supabase = createServerSupabaseClient();
+  const unique = [...new Set(playerIds)];
+
+  for (let start = 0; start < unique.length; start += LOG_BATCH_PLAYERS) {
+    const chunk = unique.slice(start, start + LOG_BATCH_PLAYERS);
+
+    let query = supabase
+      .from("v_player_game_log")
+      .select(COLUMNS)
+      .eq("season", season)
+      .in("player_id", chunk)
+      .order("week", { ascending: false });
+
+    if (before !== undefined) query = query.lt("week", before);
+
+    for (const raw of unwrap<DbRow[]>(await query, "v_player_game_log (batch)")) {
+      const row = toGameLogRow(raw);
+      const list = byPlayer.get(row.playerId) ?? [];
+      list.push(row);
+      byPlayer.set(row.playerId, list);
+    }
+  }
+
+  return byPlayer;
+}
+
 function toGameLogRow(row: Record<string, unknown>): PlayerGameLogRow {
   const n = (key: string) => (row[key] as number | null) ?? null;
   return {

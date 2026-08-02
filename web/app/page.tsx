@@ -1,67 +1,59 @@
 import Link from "next/link";
 
+import { BoardControls } from "@/components/board/board-controls";
+import { PlayerCard } from "@/components/board/player-card";
 import { SiteHeader } from "@/components/site-header";
 import { WeekStrip } from "@/components/week-strip";
-import { isSupabaseConfigured } from "@/lib/core/env";
 import {
-  formatConfidence,
-  formatCount,
-  formatDateRange,
-  formatEdge,
-  formatLine,
-} from "@/lib/core/format";
-import { getBoardCounts, getBoardRows } from "@/lib/data/board";
+  boardHref,
+  CARDS_PER_PAGE,
+  parseBoardParams,
+  type RawParams,
+} from "@/lib/core/board-params";
+import { groupIntoCards } from "@/lib/core/board-view";
+import { isSupabaseConfigured } from "@/lib/core/env";
+import { formatCount, formatDateRange } from "@/lib/core/format";
+import {
+  getBoardCardKeys,
+  getBoardCounts,
+  getRowsForCards,
+  type BoardFilters,
+} from "@/lib/data/board";
 import { getConferences, getMarkets } from "@/lib/data/catalogue";
 import { getAppConfig } from "@/lib/data/config";
-import { findWeek, getSlateWeeks } from "@/lib/data/slate";
+import { getGameLogsByPlayer } from "@/lib/data/players";
+import { findWeek, getSlateGames, getSlateWeeks } from "@/lib/data/slate";
 
 /**
- * The board page.
+ * The main board (CLAUDE.md §7).
  *
- * PHASE 4b BUILDS THE READ LAYER AND THE SHELL, not the cards. What renders
- * below the week strip is a deliberately plain preview proving the reads work
- * against real data end to end — the styled row cards, controls and filters are
- * Phase 4c. Keeping the two apart means the card work starts from a data layer
- * that is already known to be correct.
+ * One card per player-game, each holding a sub-card per market, leading with
+ * the OVER/UNDER call and the confidence percentage. Server-rendered per week
+ * with every filter in the URL — see `lib/core/board-params.ts` for why that is
+ * a correctness requirement rather than a preference.
  */
-
-type SearchParams = Promise<Record<string, string | string[] | undefined>>;
-
-function readInt(
-  params: Record<string, string | string[] | undefined>,
-  key: string,
-): number | undefined {
-  const raw = params[key];
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  if (!value) return undefined;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
 
 export default async function Home({
   searchParams,
 }: {
-  searchParams: SearchParams;
+  searchParams: Promise<RawParams>;
 }) {
   if (!isSupabaseConfigured()) {
     return (
-      <>
-        <SiteHeader />
-        <main className="mx-auto w-full max-w-7xl px-4 py-10 sm:px-6">
-          <div className="panel p-6">
-            <h1 className="section-header mb-2">Not configured</h1>
-            <p className="text-muted text-sm">
-              Set <code className="font-mono">NEXT_PUBLIC_SUPABASE_URL</code> and{" "}
-              <code className="font-mono">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> in{" "}
-              <code className="font-mono">web/.env.local</code>, then reload.
-            </p>
-          </div>
-        </main>
-      </>
+      <Shell>
+        <div className="panel p-6">
+          <h1 className="section-header mb-2">Not configured</h1>
+          <p className="text-muted text-sm">
+            Set <code className="font-mono">NEXT_PUBLIC_SUPABASE_URL</code> and{" "}
+            <code className="font-mono">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> in{" "}
+            <code className="font-mono">web/.env.local</code>, then reload.
+          </p>
+        </div>
+      </Shell>
     );
   }
 
-  const params = await searchParams;
+  const raw = await searchParams;
   const [weeks, config, markets, conferences] = await Promise.all([
     getSlateWeeks(),
     getAppConfig(),
@@ -69,192 +61,241 @@ export default async function Home({
     getConferences(),
   ]);
 
-  const active = findWeek(weeks, readInt(params, "season"), readInt(params, "week"));
+  const params = parseBoardParams(raw, {
+    edgesOnlyDefault: config.edgesOnlyDefault,
+  });
+  const active = findWeek(weeks, params.season, params.week);
 
   if (!active) {
     return (
-      <>
-        <SiteHeader />
-        <main className="mx-auto w-full max-w-7xl px-4 py-10 sm:px-6">
-          <div className="panel p-6">
-            <h1 className="section-header mb-2">No slate yet</h1>
-            <p className="text-muted max-w-prose text-sm">
-              No week has model output. Run the projection job to populate the
-              board:{" "}
-              <code className="font-mono text-xs">
-                python -m worker.jobs.run_projections --season 2025 --weeks 10
-              </code>
-            </p>
-          </div>
-        </main>
-      </>
+      <Shell>
+        <div className="panel p-6">
+          <h1 className="section-header mb-2">No slate yet</h1>
+          <p className="text-muted max-w-prose text-sm">
+            No week has model output. Run the projection job to populate the
+            board:{" "}
+            <code className="font-mono text-xs">
+              python -m worker.jobs.run_projections --season 2025 --weeks 10
+            </code>
+          </p>
+        </div>
+      </Shell>
     );
   }
 
-  const [counts, preview] = await Promise.all([
+  // The strip may have resolved to a different week than the URL asked for
+  // (an unknown week falls back to the latest), so filters follow the resolved
+  // one — otherwise the board would read one week and label itself another.
+  const resolved = { ...params, season: active.season, week: active.week };
+
+  const filters: BoardFilters = {
+    season: active.season,
+    week: active.week,
+    marketKey: resolved.market,
+    positionGroup: resolved.position,
+    gameId: resolved.game,
+    conferenceName: resolved.conference,
+    search: resolved.search,
+    edgesOnly: resolved.edgesOnly,
+    edgeThreshold: config.edgeThreshold,
+    minConfidence: resolved.minConfidence,
+    maxOpponentRank: resolved.maxOpponentRank,
+    sort: resolved.sort,
+  };
+
+  const [counts, games, cardKeys] = await Promise.all([
     getBoardCounts(active.season, active.week, config.edgeThreshold),
-    getBoardRows({
-      season: active.season,
-      week: active.week,
-      sort: "edge",
-      limit: 10,
-    }),
+    getSlateGames(active.season, active.week),
+    getBoardCardKeys(filters),
   ]);
 
+  const totalPages = Math.max(
+    Math.ceil(cardKeys.keys.length / CARDS_PER_PAGE),
+    1,
+  );
+  const page = Math.min(resolved.page, totalPages);
+  const pageKeys = cardKeys.keys.slice(
+    (page - 1) * CARDS_PER_PAGE,
+    page * CARDS_PER_PAGE,
+  );
+
+  const rows = await getRowsForCards(pageKeys, filters);
+
+  // Card order comes from the key scan, which applied the sort. Grouping the
+  // refetched rows would otherwise order by whatever the second query returned.
+  const order = new Map(
+    pageKeys.map((key, index) => [`${key.playerId}-${key.gameId}`, index]),
+  );
+  const cards = groupIntoCards(rows).sort(
+    (a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0),
+  );
+
+  const gameLogs = await getGameLogsByPlayer(
+    cards.map((card) => card.playerId),
+    { season: active.season, before: active.week },
+  );
+
+  const marketsByKey = new Map(markets.map((market) => [market.key, market]));
   const leansOnly = counts.withCall - counts.withBookLine;
 
   return (
-    <>
-      <SiteHeader />
-      <main className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6">
-        <div className="flex flex-col gap-1">
-          <span className="label-caption">Legends Sports · College Football</span>
-          <h1 className="text-2xl font-extrabold tracking-tight">
-            Player Props Board
-          </h1>
-          <p className="text-muted text-sm">
-            {active.season} Week {active.week} ·{" "}
-            {formatDateRange(active.firstKickoff, active.lastKickoff)} ·{" "}
-            {active.games} games
+    <Shell>
+      <div className="flex flex-col gap-1">
+        <span className="label-caption">Legends Sports · College Football</span>
+        <h1 className="text-2xl font-extrabold tracking-tight">
+          Player Props Board
+        </h1>
+        <p className="text-muted text-sm">
+          {active.season} Week {active.week} ·{" "}
+          {formatDateRange(active.firstKickoff, active.lastKickoff)} ·{" "}
+          {active.games} games · {formatCount(counts.rows)} projections,{" "}
+          {formatCount(leansOnly)} still awaiting a line
+        </p>
+      </div>
+
+      <WeekStrip weeks={weeks} active={active} />
+
+      <BoardControls
+        params={resolved}
+        markets={markets}
+        conferences={conferences}
+        games={games}
+        hitRateWindows={config.hitRateWindows}
+        resultCount={cardKeys.keys.length}
+      />
+
+      {cardKeys.truncated ? (
+        <p className="border-negative/40 bg-negative/5 text-muted rounded-xl border px-3 py-2 text-xs">
+          <span className="text-negative font-bold uppercase tracking-label">
+            Partial slate
+          </span>{" "}
+          — this week has more rows than the board scans in one pass, so some
+          players are missing. Narrow by position or market to see the whole
+          slate. (Raise <code className="font-mono">KEY_SCAN_LIMIT</code> if this
+          persists.)
+        </p>
+      ) : null}
+
+      {counts.withBookLine > 0 ? (
+        <p className="border-target/30 bg-target/5 text-muted rounded-xl border px-3 py-2 text-xs">
+          <span className="text-target font-bold uppercase tracking-label">
+            Development lines
+          </span>{" "}
+          — no book has posted a real NCAAF prop yet, so lines here are each
+          player&rsquo;s trailing average priced at −110/−110. Those de-vig to
+          exactly 0.500, which makes every edge shown equal to confidence minus
+          50%. Treat the calls as real and the edges as placeholders.
+        </p>
+      ) : null}
+
+      {cards.length === 0 ? (
+        <div className="panel p-6">
+          <h2 className="section-header mb-2">No players match</h2>
+          <p className="text-muted max-w-prose text-sm">
+            Nothing on this slate meets these filters. Widen the confidence or
+            opponent-rank thresholds, or{" "}
+            <Link
+              href={boardHref(resolved, {
+                position: undefined,
+                market: undefined,
+                game: undefined,
+                conference: undefined,
+                search: undefined,
+                minConfidence: undefined,
+                maxOpponentRank: undefined,
+                edgesOnly: false,
+              })}
+              className="text-accent-cyan hover:underline"
+            >
+              clear the filters
+            </Link>
+            .
           </p>
         </div>
-
-        <WeekStrip weeks={weeks} active={active} />
-
-        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="Projections" value={formatCount(counts.rows)} />
-          <Stat
-            label="With a call"
-            value={formatCount(counts.withCall)}
-            note={`${formatCount(leansOnly)} lean-only, no book line`}
-          />
-          <Stat
-            label="Book lines attached"
-            value={formatCount(counts.withBookLine)}
-            note={
-              counts.withBookLine > 0
-                ? "development lines — edges are not real"
-                : "no books have posted"
-            }
-          />
-          <Stat
-            label={`Edges ≥ ${Math.round(config.edgeThreshold * 100)}%`}
-            value={formatCount(counts.overThreshold)}
-          />
+      ) : (
+        <section className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+          {cards.map((card) => (
+            <PlayerCard
+              key={card.key}
+              card={card}
+              marketsByKey={marketsByKey}
+              gameLog={gameLogs.get(card.playerId) ?? []}
+              hitRateWindow={resolved.hitRateWindow}
+              edgeThreshold={config.edgeThreshold}
+            />
+          ))}
         </section>
+      )}
 
-        <section className="panel flex flex-col gap-4 p-5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="section-header">Read layer</span>
-            <span className="pill bg-positive/15 text-positive">Online</span>
-            <span className="text-muted text-xs">
-              {markets.length} markets · {conferences.length} displayed
-              conferences · hit-rate basis{" "}
-              <code className="font-mono">{config.hitRateBasis}</code> · windows
-              L{config.hitRateWindows.join(" / L")}
-            </span>
-          </div>
+      {totalPages > 1 ? (
+        <nav
+          aria-label="Board pages"
+          className="flex items-center justify-center gap-3 pt-1"
+        >
+          <PageLink
+            href={boardHref(resolved, { page: page - 1 })}
+            disabled={page <= 1}
+          >
+            ← Prev
+          </PageLink>
+          <span className="text-muted text-xs">
+            Page {page} of {formatCount(totalPages)}
+            {cardKeys.truncated ? " (capped)" : ""}
+          </span>
+          <PageLink
+            href={boardHref(resolved, { page: page + 1 })}
+            disabled={page >= totalPages}
+          >
+            Next →
+          </PageLink>
+        </nav>
+      ) : null}
 
-          <p className="text-muted max-w-prose text-sm">
-            Phase 4b delivers the typed read layer and the app shell. The row
-            cards, position tabs, stat selector and filters are Phase 4c — the
-            table below is a plain preview confirming the queries return real
-            data, not the board.
-          </p>
+      <p className="text-dim text-xs">
+        Opponent rank 1 allows the most to the position — a low number is the
+        softer matchup. Confidence is the share of the projected distribution
+        past the line.{" "}
+        <Link href="/health" className="hover:text-accent-cyan underline">
+          System health
+        </Link>
+      </p>
+    </Shell>
+  );
+}
 
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-208 text-sm">
-              <thead>
-                <tr className="text-dim text-left text-[0.625rem] uppercase tracking-label">
-                  <th className="py-2 pr-3 font-semibold">Player</th>
-                  <th className="py-2 pr-3 font-semibold">Pos</th>
-                  <th className="py-2 pr-3 font-semibold">Matchup</th>
-                  <th className="py-2 pr-3 font-semibold">Market</th>
-                  <th className="py-2 pr-3 font-semibold">Line</th>
-                  <th className="py-2 pr-3 font-semibold">Call</th>
-                  <th className="py-2 pr-3 font-semibold">Conf</th>
-                  <th className="py-2 pr-3 font-semibold">Edge</th>
-                  <th className="py-2 font-semibold">Opp rank</th>
-                </tr>
-              </thead>
-              <tbody className="divide-border-subtle divide-y">
-                {preview.rows.map((row) => (
-                  <tr key={row.projectionId}>
-                    <td className="py-2 pr-3 font-medium">{row.playerName}</td>
-                    <td className="text-muted py-2 pr-3">{row.positionGroup}</td>
-                    <td className="text-muted py-2 pr-3 font-mono text-xs">
-                      {row.teamAbbreviation} {row.isHome ? "vs" : "@"}{" "}
-                      {row.opponentAbbreviation}
-                    </td>
-                    <td className="text-muted py-2 pr-3">
-                      {row.marketEmoji} {row.marketLabel}
-                    </td>
-                    <td className="py-2 pr-3 font-mono">
-                      {row.line === null ? "—" : formatLine(row.line)}
-                    </td>
-                    <td className="py-2 pr-3">
-                      {row.side ? (
-                        <span
-                          className={
-                            row.side === "over"
-                              ? "pill bg-positive/15 text-positive"
-                              : "pill bg-negative/15 text-negative"
-                          }
-                        >
-                          {row.side}
-                        </span>
-                      ) : (
-                        <span className="text-dim">lean</span>
-                      )}
-                    </td>
-                    <td className="py-2 pr-3 font-bold">
-                      {row.confidence === null
-                        ? "—"
-                        : formatConfidence(row.confidence)}
-                    </td>
-                    <td className="text-muted py-2 pr-3 font-mono">
-                      {formatEdge(row.edge)}
-                    </td>
-                    <td className="text-muted py-2 font-mono">
-                      {row.opponentRankVsPosition ?? "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <p className="text-dim text-xs">
-            Showing {preview.rows.length} of {formatCount(preview.total)}{" "}
-            rows, sorted by edge. Opponent rank 1 allows the most to the
-            position.
-          </p>
-        </section>
-
-        <p className="text-dim text-xs">
-          <Link href="/health" className="hover:text-accent-cyan underline">
-            System health
-          </Link>
-        </p>
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <>
+      <SiteHeader />
+      <main className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-6 sm:px-6">
+        {children}
       </main>
     </>
   );
 }
 
-function Stat({
-  label,
-  value,
-  note,
+function PageLink({
+  href,
+  disabled,
+  children,
 }: {
-  label: string;
-  value: string;
-  note?: string;
+  href: string;
+  disabled: boolean;
+  children: React.ReactNode;
 }) {
+  if (disabled) {
+    return (
+      <span className="text-dim px-3 py-1.5 text-[0.6875rem] font-bold uppercase tracking-label">
+        {children}
+      </span>
+    );
+  }
   return (
-    <div className="panel flex flex-col gap-1 p-4">
-      <span className="label-caption">{label}</span>
-      <span className="text-xl font-extrabold tracking-tight">{value}</span>
-      {note ? <span className="text-dim text-[0.6875rem]">{note}</span> : null}
-    </div>
+    <Link
+      href={href}
+      className="border-border-subtle text-muted hover:text-ink hover:border-border-strong rounded-full border px-3 py-1.5 text-[0.6875rem] font-bold uppercase tracking-label transition-colors"
+    >
+      {children}
+    </Link>
   );
 }

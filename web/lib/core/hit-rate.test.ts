@@ -17,8 +17,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+// Relative, with the extension: Node resolves these itself and knows nothing
+// about the `@/*` path alias, which only exists for tsc and the bundler. A
+// type-only import may still use the alias — it is erased before Node sees it.
 import type { PlayerGameLogRow } from "@/lib/core/types";
 
+import { formatCount, formatLine } from "./format.ts";
 import {
   formatHitRate,
   gradeGames,
@@ -217,4 +221,23 @@ test("neutral sites count as neither home nor away", () => {
   assert.equal(split.home.length, 1);
   assert.equal(split.away.length, 1);
   assert.equal(split.neutral.length, 1);
+});
+
+// -----------------------------------------------------------------------------
+// Formatting that has bitten us
+// -----------------------------------------------------------------------------
+test("a value rounding to zero never renders as negative zero", () => {
+  // Quantiles come from bisecting a survival function, which for a discrete
+  // count lands a hair below zero. "proj -0.0" reads as a broken number.
+  assert.equal(formatLine(-0.04), "0.0");
+  assert.equal(formatLine(-0), "0.0");
+  assert.equal(formatLine(0), "0.0");
+  assert.equal(formatLine(-1.2), "-1.2");
+  assert.equal(formatLine(62.5), "62.5");
+});
+
+test("counts are grouped for a US audience regardless of server locale", () => {
+  // A bare toLocaleString() on a non-US host renders 3788 as "3.788".
+  assert.equal(formatCount(3788), "3,788");
+  assert.equal(formatCount(999), "999");
 });

@@ -37,9 +37,18 @@ export function formatAmericanOdds(price: number | null): string {
   return price > 0 ? `+${price}` : `${price}`;
 }
 
-/** A line as books display it, e.g. 62.5, 0.5. */
+/**
+ * A line or projected value as books display it, e.g. 62.5, 0.5.
+ *
+ * NEGATIVE ZERO IS RENDERED AS ZERO. Quantiles are found by bisecting the
+ * survival function, which for a discrete count lands a hair below zero — so a
+ * quarterback projected for no touchdowns displayed "proj -0.0", which reads as
+ * a broken number rather than as the zero it is. `toFixed` preserves the sign
+ * of -0.04; this does not.
+ */
 export function formatLine(line: number): string {
-  return line.toFixed(1).replace(/\.0$/, ".0");
+  const rounded = line.toFixed(1);
+  return rounded === "-0.0" ? "0.0" : rounded;
 }
 
 export function formatSide(side: BetSide): string {

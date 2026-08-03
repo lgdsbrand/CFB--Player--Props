@@ -77,7 +77,12 @@ export type BoardRow = {
   /** Null until there is a line to call against. */
   line: number | null;
   side: BetSide | null;
-  /** THE HEADLINE NUMBER — mass of the distribution on the called side. */
+  /**
+   * Mass of the distribution on the CALLED side.
+   *
+   * Not what the card shows for every market, and not what to sort or filter
+   * on — see `displayConfidence`.
+   */
   confidence: number | null;
   modelProbOver: number | null;
   /** De-vigged. Null means "no book probability", never zero edge. */
@@ -104,6 +109,18 @@ export type BoardRow = {
 
   conferenceName: string | null;
   conferenceIsDisplayed: boolean | null;
+
+  /**
+   * THE HEADLINE NUMBER, as the card states it. `modelProbOver` for a binary
+   * market — the anytime-scorer probability (CLAUDE.md §1) — and `confidence`
+   * for every other. Computed in `v_board_rows` so the ordering the database
+   * applies and the number the reader sees are the same quantity.
+   *
+   * Anytime TD is called UNDER on ~97% of picks because most players do not
+   * score, so `confidence` on those rows is the probability of NOT scoring and
+   * runs highest where the pick is least interesting.
+   */
+  displayConfidence: number | null;
 };
 
 /** One completed game for a player, backing the game log and hit rates. */

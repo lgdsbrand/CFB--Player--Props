@@ -6,12 +6,13 @@ import { WeeklyTargets } from "@/components/board/weekly-targets";
 import { SiteHeader } from "@/components/site-header";
 import { WeekStrip } from "@/components/week-strip";
 import {
+  type BoardParams,
   boardHref,
   CARDS_PER_PAGE,
   parseBoardParams,
   type RawParams,
 } from "@/lib/core/board-params";
-import { groupIntoCards } from "@/lib/core/board-view";
+import { groupIntoCards, lineCoverage } from "@/lib/core/board-view";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount, formatDateRange } from "@/lib/core/format";
 import { buildWeeklyTargets } from "@/lib/core/targets";
@@ -19,6 +20,7 @@ import {
   getBoardCardKeys,
   getBoardCounts,
   getRowsForCards,
+  type BoardCounts,
   type BoardFilters,
 } from "@/lib/data/board";
 import { getConferences, getMarkets } from "@/lib/data/catalogue";
@@ -159,7 +161,7 @@ export default async function Home({
   });
 
   const marketsByKey = new Map(markets.map((market) => [market.key, market]));
-  const leansOnly = counts.withCall - counts.withBookLine;
+  const coverage = lineCoverage(counts);
 
   return (
     <Shell>
@@ -168,11 +170,18 @@ export default async function Home({
         <h1 className="text-2xl font-extrabold tracking-tight">
           Player Props Board
         </h1>
+        {/*
+          "Awaiting a line" means no line of any kind — not "no book line".
+          A row called against `markets.default_line` has a structural line and
+          a real call, and counting those as waiting understated the unpriced
+          population by an order of magnitude on every slate so far.
+        */}
         <p className="text-muted text-sm">
           {active.season} Week {active.week} ·{" "}
           {formatDateRange(active.firstKickoff, active.lastKickoff)} ·{" "}
           {active.games} games · {formatCount(counts.rows)} projections,{" "}
-          {formatCount(leansOnly)} still awaiting a line
+          {formatCount(counts.withCall)} with a call,{" "}
+          {formatCount(coverage.awaitingLine)} still awaiting a line
         </p>
       </div>
 
@@ -199,42 +208,42 @@ export default async function Home({
         </p>
       ) : null}
 
-      {counts.withBookLine > 0 ? (
+      {/*
+        KEYED ON THE SYNTHETIC BOOK, NOT ON "ANY LINE EXISTS". This banner used
+        to fire whenever a row carried a book line and assert that no book had
+        posted a real prop — so the first genuine line `ingest_odds` lands
+        would have been announced as a placeholder, and the claim underneath it
+        would have been false. What makes a line fake is which book wrote it.
+      */}
+      {coverage.developmentLine > 0 ? (
         <p className="border-target/30 bg-target/5 text-muted rounded-xl border px-3 py-2 text-xs">
           <span className="text-target font-bold uppercase tracking-label">
             Development lines
           </span>{" "}
-          — no book has posted a real NCAAF prop yet, so lines here are each
-          player&rsquo;s trailing average priced at −110/−110. Those de-vig to
-          exactly 0.500, which makes every edge shown equal to confidence minus
-          50%. Treat the calls as real and the edges as placeholders.
+          —{" "}
+          {coverage.bookLine > 0
+            ? `${formatCount(coverage.developmentLine)} of the ${formatCount(
+                counts.withBookLine,
+              )} priced rows here carry`
+            : `every one of the ${formatCount(
+                coverage.developmentLine,
+              )} priced rows here carries`}{" "}
+          a synthetic line: the player&rsquo;s trailing average at −110/−110,
+          which de-vigs to exactly 0.500 and makes those edges equal to
+          confidence minus 50%. Treat those calls as real and their edges as
+          placeholders.{" "}
+          {coverage.bookLine > 0
+            ? `The other ${formatCount(coverage.bookLine)} come from a book.`
+            : "No book has posted a real NCAAF prop yet."}
         </p>
       ) : null}
 
       {cards.length === 0 ? (
-        <div className="panel p-6">
-          <h2 className="section-header mb-2">No players match</h2>
-          <p className="text-muted max-w-prose text-sm">
-            Nothing on this slate meets these filters. Widen the confidence or
-            opponent-rank thresholds, or{" "}
-            <Link
-              href={boardHref(resolved, {
-                position: undefined,
-                market: undefined,
-                game: undefined,
-                conference: undefined,
-                search: undefined,
-                minConfidence: undefined,
-                minOpponentRank: undefined,
-                edgesOnly: false,
-              })}
-              className="text-accent-cyan hover:underline"
-            >
-              clear the filters
-            </Link>
-            .
-          </p>
-        </div>
+        <EmptyBoard
+          params={resolved}
+          counts={counts}
+          edgeThreshold={config.edgeThreshold}
+        />
       ) : (
         <section className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
           {cards.map((card) => (
@@ -293,6 +302,91 @@ export default async function Home({
         </Link>
       </p>
     </Shell>
+  );
+}
+
+/**
+ * The board with nothing on it — and, where it can, WHY.
+ *
+ * "Nothing meets these filters" is true of every empty board and useful on
+ * almost none of them. The common cause on this product is structural rather
+ * than a user's mistake: EDGES ONLY compares against a book price, and for most
+ * of a live week no book has posted one (CLAUDE.md §7), so the toggle empties
+ * the board no matter how the other filters are set. Sending someone to widen a
+ * confidence threshold in that state is advice that cannot work.
+ *
+ * So the two structural causes get named and given the one link that fixes
+ * them, and the generic message is what is left when neither applies.
+ */
+function EmptyBoard({
+  params,
+  counts,
+  edgeThreshold,
+}: {
+  params: BoardParams;
+  counts: BoardCounts;
+  edgeThreshold: number;
+}) {
+  const cleared = boardHref(params, {
+    position: undefined,
+    market: undefined,
+    game: undefined,
+    conference: undefined,
+    search: undefined,
+    minConfidence: undefined,
+    minOpponentRank: undefined,
+    edgesOnly: false,
+  });
+
+  const showLeans = (
+    <Link
+      href={boardHref(params, { edgesOnly: false })}
+      className="text-accent-cyan hover:underline"
+    >
+      Turn off Edges only
+    </Link>
+  );
+
+  if (params.edgesOnly && counts.withBookLine === 0) {
+    return (
+      <div className="panel p-6">
+        <h2 className="section-header mb-2">Nothing priced yet</h2>
+        <p className="text-muted max-w-prose text-sm">
+          No row on this slate carries a book line, so no row has an edge to
+          measure — an edge is the model&rsquo;s probability minus a de-vigged
+          book price, and there is no price. The{" "}
+          {formatCount(counts.rows)} projections are still here.{" "}
+          {showLeans} to see the model&rsquo;s leans.
+        </p>
+      </div>
+    );
+  }
+
+  if (params.edgesOnly && counts.overThreshold === 0) {
+    return (
+      <div className="panel p-6">
+        <h2 className="section-header mb-2">No edges this week</h2>
+        <p className="text-muted max-w-prose text-sm">
+          {formatCount(counts.withBookLine)} rows are priced, but none clears
+          the {Math.round(edgeThreshold * 100)}% edge threshold — before any
+          other filter is applied. {showLeans} to see the whole slate.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel p-6">
+      <h2 className="section-header mb-2">No players match</h2>
+      <p className="text-muted max-w-prose text-sm">
+        Nothing on this slate meets these filters. Widen the confidence or
+        opponent-rank thresholds, or{" "}
+        <Link href={cleared} className="text-accent-cyan hover:underline">
+          clear the filters
+        </Link>
+        .
+      </p>
+    </div>
   );
 }
 

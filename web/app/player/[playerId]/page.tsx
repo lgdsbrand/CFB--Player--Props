@@ -363,8 +363,11 @@ export default async function PlayerDetail({
             ) : (
               <p className="text-muted max-w-prose text-xs">
                 No read generated for this player this week. Reads are written
-                once per week by the pipeline and cached — the page never calls a
-                model. Generation ships in Phase 5.
+                once per week by <code className="font-mono">generate_ai_reads</code>{" "}
+                and cached — the page never calls a model. The job exits without
+                writing while <code className="font-mono">ai_adapter</code> is{" "}
+                <code className="font-mono">none</code>, which is a supported
+                configuration, not a failure.
               </p>
             )}
           </section>
@@ -526,10 +529,9 @@ function Odds({
           <span className="text-target font-bold uppercase tracking-label">
             Development line
           </span>{" "}
-          — no book has posted a real NCAAF prop yet. This line is the
-          player&rsquo;s trailing average priced at −110/−110, which de-vigs to
-          exactly 0.500 and makes the edge a restatement of confidence rather
-          than a disagreement with a market.
+          — no book posted this one. It is the player&rsquo;s trailing average
+          priced at −110/−110, which de-vigs to exactly 0.500 and makes the edge
+          a restatement of confidence rather than a disagreement with a market.
         </p>
       ) : null}
     </section>
@@ -571,9 +573,10 @@ function Projection({
             side={row.side}
           />
           <p className="text-dim text-[0.625rem]">
-            p10 to p90 of the projected distribution. The call above is the share
-            of that distribution past the line, which is the claim being made —
-            the median is context.
+            p10 to p90 of the projected distribution, floored at zero — some
+            markets are fitted with a family whose left tail runs below a value
+            the stat can take. The call above is the share of that distribution
+            past the line, which is the claim being made; the median is context.
           </p>
         </>
       )}

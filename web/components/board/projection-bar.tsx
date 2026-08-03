@@ -1,4 +1,8 @@
-import { barWindow, positionInRange } from "@/lib/core/board-view";
+import {
+  barWindow,
+  displayQuantile,
+  positionInRange,
+} from "@/lib/core/board-view";
 import { formatLine } from "@/lib/core/format";
 
 /**
@@ -37,12 +41,16 @@ export function ProjectionBar({
     );
   }
 
+  // Floored for the same reason the window is: no player runs for −187 yards,
+  // and the number under the bar has to be the number the bar draws.
+  const low = displayQuantile(p10);
+
   const pct = (value: number | null) => {
     const fraction = positionInRange(value, window.low, window.high);
     return fraction === null ? null : fraction * 100;
   };
 
-  const rangeStart = pct(p10) ?? 0;
+  const rangeStart = pct(low) ?? 0;
   const rangeEnd = pct(p90) ?? 100;
   const medianAt = pct(median) ?? 50;
   const lineAt = pct(line);
@@ -83,7 +91,7 @@ export function ProjectionBar({
       </div>
 
       <div className="text-dim flex justify-between text-[0.625rem] tabular-nums">
-        <span>{formatLine(p10 ?? 0)}</span>
+        <span>{formatLine(low ?? 0)}</span>
         <span className="text-muted">
           proj {formatLine(median)}
           {line !== null ? (

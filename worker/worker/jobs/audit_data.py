@@ -1578,6 +1578,108 @@ check(G, "every settled pipeline run carries a finish time", """
 """, lambda r: r["unfinished"] == 0)
 
 # =============================================================================
+# P5 board display contract
+# =============================================================================
+# `v_board_rows.display_confidence` exists because the board must order and
+# filter on the SAME number the card prints. It was added in 5f after the first
+# slate with no book lines: anytime TD is the only market with a call there, its
+# called side is `under` on ~97% of picks, and sorting on `picks.confidence`
+# opened the board with the players most certain NOT to score — each badged A+
+# beside the "5% TO SCORE" the same card rendered.
+#
+# The view is one CASE expression, which is exactly the kind of thing that stays
+# correct until someone edits the view and quietly drops a branch. These check
+# the column against the two sources it is derived from, in SQL, without reusing
+# the expression that produced it.
+G = "P5 board display"
+
+check(G, "display_confidence is the anytime-scorer probability on binary rows", """
+    select count(*) as binary_calls,
+           count(*) filter (
+             where display_confidence is distinct from model_prob_over
+           ) as wrong
+      from v_board_rows
+     where is_binary and has_call
+""", lambda r: r["wrong"] == 0)
+
+check(G, "display_confidence is the called-side mass on every other row", """
+    select count(*) as other_calls,
+           count(*) filter (
+             where display_confidence is distinct from confidence
+           ) as wrong
+      from v_board_rows
+     where not is_binary and has_call
+""", lambda r: r["wrong"] == 0)
+
+# A projection with no pick has no probability to state. Defaulting it to 0
+# would sort those rows last and read as "0% confident" rather than "not called
+# yet", which is the distinction the whole late-line behaviour turns on.
+check(G, "an uncalled projection has no display confidence at all", """
+    select count(*) as uncalled,
+           count(*) filter (where display_confidence is not null) as invented
+      from v_board_rows
+     where not has_call
+""", lambda r: r["invented"] == 0)
+
+# THE CHECK THAT PROVES THE COLUMN EARNS ITS PLACE, stated as the exact
+# relationship rather than as a count. `picks.confidence` is generated as
+# `greatest(model_prob_over, 1 - model_prob_over)` — deliberately FOLDED into
+# [0.5, 1], which is why it can never point in a direction and why the backtest
+# measures calibration on P(over) instead. So on an under-side binary pick
+# confidence is the COMPLEMENT of the displayed probability, and on an over-side
+# pick the two coincide. If that complement ever collapsed, display_confidence
+# would be a synonym for confidence and this whole layer could be reverted — so
+# the relationship, not a tally of disagreements, is what has to hold. (A count
+# would also be wrong: a player sitting at exactly 50% satisfies both, which is
+# 3 of the 9,684 under-side picks today.)
+check(G, "confidence is the complement of the displayed probability on binary picks", """
+    select count(*) as binary_calls,
+           count(*) filter (
+             where side = 'under'
+               and abs(confidence - (1 - model_prob_over)) > 0.001
+           ) as under_wrong,
+           count(*) filter (
+             where side = 'over'
+               and abs(confidence - model_prob_over) > 0.001
+           ) as over_wrong
+      from v_board_rows
+     where is_binary and has_call
+""", lambda r: r["under_wrong"] == 0 and r["over_wrong"] == 0)
+
+# THE DISPLAY FLOOR MUST NEVER HAVE NOTHING LEFT TO SHOW. The board renders a
+# p10..p90 range as secondary detail and the app floors it at zero, because
+# gamma and lognormal are fitted with a location shift that can push the left
+# tail below a value the stat can take: 7,410 of 38,616 projections store a p10
+# below -0.5, the worst at -302.2 rushing yards. Flooring is only coherent while
+# the UPPER end stays above the floor — a p90 below zero would leave an empty
+# range and the bar would render as unavailable on a row that has a projection.
+check(G, "no projected range lies entirely below the floor the board draws", """
+    select count(*) as projections,
+           count(*) filter (where p90 < -0.5) as p90_negative,
+           count(*) filter (where p10 < -0.5) as p10_negative,
+           coalesce(round(min(p10)::numeric, 1), 0) as worst_p10
+      from projections
+""", lambda r: r["p90_negative"] == 0)
+
+# A TRIPWIRE ON THE MODEL, NOT ON THE DISPLAY. A negative p10 is a tail artifact
+# the floor absorbs; a negative MEDIAN is the model's central claim being
+# impossible, and no amount of display work makes that right. 140 of 38,616
+# projections (0.36%) are in that state today, worst -32.8 — recorded here so
+# the number is in front of every audit run rather than rediscovered later. The
+# bound is deliberately far above today's value: this exists to catch the
+# fitting regressing, and closing the remaining 0.36% is a model change that
+# would move the calibration report with it.
+check(G, "a negative projected median stays a rare artifact", """
+    select count(*) as projections,
+           count(*) filter (where p50 < -0.5) as negative_median,
+           coalesce(round(min(p50)::numeric, 1), 0) as worst_median,
+           round(
+             100.0 * count(*) filter (where p50 < -0.5) / greatest(count(*), 1), 2
+           ) as pct
+      from projections
+""", lambda r: r["pct"] < 1.0)
+
+# =============================================================================
 # Report
 # =============================================================================
 groups: dict[str, list] = {}

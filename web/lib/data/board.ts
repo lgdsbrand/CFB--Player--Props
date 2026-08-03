@@ -13,11 +13,17 @@
  */
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { type BoardSort, boardSortKeys } from "@/lib/core/board-view";
 import type { BetSide, BoardRow, PositionGroup } from "@/lib/core/types";
+import { SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
 import { type DbRow, MAX_ROWS_PER_REQUEST, unwrap } from "@/lib/data/query";
 
-/** How the board orders rows. Mirrors the sort-priority switch in §7. */
-export type BoardSort = "edge" | "confidence" | "opponent_rank";
+/**
+ * The sort switch lives in the core (`lib/core/board-view.ts`) because the
+ * ORDER BY chain is a decision worth testing without a database. Re-exported
+ * here so call sites keep importing it beside the query it configures.
+ */
+export type { BoardSort };
 
 export type BoardFilters = {
   season: number;
@@ -40,7 +46,11 @@ export type BoardFilters = {
   /** Only rows whose edge clears the threshold — the EDGES ONLY toggle. */
   edgesOnly?: boolean;
   edgeThreshold?: number;
-  /** Only rows at or above this confidence, e.g. 0.6. */
+  /**
+   * Only rows at or above this confidence, e.g. 0.6. Measured on
+   * `display_confidence` — the number the card shows — so the control cannot
+   * admit a row the reader reads as 5%.
+   */
   minConfidence?: number;
   /**
    * Only matchups against a defense ranked this poorly or worse — i.e. only
@@ -64,7 +74,8 @@ const COLUMNS =
   "is_home, line, side, confidence, model_prob_over, book_prob_over, edge, " +
   "has_book_line, has_call, over_price, under_price, sportsbook_key, " +
   "sportsbook_name, projected_median, projected_p10, projected_p90, prior_weight, " +
-  "opponent_rank_vs_position, conference_name, conference_is_displayed";
+  "opponent_rank_vs_position, conference_name, conference_is_displayed, " +
+  "display_confidence";
 
 export type BoardPage = {
   rows: BoardRow[];
@@ -114,7 +125,7 @@ function buildBoardQuery(select: string, filters: BoardFilters, count?: "exact")
     query = query.gte("edge", filters.edgeThreshold ?? 0.05);
   }
   if (filters.minConfidence !== undefined) {
-    query = query.gte("confidence", filters.minConfidence);
+    query = query.gte("display_confidence", filters.minConfidence);
   }
   // Rank 1 is the BEST defense, so "only show me soft matchups" is a FLOOR on
   // the rank, not a ceiling. This was `lte` on a field called maxOpponentRank
@@ -133,31 +144,22 @@ type BoardQuery = ReturnType<typeof buildBoardQuery>;
 /**
  * Apply the sort switch (CLAUDE.md §7).
  *
- * `nullsFirst: false` everywhere: a row with no book line has a null edge and a
- * row with an unrated opponent has a null rank. Neither is a strong pick, and
- * Postgres sorts NULLs first on DESC by default, which would put exactly the
- * least informative rows at the top of the board.
+ * The chain itself — including why every sort ends in opponent rank before the
+ * id tiebreak — is `boardSortKeys` in the core. This only translates it into
+ * PostgREST calls.
+ *
+ * Opponent rank sorts DESCENDING wherever it appears. Rank 1 is the BEST
+ * defense, and nobody sorts a props board to see the toughest matchups first.
  */
 function applySort(query: BoardQuery, sort: BoardSort = "edge"): BoardQuery {
-  const desc = { ascending: false, nullsFirst: false } as const;
   let sorted = query;
-
-  switch (sort) {
-    case "confidence":
-      sorted = sorted.order("confidence", desc);
-      break;
-    case "opponent_rank":
-      // DESCENDING. Rank 1 is now the BEST defense, and nobody sorts a props
-      // board to see the toughest matchups first — this control exists to
-      // surface the softest, which is the highest rank.
-      sorted = sorted.order("opponent_rank_vs_position", desc);
-      break;
-    default:
-      sorted = sorted.order("edge", desc).order("confidence", desc);
+  for (const key of boardSortKeys(sort)) {
+    sorted = sorted.order(key.column, {
+      ascending: key.ascending,
+      nullsFirst: key.nullsFirst,
+    });
   }
-
-  // A stable tiebreak, so paging through a week cannot repeat or skip a row.
-  return sorted.order("projection_id", { ascending: true });
+  return sorted;
 }
 
 export async function getBoardRows(filters: BoardFilters): Promise<BoardPage> {
@@ -320,18 +322,28 @@ export type BoardCounts = {
   rows: number;
   withCall: number;
   withBookLine: number;
+  /**
+   * Book lines written by the synthetic DEV book, counted separately because
+   * they are not evidence a market exists. See `lineCoverage`.
+   */
+  withDevLine: number;
   overThreshold: number;
 };
 
 /**
  * Headline counts for a week, without transferring the rows.
  *
- * `head: true` asks PostgREST for the count and no body. Four cheap queries
+ * `head: true` asks PostgREST for the count and no body. Five cheap queries
  * beat one that ships 6,000 rows so the page can call `.length` on them.
  *
- * `withCall` minus `withBookLine` is the population that matters most right
- * now: rows the model has an opinion on that no book has priced. Before
- * Thursday in a live week that is nearly all of them.
+ * THESE ARE RAW COUNTS OF DISJOINT CONDITIONS AND NOTHING ELSE. Turning them
+ * into "how many are still waiting for a book" is `lineCoverage` in the core,
+ * where it is tested — a subtraction done inline in the page is exactly how the
+ * board came to describe its structural-line rows as awaiting a line.
+ *
+ * `withDevLine` exists because "a line is attached" and "a market exists" are
+ * different facts while `--synthetic-lines` is in use, and the board has to be
+ * able to say which it is looking at.
  */
 export async function getBoardCounts(
   season: number,
@@ -352,17 +364,20 @@ export async function getBoardCounts(
       : query;
   };
 
-  const [all, withCall, withBookLine, overThreshold] = await Promise.all([
-    base(),
-    base().eq("has_call", true),
-    base().eq("has_book_line", true),
-    base().gte("edge", edgeThreshold),
-  ]);
+  const [all, withCall, withBookLine, withDevLine, overThreshold] =
+    await Promise.all([
+      base(),
+      base().eq("has_call", true),
+      base().eq("has_book_line", true),
+      base().eq("sportsbook_key", SYNTHETIC_BOOK_KEY),
+      base().gte("edge", edgeThreshold),
+    ]);
 
   for (const [result, label] of [
     [all, "all"],
     [withCall, "with call"],
     [withBookLine, "with book line"],
+    [withDevLine, "with development line"],
     [overThreshold, "over threshold"],
   ] as const) {
     if (result.error) {
@@ -374,6 +389,7 @@ export async function getBoardCounts(
     rows: all.count ?? 0,
     withCall: withCall.count ?? 0,
     withBookLine: withBookLine.count ?? 0,
+    withDevLine: withDevLine.count ?? 0,
     overThreshold: overThreshold.count ?? 0,
   };
 }
@@ -457,5 +473,7 @@ function toBoardRow(row: Record<string, unknown>): BoardRow {
     conferenceName: (row.conference_name as string | null) ?? null,
     conferenceIsDisplayed:
       (row.conference_is_displayed as boolean | null) ?? null,
+
+    displayConfidence: (row.display_confidence as number | null) ?? null,
   };
 }

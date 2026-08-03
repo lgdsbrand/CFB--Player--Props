@@ -235,8 +235,9 @@ also proves the anon role can still read what the app needs.
 cd worker && python -m worker.jobs.audit_data      # exits non-zero on any failure
 ```
 
-154 checks over the schema, the RLS posture, the anti-lookahead guarantees, the
-odds math and the ingested data. Every check states a **pass condition** rather
+160 checks over the schema, the RLS posture, the anti-lookahead guarantees, the
+odds math, the board's display contract and the ingested data. Every check
+states a **pass condition** rather
 than printing a number for a human to eyeball, because a report that only shows
 counts cannot fail.
 

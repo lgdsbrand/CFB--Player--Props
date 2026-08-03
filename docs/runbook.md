@@ -99,12 +99,13 @@ broken" from "the data is wrong" in about two seconds.
 python -m worker.jobs.audit_data
 ```
 
-The data-integrity canary: **154 checks** over schema objects and constraints,
+The data-integrity canary: **160 checks** over schema objects and constraints,
 RLS posture, the odds math, referential integrity, the anti-lookahead
 guarantees, data completeness, value plausibility, cross-source reconciliation
 between box scores and play attribution, the distribution-family resolution
-layer, Python/SQL agreement on the odds math, and the calibration outputs the
-report is rendered from. Exits non-zero if any check fails.
+layer, Python/SQL agreement on the odds math, the board's display contract, and
+the calibration outputs the report is rendered from. Exits non-zero if any check
+fails.
 
 Every check states a **pass condition** rather than printing a number for a
 human to eyeball. A report that only shows counts cannot fail, and a check that

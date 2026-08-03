@@ -60,7 +60,7 @@ const EXPECTED = {
     "has_book_line", "has_call", "over_price", "under_price", "sportsbook_key",
     "sportsbook_name", "projected_median", "projected_p10", "projected_p90",
     "prior_weight", "opponent_rank_vs_position", "conference_name",
-    "conference_is_displayed",
+    "conference_is_displayed", "display_confidence",
   ],
   v_player_game_log: [
     "player_id", "game_id", "season", "week", "position_group", "is_home",

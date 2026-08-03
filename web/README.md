@@ -18,7 +18,7 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to load **Inter** for body text and Geist Mono for the odds columns. Inter is not a preference — it is the family the client's live site uses, read out of its stylesheet. Theme colours are likewise measured rather than chosen; see the provenance note at the top of `app/globals.css`.
 
 ## Learn More
 

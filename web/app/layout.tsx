@@ -1,9 +1,18 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+/**
+ * Inter, measured — not chosen.
+ *
+ * CLAUDE.md §7 asks for "a modern geometric sans" and says to confirm the family
+ * from the live site. The live site's body rule is
+ * `font-family: Inter, sans-serif`, so this is a match rather than a preference.
+ * Geist Mono stays for the odds columns: they ship no custom mono, so there is
+ * nothing to match there.
+ */
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
@@ -26,7 +35,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${inter.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

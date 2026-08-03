@@ -63,7 +63,9 @@ function readableOn(background: string, alt: string | null): string {
     const altLight = luminance(alt) > 0.55;
     if (altLight !== light) return alt;
   }
-  return light ? "#0b1220" : "#ffffff";
+  // The dark option is the canvas colour, so a chip on a pale team primary
+  // reads as a hole punched through to the page rather than as a fourth navy.
+  return light ? "#0f172a" : "#ffffff";
 }
 
 function luminance(hex: string): number {

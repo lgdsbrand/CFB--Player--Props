@@ -3,10 +3,20 @@
 /* =============================================================================
    Legends Sports theme tokens
    =============================================================================
-   PROVISIONAL VALUES. Every hex below is the approximation recorded in
-   CLAUDE.md §7, not a measured value. Before Phase 5, pull the real values from
-   lgdsanalytics.vercel.app with DevTools and correct them HERE — nothing else in
-   the app should hardcode a colour, so this file is the only edit required.
+   MEASURED, NOT APPROXIMATED. CLAUDE.md §7 gives provisional hexes and then says
+   to pull the real values from the live site's CSS rather than trust them. Every
+   value below was read out of lgdsanalytics.vercel.app's one CSS bundle
+   (`/assets/index-<hash>.css`) on 2026-08-03. The two literals they hardcode:
+
+     :root { --mlb-dark: #0f172a }
+     body  { background: var(--mlb-dark); color: #fff; font-family: Inter, sans-serif }
+     .bg-[#008CFF]  hover:bg-[#007cd6]        <- their primary CTA
+
+   Everything else is stock Tailwind v4 — slate / cyan / indigo / green / rose /
+   amber straight out of the box, as raw oklch. So the oklch triples here are
+   COPIED FROM THEIR BUNDLE rather than converted from a hex, which makes our
+   colours identical to theirs rather than merely close. Hexes in the comments
+   are for the reader; they are the sRGB rendering, not the source of truth.
 
    The design is dark-only on purpose: it must sit natively alongside the
    client's existing MLB, tennis and WNBA engines, so there is no light mode and
@@ -14,34 +24,85 @@
    ============================================================================= */
 
 @theme {
-  /* Surfaces — each inset level sits darker than its parent */
-  --color-canvas: #070b14;
-  --color-panel: #0e1420;
-  --color-panel-inset: #0a0f19;
-  --color-border-subtle: rgba(255, 255, 255, 0.06);
-  --color-border-strong: rgba(255, 255, 255, 0.12);
+  /* ---------------------------------------------------------------------------
+     Surfaces.
 
-  /* Signature gradient — wordmark, key % values, primary CTAs */
-  --color-accent-cyan: #22d3ee;
-  --color-accent-indigo: #6366f1;
+     THE CANVAS MOVED AND THE REST HAD TO BE RE-DERIVED, NOT RE-TYPED. Our
+     provisional canvas was #070B14; theirs is #0F172A — much lighter and bluer.
+     A straight token swap would have left `panel` (#0E1420) sitting DARKER than
+     the page behind it, inverting the one relationship §7 actually specifies:
+     panels lift, insets recess.
+
+     The ramp is three steps of their slate scale, which is exactly the pairing
+     their own cards use (page slate-900, card slate-800):
+
+       canvas  slate-900   the page
+       panel   slate-800   lifted above it
+       inset   slate-950   recessed below its parent panel
+
+     The inset going BELOW the canvas rather than landing on it is deliberate.
+     `bg-panel-inset` is used for the board's form fields, which sit directly on
+     the canvas — an inset that merely equalled the canvas would make every
+     input and select disappear.
+     --------------------------------------------------------------------------- */
+  --color-canvas: #0f172a; /* their --mlb-dark, verbatim */
+  --color-panel: oklch(27.9% 0.041 260.031); /* slate-800  #1d293d */
+  --color-panel-inset: oklch(12.9% 0.042 264.695); /* slate-950  #020618 */
+
+  /* Borders are SOLID slate, not white at low alpha.
+
+     Our ramp is narrow — slate-950 to slate-800 is a 15-point span in L — so one
+     mid-slate reads against all three surfaces (1.5:1 on the inset, 1.4:1 on the
+     panel, 1.7:1 on the canvas) and never has to be tuned per depth. It is also
+     what they do: `border-slate-700` and `border-slate-600` are both in their
+     bundle. An alpha border would have to be re-picked every time a surface
+     changed, which is the thing that just bit us. */
+  --color-border-subtle: oklch(37.2% 0.044 257.287); /* slate-700  #314158 */
+  --color-border-strong: oklch(44.6% 0.043 257.281); /* slate-600  #45556c */
+
+  /* Signature gradient — wordmark and key % values (CLAUDE.md §7) */
+  --color-accent-cyan: oklch(78.9% 0.154 211.53); /* cyan-400    #00d3f2 */
+  --color-accent-indigo: oklch(58.5% 0.233 277.117); /* indigo-500  #615fff */
+
+  /* Brand blue. Absent from CLAUDE.md entirely and present all over their site:
+     it is the fill on their primary buttons. See the note on `.cta` below. */
+  --color-brand: #008cff;
+  --color-brand-hover: #007cd6;
 
   /* Semantic */
-  --color-positive: #22c55e; /* hit / over */
-  --color-negative: #f43f5e; /* miss / under */
-  --color-target: #f5a623; /* totals, weekly targets */
+  --color-positive: oklch(72.3% 0.219 149.579); /* green-500  #00c950 — hit / over */
+  --color-negative: oklch(64.5% 0.246 16.439); /* rose-500   #ff2056 — miss / under */
+  --color-target: oklch(76.9% 0.188 70.08); /* amber-500  #fe9a00 — totals, targets */
 
-  /* Type */
-  --color-ink: #f1f5f9;
-  --color-muted: #64748b;
-  --color-dim: #475569;
+  /* ---------------------------------------------------------------------------
+     Type.
+
+     THE WHOLE RAMP SHIFTED ONE STEP LIGHTER, because contrast is measured
+     against the background and the background got lighter. On the old canvas
+     `dim` (#475569) ran at 2.9:1; against #0F172A the same hex falls to 2.35:1,
+     and `dim` is the colour of every 10px uppercase tracked caption in the
+     product. Keeping the old hexes would have quietly made the smallest text in
+     the app harder to read than it was before the reskin.
+
+     Contrast on the canvas / on a panel:
+       ink    #ffffff   17.8 / 14.6   their body colour, verbatim
+       muted  slate-400  6.8 /  5.6   passes AA everywhere
+       dim    slate-500  3.7 /  3.1   passes AA-large only — see `.label-caption`
+     --------------------------------------------------------------------------- */
+  --color-ink: #ffffff; /* their body colour, verbatim */
+  --color-muted: oklch(70.4% 0.04 256.788); /* slate-400  #90a1b9 */
+  --color-dim: oklch(55.4% 0.046 257.417); /* slate-500  #62748e */
 
   --tracking-label: 0.12em;
-  --radius-card: 14px;
 
-  /* PLACEHOLDER FONT. CLAUDE.md §7 calls for a modern geometric sans and says
-     to confirm the family from the live site. Geist ships with the scaffold and
-     is close enough to build against; swap the variable, not the usages. */
-  --font-display: var(--font-geist-sans);
+  /* Their card radii are rounded-2xl (16px) outside, rounded-xl (12px) inside.
+     CLAUDE.md's "~14px" was the eyeball estimate between the two. */
+  --radius-card: 1rem;
+
+  /* Inter, confirmed from `body { font-family: Inter, sans-serif }`. Geist Mono
+     stays for `font-mono`: they ship no custom mono, so there is nothing to
+     match, and the odds columns want tabular figures that pair with Inter. */
+  --font-display: var(--font-inter);
   --font-mono: var(--font-geist-mono);
 }
 
@@ -59,14 +120,19 @@
 
 @layer components {
   /* Tiny uppercase tracked caption sitting above a bold value
-     (SELECTION, ODDS (BOOK), CONF …) */
+     (SELECTION, ODDS (BOOK), CONF …)
+
+     DELIBERATELY `muted`, NOT `dim`. This is the smallest text in the product —
+     10px, uppercase, 0.12em tracking — so it is the last thing that should be
+     painted in the faintest colour available. `dim` remains for de-emphasised
+     prose at normal sizes, where 3.7:1 is defensible. */
   .label-caption {
     font-size: 0.625rem;
     font-weight: 600;
     line-height: 1;
     text-transform: uppercase;
     letter-spacing: var(--tracking-label);
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   /* Bold wide-tracked uppercase section header */
@@ -87,7 +153,7 @@
   .panel-inset {
     background-color: var(--color-panel-inset);
     border: 1px solid var(--color-border-subtle);
-    border-radius: calc(var(--radius-card) - 4px);
+    border-radius: calc(var(--radius-card) - 0.25rem);
   }
 
   /* Cyan → indigo gradient as text fill, for hero % values and the wordmark */
@@ -100,6 +166,36 @@
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+  }
+
+  /* Primary CTA.
+
+     FLAT BRAND BLUE, NOT THE GRADIENT, AND THAT IS A DELIBERATE DEPARTURE FROM
+     CLAUDE.md §7. §7 lists "primary CTAs" as a third use of the cyan→indigo
+     gradient, but the live site's buttons are `bg-[#008CFF] hover:bg-[#007cd6]`
+     — flat. §7 also says to prefer the measured values over its own
+     approximations, and the governing requirement is that this ships inside
+     their site without reading as a bolted-on tool. The gradient keeps the two
+     places §7 is unambiguous about: the wordmark and the hero % values.
+
+     Swap `background-color` back to the gradient here if the client wants §7 as
+     written; it is one rule and no component changes. */
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    border-radius: 0.5rem;
+    background-color: var(--color-brand);
+    color: #ffffff;
+    font-size: 0.6875rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-label);
+    transition: background-color 150ms ease;
+  }
+
+  .cta:hover {
+    background-color: var(--color-brand-hover);
   }
 
   .pill {

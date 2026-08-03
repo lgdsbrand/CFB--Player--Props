@@ -223,7 +223,7 @@ export function BoardControls({
 
         <button
           type="submit"
-          className="from-accent-cyan to-accent-indigo text-canvas rounded-lg bg-gradient-to-r px-4 py-1.5 text-[0.6875rem] font-extrabold uppercase tracking-label"
+          className="cta px-4 py-1.5"
         >
           Apply →
         </button>

@@ -49,7 +49,11 @@ export function ProjectionBar({
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="bg-panel-inset relative h-2 w-full overflow-hidden rounded-full">
+      {/* The track is `panel`, matching the rank bar in the defense panel. Both
+          sit inside a `panel-inset`, so a track painted in the inset's own
+          colour would be an invisible channel — you would see the fill and the
+          ticks floating with nothing behind them. */}
+      <div className="bg-panel relative h-2 w-full overflow-hidden rounded-full">
         {/* p10–p90: where the outcome most likely falls. */}
         <span
           aria-hidden

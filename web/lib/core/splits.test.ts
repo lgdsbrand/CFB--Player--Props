@@ -20,7 +20,7 @@ import {
   defenseStatForMarket,
   defenseStatsFor,
   perGame,
-  rankFraction,
+  matchupSoftness,
 } from "./defense-view.ts";
 import { gradeGames, type GradedGame } from "./hit-rate.ts";
 import {
@@ -159,10 +159,11 @@ test("the bands cover every rank with no gap and no overlap", () => {
   }
 });
 
-test("rank 1 is the SOFT band — the scale is inverted", () => {
-  // The single most common way to get this backwards. Rank 1 allows the MOST.
-  assert.equal(rankBands(134)[0].key, "soft");
-  assert.equal(rankBands(134)[2].key, "tough");
+test("rank 1 is the TOUGH band — 1 is the best defense", () => {
+  // The single most common way to get this backwards. Rank 1 allows the LEAST.
+  assert.equal(rankBands(134)[0].key, "tough");
+  assert.equal(rankBands(134)[0].minRank, 1);
+  assert.equal(rankBands(134)[2].key, "soft");
 });
 
 test("a degenerate field does not produce an empty band", () => {
@@ -173,8 +174,8 @@ test("a degenerate field does not produce an empty band", () => {
 
 test("games split into the band their opponent held THAT week", () => {
   const rows = graded(
-    game(3, { recYards: 60 }), // rank 5 → soft
-    game(2, { recYards: 20 }), // rank 120 → tough
+    game(3, { recYards: 60 }), // rank 5 → TOUGH (1 is the best defense)
+    game(2, { recYards: 20 }), // rank 120 → SOFT
     game(1, { recYards: 60 }), // rank 70 → middle
   );
   const ranks = new Map([
@@ -188,9 +189,9 @@ test("games split into the band their opponent held THAT week", () => {
   assert.deepEqual(
     splits.map((s) => [s.key, s.summary.hits, s.summary.decided]),
     [
-      ["soft", 1, 1],
+      ["tough", 1, 1],
       ["middle", 1, 1],
-      ["tough", 0, 1],
+      ["soft", 0, 1],
     ],
   );
 });
@@ -214,9 +215,10 @@ test("bands with no games are dropped, so no band renders as 0%", () => {
   const rows = graded(game(1, { recYards: 60 }));
   const { splits } = rankSplits(rows, new Map([[1001, 5]]), rankBands(134));
 
+  // Rank 5 is a top-5 defense, so this lands in TOUGH.
   assert.deepEqual(
     splits.map((s) => s.key),
-    ["soft"],
+    ["tough"],
   );
 });
 
@@ -302,9 +304,10 @@ test("total TDs sums rushing and receiving without treating a null as absent", (
   assert.equal(stat.value(defenseGame(1)), null);
 });
 
-test("rank fraction runs soft to tough, and refuses a degenerate field", () => {
-  assert.equal(rankFraction(1, 134), 0);
-  assert.equal(rankFraction(134, 134), 1);
-  assert.equal(rankFraction(1, 1), null);
-  assert.equal(rankFraction(1, 0), null);
+test("matchup softness runs tough to soft, and refuses a degenerate field", () => {
+  // Rank 1 is the BEST defense, so it is the toughest matchup: softness 0.
+  assert.equal(matchupSoftness(1, 134), 0);
+  assert.equal(matchupSoftness(134, 134), 1);
+  assert.equal(matchupSoftness(1, 1), null);
+  assert.equal(matchupSoftness(1, 0), null);
 });

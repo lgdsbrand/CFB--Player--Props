@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { TeamChip } from "@/components/board/team-chip";
 import { boardHref, type BoardParams } from "@/lib/core/board-params";
-import { rankFraction } from "@/lib/core/defense-view";
+import { matchupSoftness } from "@/lib/core/defense-view";
 import type { PositionTargets, TargetRow } from "@/lib/core/targets";
 import type { TeamInfo } from "@/lib/data/teams";
 
@@ -25,7 +25,7 @@ import type { TeamInfo } from "@/lib/data/teams";
  * is legible on arrival.
  *
  * WHAT THE NUMBERS ARE, STATED RATHER THAN IMPLIED. The rank is national and
- * opponent-adjusted, so "3 of 136" means third-softest in the country, not
+ * opponent-adjusted, so "134 of 136" means third-softest in the country, not
  * third on this slate. The per-game figure beside it is the adjusted figure the
  * rank was built from, which is why it will not match a raw stat page — the
  * whole point of the adjustment is that a unit which faced three weak offences
@@ -87,7 +87,7 @@ export function WeeklyTargets({
       )}
 
       <p className="text-dim max-w-prose text-[0.625rem]">
-        Rank is national and opponent-adjusted — 1 allows the most of all rated
+        Rank is national and opponent-adjusted — 1 is the best of all rated
         defenses, not just those playing. The per-game figure is the adjusted
         one the rank was built from, so it will not match a raw stat line.
       </p>
@@ -164,7 +164,7 @@ function TargetLine({
 }) {
   const defense = teams.get(row.defenseTeamId);
   const offense = teams.get(row.offenseTeamId);
-  const fraction = rankFraction(row.rank, entry.rankedDefenses);
+  const fraction = matchupSoftness(row.rank, entry.rankedDefenses);
 
   return (
     <li>

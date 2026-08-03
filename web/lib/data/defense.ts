@@ -134,7 +134,7 @@ export type DefenseRating = {
   adjReceptionsAllowedPg: number | null;
   adjRushTdsAllowedPg: number | null;
   adjRecTdsAllowedPg: number | null;
-  /** 1 = allows the MOST. Inverted vs a conventional ranking — always label it. */
+  /** 1 = the BEST defense against this position (the conventional reading). */
   rankVsPosition: number | null;
   /** How much the rating is trusted, 0..1. Low early in the season. */
   shrinkageWeight: number | null;

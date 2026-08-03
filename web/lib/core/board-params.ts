@@ -27,7 +27,7 @@ export type BoardParams = {
   sort: BoardSort;
   edgesOnly: boolean;
   minConfidence?: number;
-  maxOpponentRank?: number;
+  minOpponentRank?: number;
   hitRateWindow: number;
   page: number;
 };
@@ -89,7 +89,7 @@ export function parseBoardParams(
         : "edge",
     edgesOnly: edgesOnly === undefined ? edgesOnlyDefault : edgesOnly === "1",
     minConfidence: float(raw.conf),
-    maxOpponentRank: int(raw.rank),
+    minOpponentRank: int(raw.rank),
     hitRateWindow: int(raw.window) ?? DEFAULT_HIT_RATE_WINDOW,
     page: Math.max(int(raw.page) ?? 1, 1),
   };
@@ -124,7 +124,7 @@ export function boardHref(
   if (next.sort !== "edge") set("sort", next.sort);
   if (next.edgesOnly) set("edges", "1");
   set("conf", next.minConfidence);
-  set("rank", next.maxOpponentRank);
+  set("rank", next.minOpponentRank);
   if (next.hitRateWindow !== DEFAULT_HIT_RATE_WINDOW) {
     set("window", next.hitRateWindow);
   }

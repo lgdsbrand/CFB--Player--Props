@@ -111,10 +111,14 @@ export type RankBand = {
 export function rankBands(rankedDefenses: number): RankBand[] {
   const third = Math.max(Math.ceil(rankedDefenses / 3), 1);
   return [
+    // Rank 1 is the BEST defense, so the TOUGH band is the low ranks. The
+    // bands stay ordered tough -> soft rather than by rank number, because the
+    // row reads as a difficulty scale and a reader scanning it left to right
+    // should see difficulty change monotonically.
     {
-      key: "soft",
-      label: "Soft",
-      hint: `Opponent ranked 1–${third} vs the position — the defenses allowing the MOST`,
+      key: "tough",
+      label: "Tough",
+      hint: `Opponent ranked 1–${third} vs the position — the defenses allowing the LEAST`,
       minRank: 1,
       maxRank: third,
     },
@@ -126,9 +130,9 @@ export function rankBands(rankedDefenses: number): RankBand[] {
       maxRank: third * 2,
     },
     {
-      key: "tough",
-      label: "Tough",
-      hint: `Opponent ranked ${third * 2 + 1}+ vs the position — the defenses allowing the LEAST`,
+      key: "soft",
+      label: "Soft",
+      hint: `Opponent ranked ${third * 2 + 1}+ vs the position — the defenses allowing the MOST`,
       minRank: third * 2 + 1,
       maxRank: Number.POSITIVE_INFINITY,
     },

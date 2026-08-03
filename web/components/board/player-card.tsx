@@ -96,7 +96,7 @@ export function PlayerCard({
             <span
               className="pill bg-panel-inset text-muted"
               title={
-                "Opponent rank vs this position — 1 allows the most, so a LOW " +
+                "Opponent rank vs this position — 1 is the best defense, so a HIGH " +
                 "number is the softer matchup." +
                 (card.positionGroup
                   ? ` Ranked on ${rankBasis(card.positionGroup).label}.`

@@ -215,20 +215,19 @@ def build_prompt(inputs: PromptInputs) -> str:
 
 
 def describe_matchup(rank: int, ranked_defenses: int | None) -> str:
-    """State what a defensive rank MEANS, so the model never has to invert it.
+    """State what a defensive rank MEANS, so the model never has to work it out.
 
-    `rank_vs_position` is inverted against every convention a reader — or a
-    language model — has absorbed: **1 allows the MOST**. Handed the raw number,
-    Gemini wrote "a favorable ground matchup against an Ohio State defense that
-    ranks 118th of 136", which is exactly backwards: 118th of 136 is a defence
-    that gives up almost nothing. It did that with the convention spelled out
-    immediately above in capitals.
+    `rank_vs_position` now counts **1 = the BEST defence**, the conventional
+    reading. It previously counted the other way, and handing a model the raw
+    number under that convention produced "a favorable ground matchup against
+    an Ohio State defense that ranks 118th of 136" — exactly backwards, with the
+    rule spelled out in capitals immediately above.
 
-    That is not a prompt-wording problem to solve with a firmer instruction. An
-    inversion the model must perform is an inversion it will sometimes get
-    wrong, and a wrong one reads perfectly fluently — the same failure shape as
-    the anytime-TD inversion in Phase 4c. So we do the arithmetic, and the model
-    is given a conclusion it only has to repeat.
+    Fixing the convention removes most of that risk, but this function stays,
+    because the residual risk is the same shape: turning a rank into a verdict
+    is an inference, and an inference a model makes is one it can make wrongly
+    while reading perfectly fluently. We do the arithmetic; the model repeats a
+    conclusion.
 
     The raw rank is still included, because the page shows it and the prose
     should agree with the page.
@@ -236,24 +235,25 @@ def describe_matchup(rank: int, ranked_defenses: int | None) -> str:
     if not ranked_defenses or ranked_defenses < 2:
         return f"ranked {rank} against this position"
 
-    # Share of defences that are STINGIER than this one.
+    # Share of defences that give up LESS than this one. Rank 1 gives up the
+    # least, so a high rank means a lot of defences are stingier.
     stingier = (rank - 1) / (ranked_defenses - 1)
     if stingier >= 2 / 3:
         verdict = (
-            "a HARD matchup - it gives up less than most defences do, so the "
-            "matchup argues AGAINST production here"
+            "a SOFT matchup - it gives up more than most defences do, so the "
+            "matchup argues FOR production here"
         )
     elif stingier <= 1 / 3:
         verdict = (
-            "a SOFT matchup - it gives up more than most defences do, so the "
-            "matchup argues FOR production here"
+            "a HARD matchup - it gives up less than most defences do, so the "
+            "matchup argues AGAINST production here"
         )
     else:
         verdict = "an AVERAGE matchup - it gives up about what a typical defence does"
 
     return (
-        f"{verdict} (national rank {rank} of {ranked_defenses}, counting from "
-        f"the most generous defence as 1)"
+        f"{verdict} (national rank {rank} of {ranked_defenses}, where 1 is the "
+        f"BEST defence against this position)"
     )
 
 

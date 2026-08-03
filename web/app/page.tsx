@@ -103,7 +103,7 @@ export default async function Home({
     edgesOnly: resolved.edgesOnly,
     edgeThreshold: config.edgeThreshold,
     minConfidence: resolved.minConfidence,
-    maxOpponentRank: resolved.maxOpponentRank,
+    minOpponentRank: resolved.minOpponentRank,
     sort: resolved.sort,
   };
 
@@ -225,7 +225,7 @@ export default async function Home({
                 conference: undefined,
                 search: undefined,
                 minConfidence: undefined,
-                maxOpponentRank: undefined,
+                minOpponentRank: undefined,
                 edgesOnly: false,
               })}
               className="text-accent-cyan hover:underline"
@@ -283,7 +283,7 @@ export default async function Home({
       />
 
       <p className="text-dim text-xs">
-        Opponent rank 1 allows the most to the position — a low number is the
+        Opponent rank 1 is the best defense against the position — a HIGH number is the
         softer matchup. Ranks come from opponent-adjusted yards allowed to that
         position: rushing for QB and RB, receiving for WR and TE, so a QB rank
         describes rushing only. Confidence is the share of the projected

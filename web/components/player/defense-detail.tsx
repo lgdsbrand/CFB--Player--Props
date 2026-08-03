@@ -3,7 +3,7 @@ import {
   defenseStatsFor,
   perGame,
   rankBasis,
-  rankFraction,
+  matchupSoftness,
   type DefenseStat,
 } from "@/lib/core/defense-view";
 import { formatCount } from "@/lib/core/format";
@@ -46,7 +46,7 @@ export function DefenseDetail({
   asOfWeek: number;
 }) {
   const stats = defenseStatsFor(position);
-  const fraction = rank !== null ? rankFraction(rank, rankedDefenses) : null;
+  const fraction = rank !== null ? matchupSoftness(rank, rankedDefenses) : null;
   const basis = rankBasis(position);
 
   return (
@@ -112,7 +112,7 @@ export function DefenseDetail({
               </span>
             </div>
 
-            {/* Soft on the left, because rank 1 allows the most. */}
+            {/* Tough on the left, because rank 1 is the best defense. */}
             {fraction !== null ? (
               <div className="flex flex-col gap-1">
                 <div className="bg-panel relative h-1.5 w-full overflow-hidden rounded-full">
@@ -123,7 +123,7 @@ export function DefenseDetail({
                   />
                 </div>
                 <div className="text-dim flex justify-between text-[0.625rem]">
-                  <span>1 · allows the most</span>
+                  <span>1 · best defense</span>
                   <span>{rankedDefenses} · allows the least</span>
                 </div>
               </div>

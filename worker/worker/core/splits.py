@@ -410,19 +410,27 @@ def compute_ratings(season: int, max_week: int | None = None) -> int:
 
                 rows_this_cut.append(row)
 
-            # rank_vs_position: 1 = allows the MOST, i.e. the softest matchup.
-            # This orientation is what the product needs — it drives the
-            # "weekly targets / who to target" list and the opponent-rank sort
-            # in CLAUDE.md §7 — so it is the opposite of a conventional
-            # defensive ranking where 1 is best.
+            # rank_vs_position: 1 = allows the LEAST, i.e. the BEST defense.
+            #
+            # This is the conventional reading, and it is conventional for a
+            # reason: everyone who looks at a defensive ranking already knows
+            # what "ranked 3rd" means. The earlier orientation (1 = allows the
+            # most) was chosen because the product's headline use is a
+            # "who to target" list, but it cost more than it saved — a reader
+            # has to be told the convention before any rank means anything, and
+            # Gemini, given the convention in capitals immediately above the
+            # number, still described rank 118 of 136 as "a favorable matchup".
+            # A convention that has to be explained every time it appears is
+            # the wrong convention.
+            #
+            # Consumers that want the SOFTEST defenses now sort DESCENDING:
+            # the weekly targets list and the board's matchup sort both do.
             #
             # Indexing RANK_METRICS raises KeyError for an unmapped position,
             # deliberately: a new position group must state what it ranks on
             # rather than silently inherit somebody else's metric.
             rank_metric = RANK_METRICS[position]
-            rows_this_cut.sort(
-                key=lambda r, m=rank_metric: r.get(m) or 0.0, reverse=True
-            )
+            rows_this_cut.sort(key=lambda r, m=rank_metric: r.get(m) or 0.0)
             for rank, row in enumerate(rows_this_cut, start=1):
                 row["rank_vs_position"] = rank
 

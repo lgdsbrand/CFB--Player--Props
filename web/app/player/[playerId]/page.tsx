@@ -305,7 +305,7 @@ export default async function PlayerDetail({
                     note={
                       `Bands are thirds of the ${ranked.length} defenses rated vs ${position}, ` +
                       `each opponent taken at the rank it held entering that week. ` +
-                      `Rank 1 allows the most, on ${rankBasis(position).label}.` +
+                      `Rank 1 is the best defense, on ${rankBasis(position).label}.` +
                       (byRank.unranked > 0
                         ? ` ${byRank.unranked} game${byRank.unranked === 1 ? "" : "s"} set aside as unrated.`
                         : "")

@@ -99,7 +99,7 @@ export type BoardRow = {
   /** Share of the projection carried by priors rather than this season. */
   priorWeight: number | null;
 
-  /** Rank 1 = allows the MOST to this position, i.e. the softest matchup. */
+  /** Rank 1 = the BEST defense vs this position. A HIGH rank is the soft one. */
   opponentRankVsPosition: number | null;
 
   conferenceName: string | null;

@@ -12,10 +12,11 @@
  * defense is bad".
  *
  * TWO ORDERINGS THAT LOOK ALIKE AND ARE NOT. `rank_vs_position` ranks a defense
- * against every rated defense in the country (1 = allows the most). This module
- * ranks the slate. A defense can top the weekly list at national rank 7 — the
- * six softer units simply are not playing — so both numbers travel together and
- * the panel shows the national one, which is the one that means something.
+ * against every rated defense in the country (1 = the BEST defense, so the
+ * softest are the HIGHEST ranks). This module ranks the slate. A defense can top
+ * the weekly list at national rank 130 of 136 — the six softer units simply are
+ * not playing — so both numbers travel together and the panel shows the national
+ * one, which is the one that means something.
  */
 
 // Relative, with the extension: these carry VALUES, and Node's test runner does
@@ -50,7 +51,7 @@ export type TargetRow = {
   defenseIsHome: boolean;
   neutralSite: boolean;
   startDate: string | null;
-  /** Rank among ALL rated defenses nationally; 1 allows the most. */
+  /** Rank among ALL rated defenses nationally; 1 = the best defense. */
   rank: number;
   /** The opponent-adjusted per-game figure the rank was built from. */
   value: number | null;
@@ -159,8 +160,9 @@ export function buildWeeklyTargets(
       });
     }
 
-    // Ascending rank: 1 allows the most, so the softest matchup leads.
-    rows.sort((a, b) => a.rank - b.rank);
+    // DESCENDING rank: 1 is the BEST defense, so the softest matchup — the one
+    // this panel exists to surface — is the HIGHEST rank.
+    rows.sort((a, b) => b.rank - a.rank);
 
     return {
       position,

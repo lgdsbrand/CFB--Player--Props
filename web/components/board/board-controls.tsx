@@ -205,12 +205,19 @@ export function BoardControls({
           </Select>
         </Field>
 
-        <Field label="Opp rank ≤">
-          <Select name="rank" defaultValue={params.maxOpponentRank?.toString() ?? ""}>
+        {/*
+          Rank 1 is the BEST defense, so the soft matchups this filter exists
+          to find are the HIGH ranks. Stated as "≥" rather than dressed up as
+          "top N softest": the number in the control is the number on the card,
+          and a filter whose label disagrees with the value beside it is how a
+          reader stops trusting both.
+        */}
+        <Field label="Opp rank ≥">
+          <Select name="rank" defaultValue={params.minOpponentRank?.toString() ?? ""}>
             <option value="">Any</option>
-            <option value="10">Top 10 softest</option>
-            <option value="25">Top 25</option>
-            <option value="50">Top 50</option>
+            <option value="90">90+ (soft)</option>
+            <option value="110">110+</option>
+            <option value="125">125+ (softest)</option>
           </Select>
         </Field>
 
@@ -231,7 +238,7 @@ export function BoardControls({
               conference: undefined,
               search: undefined,
               minConfidence: undefined,
-              maxOpponentRank: undefined,
+              minOpponentRank: undefined,
             },
           )}
           className="text-dim hover:text-muted px-2 py-1.5 text-[0.6875rem] font-semibold uppercase tracking-label"

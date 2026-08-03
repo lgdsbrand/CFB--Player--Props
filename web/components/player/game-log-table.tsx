@@ -21,7 +21,7 @@ export function GameLogTable({
 }: {
   games: GradedGame[];
   unit: string | null;
-  /** Opponent rank vs the position AS IT STOOD that week; 1 allows the most. */
+  /** Opponent rank vs the position AS IT STOOD that week; 1 = best defense. */
   rankByGameId: Map<number, number>;
 }) {
   if (games.length === 0) {
@@ -39,7 +39,7 @@ export function GameLogTable({
           <tr className="text-dim [&>th]:px-2 [&>th]:py-1.5 [&>th]:font-semibold [&>th]:uppercase [&>th]:tracking-label [&>th]:text-[0.625rem]">
             <th>Wk</th>
             <th>Opp</th>
-            <th className="text-right" title="Opponent rank vs this position entering that week — 1 allows the most">
+            <th className="text-right" title="Opponent rank vs this position entering that week — 1 is the best defense">
               Rk
             </th>
             <th className="text-right">{unit ?? "Value"}</th>

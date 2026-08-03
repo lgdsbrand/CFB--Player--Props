@@ -612,12 +612,40 @@ check(G, "rank_vs_position orders by the metric that position is measured on", "
                partition by season, as_of_week, position_group
                order by case when position_group in ('QB','RB')
                              then adj_rush_yards_allowed_pg
-                             else adj_rec_yards_allowed_pg end desc
+                             else adj_rec_yards_allowed_pg end asc
              ) as expected
         from defense_position_ratings
     )
     select count(*) as bad from ranked where stored <> expected
 """, lambda r: r["bad"] == 0)
+
+# THE DIRECTION, stated independently of the ordering check above.
+#
+# The check above would pass just as happily if the whole scale were reversed,
+# because it recomputes with the same ASC that it is verifying — reverse both
+# and they still agree. That is the shape of guard this project has been caught
+# by twice. So state the direction as a fact about the world instead: the
+# best-ranked defense must give up LESS than the worst-ranked one, by a margin
+# no noise could produce.
+check(G, "rank 1 is the BEST defense, not the softest (DIRECTION)", """
+    with m as (
+      select season, as_of_week, position_group, rank_vs_position,
+             case when position_group in ('QB','RB') then adj_rush_yards_allowed_pg
+                  else adj_rec_yards_allowed_pg end as allowed,
+             max(rank_vs_position) over (
+               partition by season, as_of_week, position_group) as field
+        from defense_position_ratings
+    )
+    select count(*) as cuts,
+           count(*) filter (where best >= worst) as inverted,
+           round(avg(worst - best)::numeric, 1) as avg_spread
+      from (
+        select season, as_of_week, position_group,
+               max(allowed) filter (where rank_vs_position = 1) as best,
+               max(allowed) filter (where rank_vs_position = field) as worst
+          from m group by season, as_of_week, position_group
+      ) x
+""", lambda r: r["cuts"] > 0 and r["inverted"] == 0)
 
 # The independent half: no appeal to what the code ranked on, just the fact that
 # a per-game yards-allowed figure a rank is built from cannot be zero or

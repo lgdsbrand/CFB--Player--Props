@@ -188,13 +188,23 @@ export function perGame(
 }
 
 /**
- * Where a rank sits in the field, as a 0..1 fraction — 0 is the softest.
+ * How SOFT a matchup is, as a 0..1 fraction — 0 is the toughest defense in the
+ * field, 1 the most generous.
  *
- * Rank 1 allows the MOST, so this does NOT invert: a small rank gives a small
- * fraction, and a bar drawn from it fills from the soft end.
+ * Named for what it means rather than for the number it is derived from.
+ * `rank_vs_position` now counts 1 = the BEST defense, so a fraction that simply
+ * tracked the rank would fill a bar from the wrong end, and a helper called
+ * `rankFraction` that silently inverted would be a trap for the next reader.
+ * Callers colour a bar with this; they should not have to remember which way
+ * the underlying rank runs.
  */
-export function rankFraction(rank: number, ranked: number): number | null {
+export function matchupSoftness(rank: number, ranked: number): number | null {
   if (ranked <= 1 || rank < 1) return null;
+  // Rank 1 is the BEST defense, so softness rises WITH the rank. Note this is
+  // arithmetically what the old `rankFraction` computed — under the previous
+  // convention the same expression meant the opposite thing. Renaming it was
+  // the point: the formula is unchanged and its meaning is not, which is
+  // precisely the kind of flip that survives a type check.
   return Math.min(Math.max((rank - 1) / (ranked - 1), 0), 1);
 }
 

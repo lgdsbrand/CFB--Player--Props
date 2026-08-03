@@ -43,12 +43,11 @@ export type BoardFilters = {
   /** Only rows at or above this confidence, e.g. 0.6. */
   minConfidence?: number;
   /**
-   * Only matchups at or better than this rank vs the position. Rank 1 allows
-   * the MOST, so "better" means a SMALLER number — the scale is inverted
-   * relative to a conventional defensive ranking and anything surfacing it
-   * has to label it.
+   * Only matchups against a defense ranked this poorly or worse — i.e. only
+   * SOFT matchups. Rank 1 is the BEST defense (the conventional reading), so
+   * softer means a LARGER number.
    */
-  maxOpponentRank?: number;
+  minOpponentRank?: number;
   /** Only rows that have a book line attached. */
   withBookLineOnly?: boolean;
 
@@ -117,8 +116,13 @@ function buildBoardQuery(select: string, filters: BoardFilters, count?: "exact")
   if (filters.minConfidence !== undefined) {
     query = query.gte("confidence", filters.minConfidence);
   }
-  if (filters.maxOpponentRank !== undefined) {
-    query = query.lte("opponent_rank_vs_position", filters.maxOpponentRank);
+  // Rank 1 is the BEST defense, so "only show me soft matchups" is a FLOOR on
+  // the rank, not a ceiling. This was `lte` on a field called maxOpponentRank
+  // under the old convention; renaming it forced every call site to be looked
+  // at rather than quietly leaving a filter that now selects the exact
+  // opposite set of rows while still type-checking.
+  if (filters.minOpponentRank !== undefined) {
+    query = query.gte("opponent_rank_vs_position", filters.minOpponentRank);
   }
 
   return query;
@@ -143,10 +147,10 @@ function applySort(query: BoardQuery, sort: BoardSort = "edge"): BoardQuery {
       sorted = sorted.order("confidence", desc);
       break;
     case "opponent_rank":
-      sorted = sorted.order("opponent_rank_vs_position", {
-        ascending: true,
-        nullsFirst: false,
-      });
+      // DESCENDING. Rank 1 is now the BEST defense, and nobody sorts a props
+      // board to see the toughest matchups first — this control exists to
+      // surface the softest, which is the highest rank.
+      sorted = sorted.order("opponent_rank_vs_position", desc);
       break;
     default:
       sorted = sorted.order("edge", desc).order("confidence", desc);

@@ -31,27 +31,29 @@ BASE = PromptInputs(
 
 
 class TestMatchupInversion:
-    """`rank_vs_position` counts 1 = ALLOWS THE MOST, against every convention.
+    """`rank_vs_position` counts 1 = the BEST defence (allows the least).
 
-    Handed the raw rank, Gemini wrote "a favorable ground matchup against an
-    Ohio State defense that ranks 118th of 136" — backwards — with the
-    convention spelled out in capitals immediately above. So the prompt states
-    the conclusion and the model never performs the inversion.
+    Under the previous convention (1 = allows the most) Gemini turned rank 118
+    of 136 into "a favorable ground matchup", with the rule spelled out in
+    capitals immediately above. The convention is now the conventional one, and
+    the verdict is still computed here rather than left to the model — turning
+    a rank into soft-or-hard is an inference, and an inference a model makes is
+    one it can make wrongly while reading perfectly fluently.
     """
 
-    def test_a_high_rank_is_stated_as_hard(self):
+    def test_a_high_rank_is_the_soft_matchup(self):
         text = describe_matchup(118, 136)
-        assert "HARD" in text
-        assert "AGAINST" in text
-
-    def test_a_low_rank_is_stated_as_soft(self):
-        text = describe_matchup(3, 136)
         assert "SOFT" in text
         assert "FOR" in text
 
+    def test_a_low_rank_is_the_hard_matchup(self):
+        text = describe_matchup(3, 136)
+        assert "HARD" in text
+        assert "AGAINST" in text
+
     def test_the_extremes_do_not_flip(self):
-        assert "SOFT" in describe_matchup(1, 136)
-        assert "HARD" in describe_matchup(136, 136)
+        assert "HARD" in describe_matchup(1, 136)
+        assert "SOFT" in describe_matchup(136, 136)
 
     def test_the_middle_is_average(self):
         assert "AVERAGE" in describe_matchup(68, 136)
@@ -70,7 +72,7 @@ class TestMatchupInversion:
             PromptInputs(**{**BASE.__dict__, "opponent_rank": 118,
                             "ranked_defenses": 136})
         )
-        assert "HARD matchup" in prompt
+        assert "SOFT matchup" in prompt
 
 
 class TestBinaryMarkets:

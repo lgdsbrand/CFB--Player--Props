@@ -73,7 +73,7 @@ test("both teams in a game appear, each defending against the other", () => {
   assert.equal(awayDefending.defenseIsHome, false);
 });
 
-test("the softest defense leads, because rank 1 allows the most", () => {
+test("the softest defense leads, and softest is the HIGHEST rank", () => {
   const result = positions(
     buildWeeklyTargets(
       [game(10, HOME, AWAY), game(11, 3, 4)],
@@ -88,7 +88,7 @@ test("the softest defense leads, because rank 1 allows the most", () => {
 
   assert.deepEqual(
     result.rows.map((r) => r.rank),
-    [3, 12, 40, 118],
+    [118, 40, 12, 3],
   );
 });
 
@@ -208,9 +208,11 @@ test("the limit caps each position independently", () => {
 
   const result = positions(buildWeeklyTargets(games, ratings, { limit: 3 }));
   assert.equal(result.get("RB")!.rows.length, 3);
+  // Softest first, and softest is the HIGHEST rank: the away side was seeded
+  // 20..27, so those lead.
   assert.deepEqual(
     result.get("RB")!.rows.map((row) => row.rank),
-    [1, 2, 3],
+    [27, 26, 25],
   );
   // onSlate counts the whole slate, not the truncated list — it is the
   // denominator for "5 of 16 matchups", so truncation must not shrink it.

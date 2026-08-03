@@ -23,16 +23,86 @@ the calibration outputs the Phase 3 report is rendered from.
 from __future__ import annotations
 
 import sys
+import uuid
 
 import psycopg
 
 from worker.core import probability
 from worker.db import connect, fetch_all, fetch_one
-from worker.logging_setup import configure_logging
+from worker.logging_setup import configure_logging, get_logger
 
 configure_logging("ERROR")
+log = get_logger(__name__)
+
+JOB_NAME = "audit_data"
 
 RESULTS: list[tuple[str, str, bool, str]] = []
+
+
+# -----------------------------------------------------------------------------
+# Run bookkeeping, so this can be a scheduled canary and not just a thing people
+# remember to type.
+# -----------------------------------------------------------------------------
+# Phase 5d schedules this daily. For the monitor to notice that the canary
+# stopped singing, the canary has to leave a record — so the audit writes a
+# `pipeline_runs` row like every other job.
+#
+# Deliberately NOT `worker.db.pipeline_run`: that is a context manager, and this
+# module is a flat script whose checks execute at import. Wrapping it would mean
+# restructuring 1,400 lines of working assertions to gain a `with` block.
+#
+# The consequence is worth stating rather than hiding: if the script dies
+# part-way — a query that raises outside a `check()`, an OOM — the row stays
+# 'running' and is never closed. That is not a gap. `monitor_pipeline`'s first
+# check looks for exactly that, so the audit crashing is detected by the same
+# mechanism the audit feeds. The failure mode of the bookkeeping is caught by
+# the thing the bookkeeping exists for.
+def _open_run() -> uuid.UUID | None:
+    run_id = uuid.uuid4()
+    try:
+        with connect(autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(
+                "insert into pipeline_runs (id, job_name, status) values (%s, %s, 'running')",
+                (run_id, JOB_NAME),
+            )
+        return run_id
+    except Exception as exc:  # noqa: BLE001
+        # Never let bookkeeping stop the audit. A missing run row costs one
+        # monitoring signal; a refusal to run costs every check in this file.
+        log.warning("Could not open a pipeline_runs row for the audit: %s", exc)
+        return None
+
+
+def _close_run(run_id: uuid.UUID | None, passed: int, total: int, failures: list[str]) -> None:
+    if run_id is None:
+        return
+    try:
+        with connect(autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                update pipeline_runs
+                   set status = %s,
+                       finished_at = now(),
+                       rows_written = %s,
+                       error = %s,
+                       metadata = %s::jsonb
+                 where id = %s
+                """,
+                (
+                    "succeeded" if passed == total else "failed",
+                    passed,
+                    None if passed == total else f"{total - passed} check(s) failed",
+                    psycopg.types.json.Json(
+                        {"passed": passed, "total": total, "failures": failures[:50]}
+                    ),
+                    run_id,
+                ),
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not close the audit's pipeline_runs row: %s", exc)
+
+
+RUN_ID = _open_run()
 
 
 def check(group: str, name: str, sql: str, ok, detail_cols=None, params=None):
@@ -1460,6 +1530,54 @@ check(G, "ai_adapter names a provider we ship", """
 """, lambda r: r["adapter"] in ("none", "gemini", "grok"))
 
 # =============================================================================
+# P5 monitoring
+# =============================================================================
+G = "P5 monitoring"
+
+check(G, "alert_adapter names a destination we ship", """
+    select coalesce(
+             (select value #>> '{}' from app_config where key = 'alert_adapter'),
+             'MISSING') as adapter
+""", lambda r: r["adapter"] in ("log", "webhook"))
+
+# THE EXISTING CREDENTIAL CHECK WOULD NOT CATCH THIS ONE, which is why it is
+# separate rather than folded in. A Slack incoming-webhook URL carries its
+# secret in the path — it is a credential that happens to look like an address —
+# so it matches neither the key pattern (no "key"/"token"/"secret") nor the
+# opaque-blob pattern (it contains "/" and ":"). app_config is world-readable
+# under RLS, so a URL landing here would be a live credential served to every
+# visitor (CLAUDE.md §0).
+check(G, "no webhook or connection URL is stored in app_config", """
+    select count(*) as urls from app_config
+     where value #>> '{}' ~* '^(https?|postgres(ql)?)://'
+""", lambda r: r["urls"] == 0)
+
+# The data-level form of monitor_pipeline's first check. A row stays 'running'
+# when a job was killed rather than raising — OOM, deploy restart, hard timeout
+# — and such a row has a RECENT started_at, so any freshness view keyed on when
+# a job last STARTED reports it as healthy. Stated here too because the monitor
+# is a job like any other and can itself stop running.
+check(G, "no pipeline run has been left open for days", """
+    select count(*) as open_runs,
+           coalesce(round(max(extract(epoch from (now() - started_at)) / 3600.0)::numeric, 1), 0)
+             as oldest_hours
+      from pipeline_runs
+     where status = 'running'
+       and started_at < now() - interval '24 hours'
+""", lambda r: r["open_runs"] == 0)
+
+# A finished run must have a finish time. Without it the age of the last
+# success cannot be computed, and the staleness check silently degrades to
+# "never succeeded" — an alert that looks like a broken pipeline but is a
+# broken record of one.
+check(G, "every settled pipeline run carries a finish time", """
+    select count(*) as settled,
+           count(*) filter (where finished_at is null) as unfinished
+      from pipeline_runs
+     where status <> 'running'
+""", lambda r: r["unfinished"] == 0)
+
+# =============================================================================
 # Report
 # =============================================================================
 groups: dict[str, list] = {}
@@ -1479,11 +1597,13 @@ for g, items in groups.items():
 
 print(f"\n{'=' * 78}")
 print(f"  {passed}/{total} checks passed")
-if passed < total:
+failures = [f"[{g}] {n}: {d}" for g, n, p, d in RESULTS if not p]
+if failures:
     print("\n  FAILURES:")
-    for g, n, p, d in RESULTS:
-        if not p:
-            print(f"    [{g}] {n}: {d}")
+    for line in failures:
+        print(f"    {line}")
 print("=" * 78)
+
+_close_run(RUN_ID, passed, total, failures)
 
 sys.exit(0 if passed == total else 1)

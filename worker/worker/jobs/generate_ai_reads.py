@@ -51,6 +51,7 @@ from worker.core.ai_prompt import (
     build_prompt,
     input_digest,
 )
+from worker.core.schedule import resolve_slate_args
 from worker.core.splits import RANK_METRICS
 from worker.db import connect, get_config_value, pipeline_run, set_rows_written
 from worker.logging_setup import configure_logging, get_logger
@@ -401,8 +402,10 @@ def run(*, season: int, week: int, adapter_name: str, dry_run: bool,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--season", type=int, required=True)
-    parser.add_argument("--week", type=int, required=True)
+    # Both default to the current slate so this can run on a cron, which has
+    # nobody to tell it what week it is. An explicit value always wins.
+    parser.add_argument("--season", type=int, help="Defaults to the current slate.")
+    parser.add_argument("--week", type=int, help="Defaults to the current slate.")
     parser.add_argument("--adapter", help="Override app_config.ai_adapter.")
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -434,11 +437,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
+        season, week = resolve_slate_args(args.season, args.week)
+    except ConfigError as exc:
+        log.error("%s", exc)
+        return 2
+
+    try:
         with pipeline_run(
-            JOB_NAME, metadata={"season": args.season, "week": args.week}
+            JOB_NAME, metadata={"season": season, "week": week}
         ) as run_id:
             report = run(
-                season=args.season, week=args.week, adapter_name=adapter_name,
+                season=season, week=week, adapter_name=adapter_name,
                 dry_run=args.dry_run, limit=args.limit,
             )
             log.info(

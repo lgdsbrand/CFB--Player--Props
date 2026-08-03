@@ -34,6 +34,10 @@ _SECRET_FIELDS = frozenset(
         "odds_api_key_free",
         "gemini_api_key",
         "grok_api_key",
+        # The whole URL is the secret. A Slack incoming-webhook URL carries its
+        # credential in the path, so this is a key that happens to look like an
+        # address — treat it as one.
+        "alert_webhook_url",
     }
 )
 
@@ -91,6 +95,12 @@ class Settings:
     # and the app degrades to its existing empty read slot.
     gemini_api_key: str | None = None
     grok_api_key: str | None = None
+
+    # Pipeline alerting (CLAUDE.md §8 Phase 5). Optional: the default alert
+    # adapter writes to the run log and needs no configuration, so the monitor
+    # works out of the box and this only matters once someone wants a push.
+    # NEVER put this in app_config — that table is world-readable under RLS.
+    alert_webhook_url: str | None = None
 
     # Separate free-tier key, for dry runs. The paid allowance is a SHARED pool
     # across the client's other models, and it has already been exhausted once
@@ -152,6 +162,7 @@ def get_settings() -> Settings:
         odds_api_key_free=_optional("ODDS_API_KEY_FREE"),
         gemini_api_key=_optional("GEMINI_API_KEY"),
         grok_api_key=_optional("GROK_API_KEY"),
+        alert_webhook_url=_optional("ALERT_WEBHOOK_URL"),
         environment=_optional("ENVIRONMENT", "development") or "development",
         log_level=_optional("LOG_LEVEL", "INFO") or "INFO",
     )

@@ -5,23 +5,30 @@
 # Next.js app (deployed separately on Vercel) only ever reads from Supabase and
 # never calls a data provider directly (CLAUDE.md §2).
 #
-# Every secret is declared `sync: false`, meaning Render prompts for it in the
-# dashboard and it is never stored in this file. Do not replace any of these
-# with a literal value.
+# Every secret lives in the shared env var group below, declared `sync: false`
+# so Render prompts for it in the dashboard and it is never stored in this file.
+# Do not replace any of these with a literal value.
+#
+# ---------------------------------------------------------------------------
+# THE SCHEDULES AND `MONITORED_JOBS` MUST AGREE.
+# ---------------------------------------------------------------------------
+# `worker/jobs/monitor_pipeline.py` holds a staleness expectation per job, and
+# `tests/test_monitor.py` parses THIS FILE to assert that every scheduled job
+# has one, that every expectation names a job that is actually scheduled, and
+# that each `max_age_hours` leaves room for one missed run of its cron.
+#
+# That test exists because the gap is invisible from either side: a cron added
+# without an expectation is simply never monitored, and an expectation whose job
+# was renamed alerts forever about a job that no longer exists. Both look fine
+# in review.
+#
+# ALL TIMES ARE UTC. Saturday's games finish late Saturday night US time, which
+# is Sunday morning UTC — the ingest schedule below is built around that, not
+# around a US calendar day.
 # =============================================================================
 
-services:
-  # Phase 1 deploy proof. Verifies config, database connectivity, that the
-  # migrations are applied, that the worker can WRITE, and that the CFBD key
-  # authenticates. Daily is plenty — it is a canary, not a data job.
-  - type: cron
-    name: cfb-props-healthcheck
-    runtime: python
-    plan: starter
-    rootDir: worker
-    schedule: "0 12 * * *"
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m worker.jobs.healthcheck
+envVarGroups:
+  - name: cfb-props-worker
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.9"
@@ -37,29 +44,141 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      # Optional. The pipeline runs without these: odds and AI both default to
+      # the "none" adapter and the app degrades to model leans and an empty
+      # read slot (CLAUDE.md §9.1).
+      - key: ODDS_API_KEY
+        sync: false
+      - key: ODDS_API_KEY_FREE
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROK_API_KEY
+        sync: false
+      # Optional. Only needed when app_config.alert_adapter is "webhook"; the
+      # default "log" adapter needs nothing. THE URL IS THE CREDENTIAL.
+      - key: ALERT_WEBHOOK_URL
+        sync: false
+
+services:
+  # ---------------------------------------------------------------------------
+  # Canaries
+  # ---------------------------------------------------------------------------
+  # Verifies config, database connectivity, that the migrations are applied,
+  # that the worker can WRITE, and that the CFBD key authenticates and carries
+  # the paid entitlements. Daily is plenty — it is a canary, not a data job, and
+  # it makes exactly one CFBD call.
+  - type: cron
+    name: cfb-props-healthcheck
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 12 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.healthcheck
+    envVars:
+      - fromGroup: cfb-props-worker
+
+  # The data-integrity canary: ~150 assertions over the schema, the RLS posture,
+  # the anti-lookahead guarantees and the odds math. Exits non-zero if any fail,
+  # and records its own pipeline_runs row so the monitor can tell when it stops.
+  - type: cron
+    name: cfb-props-audit
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 13 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.audit_data
+    envVars:
+      - fromGroup: cfb-props-worker
+
+  # Watches pipeline_runs and the data those runs are supposed to produce.
+  # Six-hourly rather than hourly on purpose: alerts are not deduplicated, so
+  # this cadence IS the throttle — see the module docstring for why suppression
+  # was rejected. Exits non-zero on a critical finding so Render's own
+  # cron-failure notification becomes the backstop channel.
+  - type: cron
+    name: cfb-props-monitor
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 */6 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.monitor_pipeline
+    envVars:
+      - fromGroup: cfb-props-worker
 
   # ---------------------------------------------------------------------------
-  # Phase 2+ jobs, kept here as the intended shape rather than active services.
-  # College books post props late — often Thursday or Friday for Saturday games
-  # — so the in-week refresh runs several times a day and the model runs on all
-  # projected starters regardless of whether a line exists yet (CLAUDE.md §7).
+  # Weekly data pipeline
   # ---------------------------------------------------------------------------
-  # - type: cron
-  #   name: cfb-props-ingest-week
-  #   schedule: "0 */6 * * *"     # in-week refresh
-  #   startCommand: python -m worker.jobs.ingest_week
+  # Sunday 09:00 UTC, after Saturday's games have finished and settled.
   #
-  # - type: cron
-  #   name: cfb-props-project-week
-  #   schedule: "0 9 * * 2"       # Tuesday: project every projected starter
-  #   startCommand: python -m worker.jobs.project_week
-  #
-  # - type: cron
-  #   name: cfb-props-odds-refresh
-  #   schedule: "*/30 * * * *"    # attach lines as books post them
-  #   startCommand: python -m worker.jobs.refresh_odds
-  #
-  # - type: cron
-  #   name: cfb-props-ai-reads
-  #   schedule: "0 14 * * 3"      # Wednesday: one read per player per week
-  #   startCommand: python -m worker.jobs.generate_ai_reads
+  # CHAINED WITH `&&` IN ONE CRON, DELIBERATELY. These four are strictly
+  # ordered — splits are built from stats, which need the games and rosters
+  # reference data — and Render has no dependency graph between cron services.
+  # Four separate schedules guessing at each other's runtime would race. The
+  # chain stops at the first failure, and each step still writes its own
+  # pipeline_runs row, so the monitor reports precisely which one broke.
+  - type: cron
+    name: cfb-props-ingest-week
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 9 * * 0"
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      python -m worker.jobs.ingest_reference &&
+      python -m worker.jobs.ingest_stats &&
+      python -m worker.jobs.ingest_ratings &&
+      python -m worker.jobs.build_splits
+    envVars:
+      - fromGroup: cfb-props-worker
+
+  # Tuesday 09:00 UTC. Runs on all projected starters and high-usage skill
+  # players regardless of whether a book has posted a line, so the tool is
+  # useful early in the week (CLAUDE.md §7). Season and weeks resolve from the
+  # schedule; there is no human here to pass them.
+  - type: cron
+    name: cfb-props-project-week
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 9 * * 2"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.run_projections --all-weeks
+    envVars:
+      - fromGroup: cfb-props-worker
+
+  # ---------------------------------------------------------------------------
+  # In-week refreshes
+  # ---------------------------------------------------------------------------
+  # Every three hours. College books post props LATE — often Thursday or Friday
+  # for Saturday games (CLAUDE.md §7) — so this is a poll for a market that has
+  # not appeared yet, not a refresh of one that has. Exits 0 and does nothing
+  # while app_config.odds_adapter is "none", which is the current default.
+  - type: cron
+    name: cfb-props-odds-refresh
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 */3 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.ingest_odds
+    envVars:
+      - fromGroup: cfb-props-worker
+
+  # Wednesday 14:00 UTC: one read per player per week, cached in Supabase and
+  # never generated per page view (CLAUDE.md §2, §10). After Tuesday's
+  # projections, before the weekend. Exits 0 and does nothing while
+  # app_config.ai_adapter is "none", which is the current default.
+  - type: cron
+    name: cfb-props-ai-reads
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 14 * * 3"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.generate_ai_reads
+    envVars:
+      - fromGroup: cfb-props-worker

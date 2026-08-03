@@ -699,6 +699,37 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    # SECOND GUARD, and it is not redundant with the one above.
+    #
+    # The environment check asks "is this a real deployment". This one asks a
+    # different question: "is a real odds source configured". Development is
+    # exactly where both can be true at once — the moment ingest_odds is
+    # pointed at a live provider, synthetic rows stop being a harmless stand-in
+    # and start competing with real quotes for the same player and market.
+    #
+    # Nothing downstream distinguishes them. `v_board_rows` picks a book by
+    # priority, picks are keyed per book, and a synthetic -110/-110 de-vigs to
+    # exactly 0.500 — so a fake row sitting beside a real one yields an edge
+    # that is just the model's own confidence restated, presented identically
+    # to a genuine disagreement with a market. That is silent and wrong, which
+    # is the combination this project keeps getting caught by.
+    if args.synthetic_lines:
+        try:
+            configured_adapter = get_config_value("odds_adapter")
+        except Exception as exc:  # pragma: no cover - config must be readable
+            log.error("Could not read app_config.odds_adapter: %s", exc)
+            return 2
+        if configured_adapter and str(configured_adapter) != "none":
+            log.error(
+                "--synthetic-lines refused: app_config.odds_adapter is %r, so "
+                "real book lines are being ingested. Fake quotes would compete "
+                "with real ones for the same player and market, and nothing "
+                "downstream tells them apart. Set the adapter to 'none' if you "
+                "genuinely want a synthetic board.",
+                str(configured_adapter),
+            )
+            return 2
+
     try:
         season = resolve_season(args.season)
         if args.all_weeks:

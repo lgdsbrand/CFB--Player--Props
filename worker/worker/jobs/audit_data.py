@@ -1316,6 +1316,72 @@ check(G, "every table the app reads is readable by the anon role", """
 """, lambda r: r["missing"] == 0)
 
 # =============================================================================
+# P5 odds
+# =============================================================================
+# Book lines arrive by resolving the PROVIDER'S name strings onto our rows, and
+# every way that goes wrong produces a row that looks perfectly normal: a line
+# on the wrong player, or against the wrong fixture, renders as a confident,
+# precise, wrong edge. Nothing throws. So the properties are stated against the
+# data rather than trusted from the job that wrote it.
+G = "P5 odds"
+
+# THE ONE THAT CATCHES A MIS-RESOLVED PLAYER. A prop line is only meaningful if
+# the player it names actually plays for one of the two teams in the game it is
+# attached to. Player resolution is scoped to those two rosters precisely so
+# this holds; checking it here proves the scoping was not bypassed — and would
+# fire immediately if a future version ever matched names nationally.
+check(G, "every prop line names a player from one of that game's two rosters", """
+    select count(*) as lines,
+           count(*) filter (where not exists (
+             select 1 from player_team_seasons pts
+              where pts.player_id = l.player_id
+                and pts.season = l.season
+                and pts.team_id in (g.home_team_id, g.away_team_id)
+           )) as off_roster
+      from player_prop_lines l
+      join games g on g.id = l.game_id
+""", lambda r: r["off_roster"] == 0)
+
+# Same class as the bowl-week collision: a line filed under a week other than
+# the one its game is played in becomes lookahead the moment anything reads it
+# by (season, week) — which the board does.
+check(G, "every prop line agrees with its game about season and week", """
+    select count(*) as lines,
+           count(*) filter (where l.season <> g.season or l.week <> g.week) as mismatched
+      from player_prop_lines l
+      join games g on g.id = l.game_id
+""", lambda r: r["mismatched"] == 0)
+
+# Synthetic rows are fake by construction and exist only so the OVER/UNDER path
+# could be built before books posted. If they ever sit beside a real quote for
+# the same player and market, the board has no way to tell them apart and a
+# -110/-110 de-vig makes the fake one look like a market disagreeing with us.
+# run_projections refuses to write them once an adapter is configured; this is
+# that guarantee checked against the data instead of the code path.
+check(G, "no fake line ever shares a player and market with a real one", """
+    select count(*) as collisions
+      from (
+        select game_id, player_id, market_key
+          from player_prop_lines
+         group by game_id, player_id, market_key
+        having count(*) filter (where source_adapter = 'synthetic') > 0
+           and count(*) filter (where source_adapter <> 'synthetic') > 0
+      ) x
+""", lambda r: r["collisions"] == 0)
+
+# A row whose adapter is not one we ship is an orphan: nothing knows how it got
+# there, and `source_adapter` is what makes provider history attributable when
+# the source changes.
+check(G, "every prop line is attributable to an adapter we ship", """
+    select count(*) as lines,
+           count(*) filter (
+             where source_adapter not in ('synthetic', 'theoddsapi', 'none')
+           ) as unknown_source,
+           coalesce(string_agg(distinct source_adapter, ', '), '-') as adapters
+      from player_prop_lines
+""", lambda r: r["unknown_source"] == 0)
+
+# =============================================================================
 # Report
 # =============================================================================
 groups: dict[str, list] = {}

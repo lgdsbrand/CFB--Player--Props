@@ -60,7 +60,15 @@ __all__ = [
 #
 # The lesson is the one this project keeps relearning: when a model reaches for
 # something, giving it the true value beats forbidding the reach.
-PROMPT_VERSION = "v3"
+#
+# v4 (2026-08-03): a yes/no market no longer carries the called-side confidence
+# at all. v3 supplied both that and the scoring probability; the first three
+# paid reads led with "82% confidence in the under" and "(87% confidence)" —
+# true, and a number the card does not print, because a binary market renders
+# the scoring probability INSTEAD of an OVER/UNDER pill. A reader would have
+# met two different percentages for one claim on one screen. Same lesson,
+# inverted: withhold the number the product never shows.
+PROMPT_VERSION = "v4"
 
 # The reads are two or three sentences. The ceiling is generous relative to that
 # because a truncated read is refused outright rather than stored, and the cost
@@ -259,14 +267,21 @@ def describe_matchup(rank: int, ranked_defenses: int | None) -> str:
 
 def _render_market(market: MarketLine) -> str:
     if market.is_binary:
-        # Stated as the probability it is. "OVER 0.5 touchdowns" is the
-        # internal encoding, not the claim the product makes.
+        # Stated as the probability it is, and as NOTHING ELSE. "OVER 0.5
+        # touchdowns" is the internal encoding, not the claim the product makes,
+        # and neither is the called-side confidence: the card replaces the
+        # OVER/UNDER pill with the scoring probability for exactly this market
+        # (CLAUDE.md §1), so a read quoting "NO at 84% confidence" quotes a
+        # number the reader cannot see anywhere on the page.
+        #
+        # v3 handed over both and let the model choose. It chose the confidence
+        # in two of the first three reads. Withholding the number beats adding a
+        # rule about it — the same lesson v3 itself was written around.
         scores = market.side.upper() == "OVER"
         chance = market.confidence if scores else 1.0 - market.confidence
         parts = [
-            f"{market.market_label}: {chance:.0%} chance to score, so the call "
-            f"is {'YES' if scores else 'NO'} at {market.confidence:.0%} "
-            f"confidence"
+            f"{market.market_label}: {chance:.0%} chance to score, which is the "
+            f"model's whole claim for this market"
         ]
         if market.has_book_line and market.edge is not None:
             parts.append(f"- edge {market.edge:+.1%} vs the book's implied price")

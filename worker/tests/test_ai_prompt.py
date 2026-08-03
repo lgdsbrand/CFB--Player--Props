@@ -100,12 +100,38 @@ class TestBinaryMarkets:
     def test_an_under_call_is_stated_as_a_chance_to_score(self):
         prompt = self._prompt("UNDER", 0.94)
         assert "6% chance to score" in prompt
-        assert "NO at 94% confidence" in prompt
 
     def test_an_over_call_is_stated_as_a_chance_to_score(self):
         prompt = self._prompt("OVER", 0.71)
         assert "71% chance to score" in prompt
-        assert "YES at 71% confidence" in prompt
+
+    def test_a_binary_market_never_carries_the_called_side_confidence(self):
+        """The v4 change, and the defect behind it.
+
+        A binary market's card shows the scoring probability INSTEAD of an
+        OVER/UNDER pill (CLAUDE.md §1), so the called-side confidence appears
+        nowhere a reader can check. v3 supplied it anyway and the first three
+        paid reads led with it: "82% confidence in the under" beside a card
+        reading "18% TO SCORE".
+
+        94% must be absent, and 6% present, from the same prompt — which only
+        holds if the complement was withheld rather than merely discouraged.
+        The RULES block discusses confidence generally, so the assertion is
+        scoped to the facts section the model is asked to explain.
+        """
+        prompt = self._prompt("UNDER", 0.94)
+        assert "94%" not in prompt
+        assert "6% chance to score" in prompt
+        assert "confidence" not in prompt.split("THE MODEL'S CALLS:")[-1]
+
+    def test_an_over_call_states_one_number_once(self):
+        # The one case where the two numbers coincide: a YES call's confidence
+        # IS the scoring probability, so 71% is correct — but it must appear as
+        # a chance to score, not as a second "71% confidence" claim.
+        prompt = self._prompt("OVER", 0.71)
+        calls = prompt.split("THE MODEL'S CALLS:")[-1]
+        assert calls.count("71%") == 1
+        assert "confidence" not in calls
 
     def test_a_non_binary_market_keeps_its_projection(self):
         assert "projected 214" in build_prompt(BASE)

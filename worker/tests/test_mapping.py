@@ -14,6 +14,7 @@ import pytest
 
 from worker.adapters.cfbd.mapping import (
     POSITION_MAP,
+    POSTSEASON_WEEK_OFFSET,
     SKILL_POSITIONS,
     VALID_POSITION_GROUPS,
     PositionNormalizer,
@@ -21,7 +22,6 @@ from worker.adapters.cfbd.mapping import (
     inches_or_none,
     normalize_classification,
     normalize_season_type,
-    POSTSEASON_WEEK_OFFSET,
     pounds_or_none,
     smallint_or_none,
     week_for_api,

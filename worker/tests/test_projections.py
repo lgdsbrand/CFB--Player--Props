@@ -24,13 +24,13 @@ from worker.core.calibration import (
     Calibration,
     StoredCalibration,
 )
+from worker.core.models import Projection
 from worker.core.projections import (
     MIN_GAMES_TO_PROJECT,
     MIN_USAGE_FRACTION_OF_BASELINE,
     ProjectedRow,
     project_row,
 )
-from worker.core.models import Projection
 
 
 # -----------------------------------------------------------------------------

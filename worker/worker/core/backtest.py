@@ -459,13 +459,13 @@ def compute_metrics(
     n = len(predictions)
 
     base_rate = sum(outcomes) / n
-    brier = sum((p - y) ** 2 for p, y in zip(probabilities, outcomes)) / n
+    brier = sum((p - y) ** 2 for p, y in zip(probabilities, outcomes, strict=True)) / n
     reference = sum((base_rate - y) ** 2 for y in outcomes) / n
     brier_skill = 1.0 - brier / reference if reference > 0 else 0.0
 
     log_loss = -sum(
         y * math.log(p) + (1 - y) * math.log(1 - p)
-        for p, y in zip(probabilities, outcomes)
+        for p, y in zip(probabilities, outcomes, strict=True)
     ) / n
 
     buckets: list[list[int]] = [[] for _ in range(bins)]

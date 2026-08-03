@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import html
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from worker.core.backtest import CalibrationBin, Metrics
 
@@ -222,7 +222,7 @@ def render(
     config: dict[str, object],
     caveats: Sequence[str],
 ) -> str:
-    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    generated = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     caveat_items = "".join(f"<li>{c}</li>" for c in caveats)
     config_rows = "".join(
         f"<tr><td class='name'>{html.escape(str(k))}</td>"

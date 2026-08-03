@@ -19,6 +19,8 @@ Pure-logic tests run anywhere. The database tests skip without SUPABASE_DB_URL.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from worker.core.features import (
@@ -98,7 +100,9 @@ class TestAsOf:
     def test_is_hashable_and_frozen(self):
         # Used as a dict key when caching feature frames per cutoff.
         assert len({AsOf(2025, 3), AsOf(2025, 3)}) == 1
-        with pytest.raises(Exception):
+        # FrozenInstanceError specifically: a bare Exception would also pass if
+        # AsOf lost its @dataclass and the assignment failed for some other reason.
+        with pytest.raises(FrozenInstanceError):
             AsOf(2025, 3).week = 4  # type: ignore[misc]
 
 

@@ -31,7 +31,7 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -334,7 +334,7 @@ def probe_live_props(
         if event.commence_time is not None:
             lead_times.append(
                 (
-                    event.commence_time - datetime.now(timezone.utc)
+                    event.commence_time - datetime.now(UTC)
                 ).total_seconds()
                 / 86400.0
             )
@@ -580,7 +580,7 @@ def probe_historical(
 
 def render_report(findings: list[Finding], *, historical_date: str) -> str:
     """Write the coverage memo — the reviewable artifact for this sub-phase."""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         "# Odds coverage probe — The Odds API / NCAAF player props",
         "",

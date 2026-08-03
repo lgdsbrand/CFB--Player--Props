@@ -7,12 +7,10 @@ see the note at the top of worker/core/probability.py.
 
 from __future__ import annotations
 
+import itertools
 import math
 
 import pytest
-
-import itertools
-
 import scipy.stats as st
 
 from worker.core.probability import (

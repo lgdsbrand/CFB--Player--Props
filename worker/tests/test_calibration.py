@@ -508,7 +508,6 @@ class TestRescale:
             market_key="rec_yards", distribution=distribution,
             params=params, mean=mean,
         )
-        before = projection.quantiles or _median_of(distribution, params)
         out = rescale(projection, scale)
 
         # Mean exact, width scaled, and the median's offset from the mean grows

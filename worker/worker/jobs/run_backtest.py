@@ -33,8 +33,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from worker.config import ConfigError, get_settings
 from worker.core import report as report_module
-from worker.core.calibration import Calibration
 from worker.core.backtest import (
     MIN_USAGE_FRACTION_OF_BASELINE,
     CalibrationBin,
@@ -46,8 +46,8 @@ from worker.core.backtest import (
     season_phase,
     walk_forward,
 )
+from worker.core.calibration import Calibration
 from worker.core.models import can_rescale
-from worker.config import ConfigError, get_settings
 from worker.db import execute, fetch_all, fetch_one, get_config_value, pipeline_run
 from worker.logging_setup import configure_logging, get_logger
 
@@ -498,9 +498,8 @@ def main(argv: list[str] | None = None) -> int:
                     for market, entry in sorted(learned[kind].items()):
                         note = ""
                         if not entry["applied"]:
-                            note = ", NOT applied (%s)" % entry.get(
-                                "reason", "still learning"
-                            )
+                            reason = entry.get("reason", "still learning")
+                            note = f", NOT applied ({reason})"
                         log.info(
                             "  %-5s %-28s x%.3f  (n=%s%s)",
                             kind, market, entry[field], f"{entry['n']:,}", note,

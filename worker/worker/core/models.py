@@ -83,7 +83,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from worker.core.probability import distribution_sd, prob_over, validate_params
+from worker.core.probability import prob_over, validate_params
 from worker.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -586,7 +586,7 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
         if not position:
             continue
         bucket = by_position.setdefault(str(position), {})
-        for key, value in row.items():
+        for key in row:
             if not key.endswith("_pg") or key.startswith(("prior_", "team_", "opp_")):
                 continue
             number = _value(row, key)

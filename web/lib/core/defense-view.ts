@@ -187,6 +187,42 @@ export function perGame(
   return values.reduce((total, value) => total + value, 0) / values.length;
 }
 
+/** A matchup's difficulty, as one word plus how to colour it. */
+export type MatchupBand = {
+  key: "tough" | "middling" | "soft";
+  label: string;
+  /** Semantic tone from the reader's point of view, not the defense's. */
+  tone: "positive" | "negative" | "neutral";
+};
+
+/**
+ * Turn a rank into soft / middling / tough, ONCE.
+ *
+ * THIS EXISTS BECAUSE DUPLICATING IT PRODUCED A WRONG BADGE. The thirds test
+ * lived inline in both the defense-detail panel and the weekly-targets row,
+ * each deciding independently which end of the scale was soft. When the rank
+ * convention flipped, `matchupSoftness` and the copy were updated and these two
+ * were not — so a defense ranked 104 of 136 rendered as "104 of 136" beside a
+ * red "TOUGH MATCHUP" pill. Both numbers on screen, agreeing with each other,
+ * and the label contradicting both.
+ *
+ * The tone is from the READER's point of view: a soft defense is good news for
+ * the player they are looking at, so soft is positive. That is the opposite of
+ * how a defensive coordinator would colour it, and it is what this product is
+ * for.
+ */
+export function matchupBand(rank: number, ranked: number): MatchupBand | null {
+  const softness = matchupSoftness(rank, ranked);
+  if (softness === null) return null;
+  if (softness >= 2 / 3) {
+    return { key: "soft", label: "soft matchup", tone: "positive" };
+  }
+  if (softness <= 1 / 3) {
+    return { key: "tough", label: "tough matchup", tone: "negative" };
+  }
+  return { key: "middling", label: "middling", tone: "neutral" };
+}
+
 /**
  * How SOFT a matchup is, as a 0..1 fraction — 0 is the toughest defense in the
  * field, 1 the most generous.

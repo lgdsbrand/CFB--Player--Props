@@ -3,6 +3,7 @@ import {
   defenseStatsFor,
   perGame,
   rankBasis,
+  matchupBand,
   matchupSoftness,
   type DefenseStat,
 } from "@/lib/core/defense-view";
@@ -47,6 +48,7 @@ export function DefenseDetail({
 }) {
   const stats = defenseStatsFor(position);
   const fraction = rank !== null ? matchupSoftness(rank, rankedDefenses) : null;
+  const band = rank !== null ? matchupBand(rank, rankedDefenses) : null;
   const basis = rankBasis(position);
 
   return (
@@ -95,20 +97,14 @@ export function DefenseDetail({
               <span
                 className={
                   "pill " +
-                  (fraction !== null && fraction <= 1 / 3
+                  (band?.tone === "positive"
                     ? "bg-positive/15 text-positive"
-                    : fraction !== null && fraction > 2 / 3
+                    : band?.tone === "negative"
                       ? "bg-negative/15 text-negative"
                       : "bg-panel text-muted")
                 }
               >
-                {fraction === null
-                  ? "unranked"
-                  : fraction <= 1 / 3
-                    ? "soft matchup"
-                    : fraction > 2 / 3
-                      ? "tough matchup"
-                      : "middling"}
+                {band?.label ?? "unranked"}
               </span>
             </div>
 
@@ -123,8 +119,8 @@ export function DefenseDetail({
                   />
                 </div>
                 <div className="text-dim flex justify-between text-[0.625rem]">
-                  <span>1 · best defense</span>
-                  <span>{rankedDefenses} · allows the least</span>
+                  <span>1 · allows the least</span>
+                  <span>{rankedDefenses} · allows the most</span>
                 </div>
               </div>
             ) : null}

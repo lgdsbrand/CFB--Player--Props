@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { TeamChip } from "@/components/board/team-chip";
 import { boardHref, type BoardParams } from "@/lib/core/board-params";
-import { matchupSoftness } from "@/lib/core/defense-view";
+import { matchupBand } from "@/lib/core/defense-view";
 import type { PositionTargets, TargetRow } from "@/lib/core/targets";
 import type { TeamInfo } from "@/lib/data/teams";
 
@@ -164,7 +164,7 @@ function TargetLine({
 }) {
   const defense = teams.get(row.defenseTeamId);
   const offense = teams.get(row.offenseTeamId);
-  const fraction = matchupSoftness(row.rank, entry.rankedDefenses);
+  const band = matchupBand(row.rank, entry.rankedDefenses);
 
   return (
     <li>
@@ -207,9 +207,9 @@ function TargetLine({
         <span
           className={
             "shrink-0 text-[0.6875rem] font-bold tabular-nums " +
-            (fraction !== null && fraction <= 1 / 3
-              ? "text-positive"
-              : "text-muted")
+            // Soft matchups are the point of this panel, so they are the
+            // ones worth highlighting.
+            (band?.key === "soft" ? "text-positive" : "text-muted")
           }
         >
           {row.value === null ? "—" : row.value.toFixed(1)}

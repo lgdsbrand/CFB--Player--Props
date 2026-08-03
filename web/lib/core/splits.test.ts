@@ -20,6 +20,7 @@ import {
   defenseStatForMarket,
   defenseStatsFor,
   perGame,
+  matchupBand,
   matchupSoftness,
 } from "./defense-view.ts";
 import { gradeGames, type GradedGame } from "./hit-rate.ts";
@@ -302,6 +303,37 @@ test("total TDs sums rushing and receiving without treating a null as absent", (
   assert.equal(stat.value(defenseGame(1, { rushTdsAllowed: 2, recTdsAllowed: 1 })), 3);
   assert.equal(stat.value(defenseGame(1, { rushTdsAllowed: 2 })), 2);
   assert.equal(stat.value(defenseGame(1)), null);
+});
+
+test("the matchup band agrees with the rank a reader can see beside it", () => {
+  // THE REGRESSION. A defense ranked 104 of 136 rendered beside a red
+  // "TOUGH MATCHUP" pill: the thirds test lived inline in two components, each
+  // deciding independently which end of the scale was soft, and neither was
+  // updated when the rank convention flipped.
+  assert.equal(matchupBand(104, 136)!.key, "soft");
+  assert.equal(matchupBand(104, 136)!.tone, "positive");
+
+  assert.equal(matchupBand(27, 136)!.key, "tough");
+  assert.equal(matchupBand(27, 136)!.tone, "negative");
+
+  assert.equal(matchupBand(68, 136)!.key, "middling");
+  assert.equal(matchupBand(68, 136)!.tone, "neutral");
+});
+
+test("the band's extremes cannot flip", () => {
+  assert.equal(matchupBand(1, 136)!.key, "tough");
+  assert.equal(matchupBand(136, 136)!.key, "soft");
+});
+
+test("a soft matchup is POSITIVE, because the reader is looking at the player", () => {
+  // Not at the defense. A defensive coordinator would colour this the other way.
+  assert.equal(matchupBand(136, 136)!.tone, "positive");
+  assert.equal(matchupBand(1, 136)!.tone, "negative");
+});
+
+test("a degenerate field yields no band rather than a wrong one", () => {
+  assert.equal(matchupBand(1, 1), null);
+  assert.equal(matchupBand(1, 0), null);
 });
 
 test("matchup softness runs tough to soft, and refuses a degenerate field", () => {

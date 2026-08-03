@@ -58,20 +58,33 @@ writes nothing and exits 0, and `monitor_pipeline` does not expect it.
 Switching it on also switches on the alerting for it. See
 [odds.md](odds.md#turning-it-on).
 
-#### `ai_adapter` — currently `"none"`
+#### `ai_adapter` — currently `"gemini"`, seeded `"none"`
 
 Which provider writes the weekly cached reads. Known values: `"none"`,
 `"gemini"`, `"grok"`.
 
-Also an off switch that is a supported state — the player page keeps rendering
-the empty read slot it has had since Phase 4d. **Which provider runs is decided
-by this row, not by which API key happens to be set.**
+**Switched on by `20260803140000` on 2026-08-03**, once the client enabled
+Gemini billing — Google's free tier trains on submitted content and the paid
+tier does not, and these prompts carry the client's model projections
+(CLAUDE.md §0). That was the only thing the row was waiting on.
 
-Gemini is the recommendation, and not on cost: it has a free tier the pipeline
-can be proven on and a Batch API suited to a weekly burst of ~1,700
-latency-insensitive calls. **Enable billing before generating anything real** —
-Google's free tier trains on submitted content and the paid tier does not, and
-these prompts carry the client's model projections.
+Not on cost, which is negligible either way: the job is a weekly burst of
+~2,000 latency-insensitive calls, which is the shape Gemini's Batch API is
+built for. Grok's live X grounding would make identical inputs produce
+different reads, breaking `ai_reads.input_digest` and with it any chance of
+reproducing or auditing a read. Both adapters are built; `"grok"` is a one-row
+change away.
+
+`"none"` remains a supported state, not an outage — the player page keeps
+rendering the empty read slot it has had since Phase 4d, and cached rows
+survive being switched off. **Which provider runs is decided by this row, not
+by which API key happens to be set.**
+
+**Turning this on also arms monitoring.** `monitor_pipeline` gates the
+`generate_ai_reads` expectation on this key, so a week with no reads is now a
+warning finding at 200 hours where before it was a configuration the monitor
+stayed quiet about. That is the point: an off switch nobody watches and a
+broken job nobody watches look identical from the board.
 
 #### `alert_adapter` — currently `"log"`
 
@@ -124,8 +137,15 @@ backfill, not a schema change. See [odds.md](odds.md#resolved).
 ```sql
 select key, value, updated_at from app_config order by key;
 
-update app_config set value = '"gemini"'::jsonb where key = 'ai_adapter';
+update app_config set value = '"theoddsapi"'::jsonb where key = 'odds_adapter';
 ```
+
+**Write the change as a migration, not as a bare `update`.** The promise at the
+top of this section — that a fresh `db push` reproduces the live values exactly
+— only holds if every deliberate change is in `supabase/migrations/`. A value
+that is live and unreproducible is the same drift that had to be repaired in
+`supabase_migrations.schema_migrations` during Phase 5. `20260803140000` is the
+worked example. The statement above is what goes *inside* that file.
 
 Values are `jsonb`, so strings need their quotes: `'"gemini"'::jsonb`, not
 `'gemini'::jsonb`. Numbers and arrays are bare — `'0.05'::jsonb`, `'[5, 10]'::jsonb`.

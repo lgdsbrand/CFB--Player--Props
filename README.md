@@ -37,10 +37,13 @@ seam, the client reskin and pipeline monitoring have all shipped.
 | 4 | Board, filters, player detail, defense detail, weekly targets | done |
 | 5 | Odds ingestion, weekly AI reads, reskin, monitoring, docs | in progress |
 
-Two seams ship switched off, which is a supported product state rather than an
-unfinished one: `app_config.odds_adapter` and `ai_adapter` both read `"none"`,
-so the board shows model leans with no book line attached and the player page
-renders its empty read slot. Turning either on is a row edit — see
+`app_config.ai_adapter` reads `"gemini"` as of 2026-08-03, when the client
+enabled billing — the weekly reads generate for real.
+
+`odds_adapter` still reads `"none"`, which is a supported product state rather
+than an unfinished one: the board shows the model's lean on every projected
+starter and the over/under call fills in when a market appears (CLAUDE.md §7).
+No book has posted an NCAAF player prop yet. Turning it on is a row edit — see
 [docs/configuration.md](docs/configuration.md).
 
 The Phase 3 deliverable is

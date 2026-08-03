@@ -171,7 +171,15 @@ services:
   # Wednesday 14:00 UTC: one read per player per week, cached in Supabase and
   # never generated per page view (CLAUDE.md §2, §10). After Tuesday's
   # projections, before the weekend. Exits 0 and does nothing while
-  # app_config.ai_adapter is "none", which is the current default.
+  # app_config.ai_adapter is "none"; live on "gemini" since 2026-08-03.
+  #
+  # ONE RUN A WEEK CANNOT COVER A WEEK YET, and this is not a schedule problem.
+  # app_config.ai_reads_max_per_run is 400 against ~2,000 players with
+  # projections, so a single Wednesday run writes at most a fifth of the slate
+  # and the rest is never reached before the week turns over. Measured
+  # 2026-08-03: ~7s per read, sequential, so a full week is also ~4 hours of
+  # wall clock in one process. Both need settling before this cron is relied on
+  # — raising the cap alone just converts a short run into a long one.
   - type: cron
     name: cfb-props-ai-reads
     runtime: python

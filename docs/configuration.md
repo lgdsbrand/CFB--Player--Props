@@ -58,15 +58,24 @@ writes nothing and exits 0, and `monitor_pipeline` does not expect it.
 Switching it on also switches on the alerting for it. See
 [odds.md](odds.md#turning-it-on).
 
-#### `ai_adapter` — currently `"gemini"`, seeded `"none"`
+#### `ai_adapter` — currently `"none"`
 
 Which provider writes the weekly cached reads. Known values: `"none"`,
 `"gemini"`, `"grok"`.
 
-**Switched on by `20260803140000` on 2026-08-03**, once the client enabled
-Gemini billing — Google's free tier trains on submitted content and the paid
-tier does not, and these prompts carry the client's model projections
-(CLAUDE.md §0). That was the only thing the row was waiting on.
+**Switched to `"gemini"` and back on 2026-08-03** (`20260803140000`, then
+`20260803150000`). The client reported enabling billing; the key disagreed. Its
+429 body names `GenerateRequestsPerDayPerProjectPerModel-FreeTier` with a value
+of **20 requests per day** — an AI Studio key issued from a project without
+billing active. A new key from the billed project resolves it; waiting does not.
+
+That matters beyond throughput: Google's free tier trains on submitted content
+and the paid tier does not, and these prompts carry the client's model
+projections (CLAUDE.md §0). Twenty were submitted before this was understood.
+
+**Before switching it on again, check the tier rather than the key's presence.**
+One request is enough — a paid key's 429, if it produces one at all, names a
+per-minute quota and never `…FreeTier`.
 
 Not on cost, which is negligible either way: the job is a weekly burst of
 ~2,000 latency-insensitive calls, which is the shape Gemini's Batch API is

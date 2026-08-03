@@ -171,15 +171,22 @@ services:
   # Wednesday 14:00 UTC: one read per player per week, cached in Supabase and
   # never generated per page view (CLAUDE.md §2, §10). After Tuesday's
   # projections, before the weekend. Exits 0 and does nothing while
-  # app_config.ai_adapter is "none"; live on "gemini" since 2026-08-03.
+  # app_config.ai_adapter is "none", which it is again as of 2026-08-03 —
+  # see 20260803150000. The key resolves to Gemini's FREE tier.
   #
-  # ONE RUN A WEEK CANNOT COVER A WEEK YET, and this is not a schedule problem.
-  # app_config.ai_reads_max_per_run is 400 against ~2,000 players with
+  # ONE RUN A WEEK CANNOT COVER A WEEK, and that is a real limit independent of
+  # the key: app_config.ai_reads_max_per_run is 400 against ~2,000 players with
   # projections, so a single Wednesday run writes at most a fifth of the slate
-  # and the rest is never reached before the week turns over. Measured
-  # 2026-08-03: ~7s per read, sequential, so a full week is also ~4 hours of
-  # wall clock in one process. Both need settling before this cron is relied on
-  # — raising the cap alone just converts a short run into a long one.
+  # and the rest is never reached before the week turns over. The cap was set as
+  # a spend guard before the spend was measured; it is ~462 in / ~80 out tokens
+  # per read.
+  #
+  # THROUGHPUT IS STILL UNMEASURED. A first attempt looked like ~7-9s per read,
+  # but every one of those calls was being throttled — the run had already hit
+  # the free tier's 20-requests-per-DAY ceiling, so the timings were of retries
+  # and 429s, not of the pipeline. Nothing here is known about how fast this
+  # runs on a paid key. Measure before deciding whether it needs concurrency or
+  # the Batch API; do not carry the 4-hour figure forward, it was wrong.
   - type: cron
     name: cfb-props-ai-reads
     runtime: python

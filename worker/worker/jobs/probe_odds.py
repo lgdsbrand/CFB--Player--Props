@@ -65,6 +65,17 @@ DEFAULT_HISTORICAL_DATE = "2025-10-18T18:00:00Z"
 # Rough FBS slate size, for turning a measured per-event cost into a weekly one.
 GAMES_PER_WEEK = 60
 
+# How many historical events to ask about before drawing any conclusion.
+#
+# Prop coverage is uneven — books price marquee games and skip low-profile ones
+# — so a single empty event measures the matchup, not the plan. Probing several
+# is what separates "this plan has no props" from "those games had no props".
+#
+# Eight is affordable because of how the provider bills: historical odds cost
+# per market RETURNED, so an event with no props costs NOTHING. Only the first
+# event that carries props is billed, and the loop stops there.
+HISTORICAL_EVENTS_PROBED = 8
+
 # How close to kickoff a game must be before an empty prop response means
 # anything. College books post props late — often Thursday or Friday for a
 # Saturday game (CLAUDE.md §7) — so "no props" a month out is the schedule
@@ -111,6 +122,37 @@ def _quota_exhausted_finding(name: str, adapter: TheOddsApiAdapter) -> Finding:
     )
 
 
+def _commences_after(event: dict[str, Any], iso_timestamp: str) -> bool:
+    """Was this game still upcoming at the snapshot?
+
+    Only upcoming games can carry player props: books take them down at
+    kickoff. An event whose commence_time is unreadable is treated as askable
+    rather than skipped — losing a probe target costs a credit, while silently
+    filtering the whole slate on a parse quirk would look exactly like
+    "no historical coverage".
+    """
+    raw = event.get("commence_time")
+    if not isinstance(raw, str):
+        return True
+    try:
+        commence = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        snapshot = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return commence > snapshot
+
+
+def _merge_diagnostics(into: ParseDiagnostics, other: ParseDiagnostics) -> None:
+    """Accumulate coverage across events, so the union is what gets reported."""
+    into.bookmakers |= other.bookmakers
+    into.markets_seen |= other.markets_seen
+    into.markets_unmapped |= other.markets_unmapped
+    into.outcomes_total += other.outcomes_total
+    into.outcomes_unparsed += other.outcomes_unparsed
+    into.quotes_two_way += other.quotes_two_way
+    into.quotes_one_sided += other.quotes_one_sided
+
+
 def _describe_coverage(diagnostics: ParseDiagnostics) -> list[str]:
     """Turn parse diagnostics into human-readable coverage notes."""
     notes: list[str] = []
@@ -126,11 +168,23 @@ def _describe_coverage(diagnostics: ParseDiagnostics) -> list[str]:
         f"({', '.join(sorted(diagnostics.bookmakers)) or 'none'})"
     )
     notes.append(
-        f"markets served: {len(mapped_seen)}/{len(wanted)} "
-        f"({', '.join(sorted(mapped_seen)) or 'none'})"
+        f"markets seen: {len(mapped_seen)}/{len(wanted)} "
+        f"({', '.join(sorted(mapped_seen)) or 'none'}) — a FLOOR on coverage, "
+        "not a measurement of it"
     )
     if missing:
-        notes.append(f"markets NOT served: {', '.join(missing)}")
+        # NOT "markets NOT served". These probes read a handful of events, and
+        # books price different markets on different games — a market missing
+        # from this sample may be absent from these matchups, not from the
+        # plan. Measured on 2025-10-18: one event carried 2 markets and
+        # another carried 5, so a single event understates breadth badly.
+        # Naming an unmeasured thing as though it were measured is the mistake
+        # this whole job exists to avoid.
+        notes.append(
+            f"markets not seen in this sample ({len(missing)}): "
+            f"{', '.join(missing)} — absence here is not proof of absence on "
+            "the plan; widen the sample before concluding"
+        )
     if diagnostics.markets_unmapped:
         notes.append(
             "unmapped markets returned (add to markets.py if useful): "
@@ -147,7 +201,10 @@ def _describe_coverage(diagnostics: ParseDiagnostics) -> list[str]:
         )
         notes.append(
             "one-sided prices CANNOT be de-vigged and yield no edge — "
-            "this percentage is the ceiling on edge coverage"
+            "this percentage is the ceiling on edge coverage FOR THE MARKET "
+            "MIX above, not for the plan: anytime TD is posted Yes-only by "
+            "most books and will dominate any sample it appears in, so read "
+            "this per market rather than as one headline rate"
         )
     if diagnostics.outcomes_unparsed:
         notes.append(
@@ -412,53 +469,109 @@ def probe_historical(
         )
         return findings
 
-    event_id = str(events[0].get("id") or "")
-    before = adapter.quota.remaining
-    try:
-        payload = adapter.historical_props_raw(event_id, iso_timestamp)
-    except OddsQuotaError:
-        findings.append(_quota_exhausted_finding("historical player props", adapter))
-        return findings
-    except OddsPlanError as exc:
-        findings.append(
-            Finding(
-                "historical player props",
-                False,
-                f"event list is entitled but PROPS are not: {exc}",
-                [
-                    "Same consequence as no historical access: calibration only.",
-                ],
-            )
+    # WHICH EVENTS ARE ASKABLE. A historical snapshot returns the market as it
+    # stood at that instant, and books take player props DOWN at kickoff. So an
+    # already-started game answers with zero markets no matter how well covered
+    # the plan is. The first version of this probe took events[0] blindly, drew
+    # Eastern Michigan @ Miami (OH) — which had kicked two hours before the
+    # snapshot — and wrote "historical player props: FAIL" into this repo's
+    # coverage memo. The plan carries them fine.
+    #
+    # Same discipline as the live probe, and the same as the quota/entitlement
+    # split: only ask a question the response can actually answer.
+    upcoming = [e for e in events if _commences_after(e, iso_timestamp)]
+    if not upcoming:
+        findings[0].notes.append(
+            f"every event in this snapshot had already kicked, so no prop "
+            f"question can be asked at {iso_timestamp} — books pull props at "
+            "kickoff. Probe a timestamp earlier in the game day."
         )
         return findings
-    except OddsAdapterError as exc:
-        findings.append(Finding("historical player props", False, str(exc)))
-        return findings
 
-    inner = payload.get("data") if isinstance(payload, dict) else None
-    _quotes, diagnostics = parse_event_odds(inner or {})
-
-    notes = _describe_coverage(diagnostics)
-    after = adapter.quota
-    measured = after.last_cost
-    if measured is None and before is not None and after.remaining is not None:
-        measured = before - after.remaining
-    if measured is not None:
-        notes.append(
-            f"measured cost: {measured} credits/event — historical is billed at "
-            f"a premium, so a full-season backfill is "
-            f"~{measured * GAMES_PER_WEEK * 14:,} credits"
-        )
-
-    served = bool(diagnostics.bookmakers)
-    notes.append(
-        "EDGE IS BACKTESTABLE" if served else "no props returned — calibration only"
+    findings[0].notes.append(
+        f"{len(upcoming)} of {len(events)} had not yet kicked at the snapshot; "
+        "only those can carry props"
     )
+
+    # COVERAGE IS UNEVEN, so one event is not a measurement. Books price the
+    # games people bet: a single G5 matchup returning nothing would read as
+    # "not covered" exactly like a plan restriction would.
+    probed, carried = 0, 0
+    merged = ParseDiagnostics()
+    spent = 0
+    for event in upcoming[:HISTORICAL_EVENTS_PROBED]:
+        event_id = str(event.get("id") or "")
+        before = adapter.quota.remaining
+        try:
+            payload = adapter.historical_props_raw(event_id, iso_timestamp)
+        except OddsQuotaError:
+            findings.append(
+                _quota_exhausted_finding("historical player props", adapter)
+            )
+            return findings
+        except OddsPlanError as exc:
+            findings.append(
+                Finding(
+                    "historical player props",
+                    False,
+                    f"event list is entitled but PROPS are not: {exc}",
+                    ["Same consequence as no historical access: calibration only."],
+                )
+            )
+            return findings
+        except OddsAdapterError as exc:
+            findings.append(Finding("historical player props", False, str(exc)))
+            return findings
+
+        probed += 1
+        after = adapter.quota
+        cost = after.last_cost
+        if cost is None and before is not None and after.remaining is not None:
+            cost = before - after.remaining
+        spent += cost or 0
+
+        inner = payload.get("data") if isinstance(payload, dict) else None
+        _quotes, diagnostics = parse_event_odds(inner or {})
+        _merge_diagnostics(merged, diagnostics)
+        if diagnostics.bookmakers:
+            # Entitlement is now settled and every further props-bearing event
+            # is billed. Stop: proving it twice buys nothing.
+            carried += 1
+            break
+
+    notes = [
+        f"probed {probed} upcoming event(s); {carried} carried player props"
+    ] + _describe_coverage(merged)
+
+    served = bool(merged.bookmakers)
+    if served:
+        # Billing is per market RETURNED, so the honest per-event figure comes
+        # from the one event that actually had props.
+        per_event = spent / carried if carried else 0
+        notes.append(
+            f"measured cost: {spent} credits total — ~{per_event:.0f} for an "
+            f"event carrying {len(merged.markets_seen)} market(s); events "
+            f"without props cost 0"
+        )
+        notes.append(
+            f"{probed - carried} of {probed} probed event(s) carried NO props, "
+            "so a backfill pays only for the games books actually priced — "
+            "measure the carry rate over a full slate before budgeting one"
+        )
+        notes.append("EDGE IS BACKTESTABLE")
+    else:
+        notes.append(
+            f"UNRESOLVED — {probed} event(s) returned 200 with no prop market. "
+            "That is not an entitlement answer: it is equally consistent with "
+            "books not pricing these particular games. Probe more events or a "
+            "different game day before concluding."
+        )
+
     findings.append(
         Finding(
             "historical player props",
-            served,
-            f"event {event_id} at {iso_timestamp}",
+            True if served else None,
+            f"{probed} upcoming event(s) at {iso_timestamp}",
             notes,
         )
     )

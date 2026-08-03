@@ -32,7 +32,8 @@ _SECRET_FIELDS = frozenset(
         "supabase_service_role_key",
         "odds_api_key",
         "odds_api_key_free",
-        "anthropic_api_key",
+        "gemini_api_key",
+        "grok_api_key",
     }
 )
 
@@ -82,7 +83,14 @@ class Settings:
     supabase_url: str | None
     supabase_service_role_key: str | None
     odds_api_key: str | None
-    anthropic_api_key: str | None
+
+    # Weekly AI reads (CLAUDE.md §7). Which one is actually used is decided by
+    # `app_config.ai_adapter`, NOT by which of these happens to be set — the
+    # provider is configuration, like the odds source. Both are optional so the
+    # worker starts with neither; the null adapter is a real selectable option
+    # and the app degrades to its existing empty read slot.
+    gemini_api_key: str | None = None
+    grok_api_key: str | None = None
 
     # Separate free-tier key, for dry runs. The paid allowance is a SHARED pool
     # across the client's other models, and it has already been exhausted once
@@ -142,7 +150,8 @@ def get_settings() -> Settings:
         supabase_service_role_key=_optional("SUPABASE_SERVICE_ROLE_KEY"),
         odds_api_key=_optional("ODDS_API_KEY"),
         odds_api_key_free=_optional("ODDS_API_KEY_FREE"),
-        anthropic_api_key=_optional("ANTHROPIC_API_KEY"),
+        gemini_api_key=_optional("GEMINI_API_KEY"),
+        grok_api_key=_optional("GROK_API_KEY"),
         environment=_optional("ENVIRONMENT", "development") or "development",
         log_level=_optional("LOG_LEVEL", "INFO") or "INFO",
     )

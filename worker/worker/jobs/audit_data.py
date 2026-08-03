@@ -1382,6 +1382,56 @@ check(G, "every prop line is attributable to an adapter we ship", """
 """, lambda r: r["unknown_source"] == 0)
 
 # =============================================================================
+# P5 ai reads
+# =============================================================================
+# A cached read is shown to a reader for a whole week and nothing downstream
+# validates it, so the failures worth guarding are the ones that still render:
+# a truncated sentence, a read attached to a player who is not playing, a row
+# whose digest no longer describes anything.
+G = "P5 ai reads"
+
+check(G, "every cached read belongs to a player the board actually shows", """
+    select count(*) as reads,
+           count(*) filter (where not exists (
+             select 1 from projections p
+              where p.player_id = a.player_id
+                and p.season = a.season and p.week = a.week
+           )) as orphaned
+      from ai_reads a
+""", lambda r: r["orphaned"] == 0)
+
+# The adapter refuses a truncated generation rather than storing it, because the
+# unique key would keep a half-sentence in front of readers until the next
+# weekly run. Gemini produced exactly that — "Facing the nation'" — from a 200
+# response, so this is the same property checked against the stored data.
+check(G, "no cached read is a truncated fragment", """
+    select count(*) as reads,
+           count(*) filter (
+             where length(trim(content)) < 40
+                or right(trim(content), 1) not in ('.', '!', '?', '"', ')')
+           ) as fragments,
+           coalesce(min(length(trim(content))), 0) as shortest
+      from ai_reads
+""", lambda r: r["fragments"] == 0)
+
+# input_digest is what decides whether a read is regenerated. A NULL or
+# duplicated-across-different-inputs digest silently converts the cache into
+# "never refresh", which is indistinguishable from working right up until a
+# line moves and the prose keeps quoting the old one.
+check(G, "every cached read carries the digest its refresh depends on", """
+    select count(*) as reads,
+           count(*) filter (where input_digest is null or length(input_digest) <> 64)
+             as unusable,
+           count(*) filter (where prompt_version is null or prompt_version = '')
+             as unversioned
+      from ai_reads
+""", lambda r: r["unusable"] == 0 and r["unversioned"] == 0)
+
+check(G, "ai_adapter names a provider we ship", """
+    select value #>> '{}' as adapter from app_config where key = 'ai_adapter'
+""", lambda r: r["adapter"] in ("none", "gemini", "grok"))
+
+# =============================================================================
 # Report
 # =============================================================================
 groups: dict[str, list] = {}

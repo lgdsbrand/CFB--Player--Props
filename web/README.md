@@ -1,36 +1,85 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Web app
 
-## Getting Started
+Next.js 16 (App Router) + TypeScript + Tailwind v4, deployed on Vercel. The
+board, the player detail view and the weekly targets panel.
 
-First, run the development server:
+Project brief: [../CLAUDE.md](../CLAUDE.md). Setup, deployment and the worker:
+[../README.md](../README.md). Operations: [../docs/runbook.md](../docs/runbook.md).
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev          # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## The rule this app is built around
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+**It reads from Supabase and does nothing else.** It never calls CFBD, an odds
+provider or an LLM — the Python worker is the only thing that talks to any of
+them (CLAUDE.md §2). AI reads are generated weekly and cached in `ai_reads`;
+there is no per-page-view LLM call, and adding one would be out of scope by
+design (§10).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to load **Inter** for body text and Geist Mono for the odds columns. Inter is not a preference — it is the family the client's live site uses, read out of its stylesheet. Theme colours are likewise measured rather than chosen; see the provenance note at the top of `app/globals.css`.
+It holds the **anon key only**, and anything prefixed `NEXT_PUBLIC_` is inlined
+into the browser bundle. The service role key and the database URL belong to the
+worker's environment. If either reaches this app, rotate it.
 
-## Learn More
+## Layout
 
-To learn more about Next.js, take a look at the following resources:
+```
+app/                  routes
+  health/             a real anon-key read on every request — the wiring proof
+  player/[playerId]/  game log, splits, defense detail, the cached AI read
+  globals.css         ALL theme tokens; the only file a reskin touches
+components/board/     player cards, controls, weekly targets, team chips
+components/player/    game log, splits, defense detail, the Recharts hit-rate chart
+lib/core/             sport-agnostic: env, formatting, hit-rate maths, types
+lib/data/             query modules, one per read concern
+lib/supabase/         read-only clients
+scripts/              check-schema.mjs
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+`lib/core/` is the sport-agnostic seam CLAUDE.md §3 asks for — nothing in it
+should know about conferences, CFBD, or college football. That is what makes the
+NFL build a copy rather than a rewrite.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Verifying
 
-## Deploy on Vercel
+```bash
+npm run check:schema     # selects every column the app reads, against the live DB
+npm run typecheck
+npm run test             # hit-rate maths, via node --test (no test framework)
+npm run lint
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+**`check:schema` is the one that matters most.** `lib/core/types.ts` is
+hand-written — the Supabase CLI is not installed and the project is not linked,
+so there are no generated types, and hand-written types keep compiling perfectly
+after the view beneath them changes. TypeScript cannot detect that. This script
+asks the database directly, and it also proves the anon role can still read what
+the app needs.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`/health` performs a real anon-key read on every request, so passing it proves
+the environment is wired, the migrations ran, and the RLS read policies grant
+access. It additionally asserts `play_player_stats` is **denied** to anon, so a
+too-permissive RLS change fails the check rather than silently exposing
+play-level data.
+
+## Two things worth knowing before changing the UI
+
+**PostgREST caps a response at 1,000 rows and says nothing about it.** The read
+layer detects truncation rather than trusting the row count. A new query that
+does not is a board that quietly stops at 1,000.
+
+**Theme values are measured, not chosen.** This project uses
+[`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts)
+to load **Inter** for body text and Geist Mono for the odds columns. Inter is not
+a preference — it is the family the client's live site uses, read out of its
+stylesheet. Theme colours are likewise measured rather than chosen; see the
+provenance note at the top of `app/globals.css`. Corrections go in that one file,
+never in a component.
+
+## Deploying
+
+Vercel, root directory `web/`, with `NEXT_PUBLIC_SUPABASE_URL` and
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` set. Preview deploy per branch so changes are
+reviewable on a live URL before merge.

@@ -225,15 +225,56 @@ Measured against how much a player's output actually varies week to week
 | QB pass completions | 0.41 | 0.25 | 1.6× |
 | QB pass attempts | 0.40 | 0.25 | 1.6× |
 
-**A naive week-1 board would publish the sharpest confidence percentages of the
-season on the thinnest evidence in the season** — the exact inversion of
-CLAUDE.md §6, and invisible from the rank correlations in §1, which are blind to
-width. Every number on the card is a probability derived from this distribution,
-so this is not a display problem to floor away like the negative quantiles were.
+### The empirical variance layer already absorbs much of this
 
-The fix is available and cheap: `features.prior_column_names()` already
-materializes `prior_{stat}_sd` into the frame, and `models.py` never reads it.
-Nothing needs to be ingested.
+That table is the gap **before** calibration, and quoting it as the gap on the
+board would overstate the defect. `Corrections.variance` buckets on
+`history_bucket(games_played)`, and a week-1 row (0 games) lands in `thin`
+alongside the 2–3 game rows the current walk fits on. The scales it learned,
+read off the last run's `calibration` metadata:
+
+| Market | fitted `@thin` width scale |
+|---|---|
+| rec_yards | ×2.170 |
+| rush_yards | ×2.149 |
+| rush_attempts | ×1.377 |
+| pass_attempts | ×1.549 *(market-level; no thin cell reached n)* |
+| pass_yards | ×1.514 *(market-level)* |
+| receptions | ×0.927 — the layer **narrows** this one |
+
+Netting the two, a published week-1 distribution would be roughly **1.2× to
+2.1×** too narrow rather than 1.6–4.6×. Still wrong, still all in the same
+direction, but the board is not as naked as the raw floor suggests.
+
+### What the layer structurally cannot fix, and why the fix still comes first
+
+1. **It cannot restore per-player shape.** A multiplicative scale on a constant
+   floor is still a constant: every week-1 receiver would carry the identical
+   relative width, so a metronomic possession receiver and a boom-bust deep
+   threat get the same confidence off the same mean. Reading
+   `prior_{stat}_sd` is the only thing that differentiates them.
+2. **It never reaches anytime TD.** Every `anytime_td` width correction is
+   recorded `applied: False — family has no free width parameter`, at every
+   bucket and position. The binary market is uncorrected by construction, and
+   §1 says it is the market that holds up *best* at week 1 — so it is the one
+   most likely to be published, with no width safety net under it.
+3. **The bucket boundary is about to stop meaning anything.** These scales were
+   fitted where `{stat}_sd` exists (2–3 games). Letting weeks 1–2 into the walk
+   puts 0-game rows, whose SD is a pure floor, in the same `thin` cell — mixing
+   two different regimes in one average, which is precisely what
+   `history_bucket`'s docstring says bucketing on games rather than weeks exists
+   to avoid.
+
+The fix is cheap: `features.prior_column_names()` already materializes
+`prior_{stat}_sd` into the frame and `models.py` never reads it. Nothing needs
+to be ingested.
+
+**It also cannot be done after grading.** Widening a distribution raises
+`observed_sd`, and QB rush yards sets its gamma location at
+`min(0.0, mean - 3.0 × observed_sd)` — so a wider SD drives `loc` further
+negative, which is the mechanism behind the 140 negative medians Phase 5 handed
+forward. The width fix and the negative-median fix are the same fix, and doing
+either alone makes the other worse.
 
 ---
 
@@ -243,10 +284,13 @@ Nothing needs to be ingested.
 gate remains 6b's calibration; nothing below should be published before it
 grades.
 
-1. **Fix the width first, in 6b, before grading anything.** Read
-   `prior_{stat}_sd` in `_sd` and `_dispersion`. Grading weeks 1–2 with the
-   0.25 floor in place would measure a model we must not ship, and the
-   calibration report would be a report about the wrong thing.
+1. **Fix the width first, in 6b, before grading anything** — together with the
+   gamma location, because they are one fix (§7). Read `prior_{stat}_sd` in
+   `_sd` and `_dispersion`. The empirical variance layer already covers most of
+   the *average* level, so this is not the emergency the raw floor implies; what
+   it buys is per-player width differentiation, an anytime-TD market that has
+   any width discipline at all, and a `thin` bucket that is not silently
+   averaging 0-game and 3-game rows once weeks 1–2 join the walk.
 2. **Universe rule for weeks 1–2: prior-season skill usage, ≥4 prior games, on a
    current roster.** Replaces `MIN_GAMES_TO_PROJECT` for those weeks rather than
    relaxing it. Justified by §4 — it matches the week-3 board's did-they-play

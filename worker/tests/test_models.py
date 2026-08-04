@@ -18,6 +18,7 @@ from worker.core.models import (
     MIN_PSEUDO_GAMES,
     MIN_RELATIVE_SD,
     Projection,
+    _blended_sd,
     _sd,
     beta_binomial_params,
     blend,
@@ -28,8 +29,10 @@ from worker.core.models import (
     position_baselines,
     project,
     project_anytime_td,
+    rescale,
     score_probability,
 )
+from worker.core.probability import distribution_median
 
 
 class TestBlend:
@@ -677,3 +680,181 @@ class TestProjectionObject:
             mean=250.0,
         )
         assert projection.probability_over(250.0) == pytest.approx(0.5)
+
+
+class TestBlendedSd:
+    """Width is blended and shrunk, not read off the current season alone.
+
+    Phase 6a found `_sd` reading `{stat}_sd` — a column that is NULL until a
+    player has two games — so weeks 1 and 2 fell to `MIN_RELATIVE_SD`, the
+    narrowest width the model can produce, on the thinnest evidence of the year.
+    """
+
+    @staticmethod
+    def _row(**overrides):
+        # Carries a current-season level as well as a prior one, deliberately at
+        # a DIFFERENT scale (80 vs 60), so a test that projects at some third
+        # mean can tell which one the width was taken from.
+        row = {
+            "position_group": "WR",
+            "games_played": 0,
+            "rec_yards_pg": 80.0,
+            "rec_yards_sd": 40.0,
+            "prior_games_played": 12,
+            "prior_weight": 0.5,
+            "prior_rec_yards_pg": 60.0,
+            "prior_rec_yards_sd": 42.0,  # cv 0.70, the measured WR figure
+        }
+        row.update(overrides)
+        return row
+
+    def test_week_one_reaches_the_prior_season_instead_of_the_floor(self):
+        """THE 6a defect, pinned. Replayed by dropping the prior_ columns."""
+        sd = _blended_sd(self._row(), "rec_yards", {"rec_yards_cv": 0.70}, 50.0)
+        assert sd > MIN_RELATIVE_SD * 50.0 * 1.5
+        assert sd == pytest.approx(0.70 * 50.0, rel=0.05)
+
+    def test_the_prior_seasons_own_spread_moves_the_answer(self):
+        """Not just 'a prior exists' — the prior's WIDTH has to be what is read.
+
+        Both rows have zero current-season games and an identical baseline, so
+        the only thing separating them is `prior_rec_yards_sd`.
+        """
+        baselines = {"rec_yards_cv": 0.50}
+        steady = _blended_sd(
+            self._row(prior_rec_yards_sd=18.0), "rec_yards", baselines, 50.0
+        )
+        volatile = _blended_sd(
+            self._row(prior_rec_yards_sd=60.0), "rec_yards", baselines, 50.0
+        )
+        assert volatile > steady * 1.5
+
+    def test_with_no_prior_and_no_current_it_falls_to_the_baseline_cv(self):
+        bare = {"position_group": "WR", "games_played": 0, "prior_games_played": 0}
+        assert _blended_sd(bare, "rec_yards", {"rec_yards_cv": 0.80}, 50.0) == (
+            pytest.approx(0.80 * 50.0)
+        )
+
+    def test_it_scales_with_the_projected_mean_not_the_raw_one(self):
+        """A receiver shrunk from 80 to 45 must not keep an 80-yard spread.
+
+        The row's own `rec_yards_pg` is 80. Reading the width off THAT instead of
+        off the projected mean is the pre-6b behaviour, and it makes the SD
+        constant in the projected mean — which is what this pins against.
+        """
+        row = self._row(games_played=6)
+        wide = _blended_sd(row, "rec_yards", {"rec_yards_cv": 0.70}, 80.0)
+        narrow = _blended_sd(row, "rec_yards", {"rec_yards_cv": 0.70}, 45.0)
+        assert wide == pytest.approx(narrow * 80.0 / 45.0, rel=1e-6)
+        assert narrow < wide
+
+    def test_a_full_current_season_pulls_the_width_toward_the_player(self):
+        """Width sharpens as the season accumulates, exactly as the mean does."""
+        baselines = {"rec_yards_cv": 0.70}
+        # The same player, seen in week 1 and again with 11 games on the board.
+        # Their own record says cv 0.20; prior and baseline both say 0.70.
+        week_one = _blended_sd(self._row(), "rec_yards", baselines, 50.0)
+        established = _blended_sd(
+            self._row(
+                games_played=11, rec_yards_pg=50.0, rec_yards_sd=10.0,
+                prior_weight=0.13,
+            ),
+            "rec_yards", baselines, 50.0,
+        )
+        assert established < week_one
+        assert 0.20 * 50.0 < established < 0.70 * 50.0
+
+    def test_the_relative_floor_still_applies(self):
+        row = self._row(
+            games_played=11, rec_yards_pg=50.0, rec_yards_sd=0.01, prior_weight=0.0,
+            prior_games_played=0,
+        )
+        sd = _blended_sd(row, "rec_yards", {"rec_yards_cv": 0.01}, 50.0)
+        assert sd == pytest.approx(MIN_RELATIVE_SD * 50.0)
+
+    def test_position_baselines_expose_a_cv(self):
+        baselines = position_baselines(
+            _rows("WR", "rec_yards", [40, 45, 50, 55, 60, 65, 70, 75, 80], 30.0)
+        )["WR"]
+        assert "rec_yards_cv" in baselines
+        assert baselines["rec_yards_cv"] == pytest.approx(30.0 / 60.0, rel=0.2)
+
+
+class TestLocationLift:
+    """A widened right-skewed family must not report a negative median.
+
+    Phase 5 recorded 140 rows whose stored p50 was below zero, worst -32.8.
+    `rescale` sends `loc` to mean*(1-scale), which is fine until the gamma's
+    shape collapses — measured on the live table, every negative-median row had
+    shape below 0.617 against 4.305 for the rest.
+    """
+
+    @staticmethod
+    def _collapsed_gamma(mean=28.0, sd=None):
+        # sd/mean of 1.4 puts shape near 0.5, the regime that broke.
+        return gamma_params(mean, sd if sd is not None else 1.4 * mean, 0.0)
+
+    def test_the_broken_condition_reproduces_without_the_lift(self):
+        """Replay: the raw location-scale result really does go negative."""
+        mean = 28.0
+        params = self._collapsed_gamma(mean)
+        scale = 2.17  # the fitted rec_yards@thin width scale
+        raw = {
+            "shape": params["shape"],
+            "scale": params["scale"] * scale,
+            "loc": scale * params["loc"] + mean * (1.0 - scale),
+        }
+        assert distribution_median("gamma", raw) < 0.0
+
+    def test_rescale_no_longer_produces_a_negative_median(self):
+        mean = 28.0
+        projection = Projection(
+            market_key="rec_yards", distribution="gamma",
+            params=self._collapsed_gamma(mean), mean=mean,
+        )
+        widened = rescale(projection, 2.17)
+        assert distribution_median("gamma", widened.params) >= 0.0
+        assert widened.quantiles["p50"] >= 0.0
+
+    def test_it_preserves_the_mean(self):
+        mean = 28.0
+        projection = Projection(
+            market_key="rec_yards", distribution="gamma",
+            params=self._collapsed_gamma(mean), mean=mean,
+        )
+        widened = rescale(projection, 2.17)
+        assert widened.mean == pytest.approx(mean)
+        p = widened.params
+        assert p["loc"] + p["shape"] * p["scale"] == pytest.approx(mean, rel=1e-6)
+
+    def test_it_is_a_no_op_when_the_median_was_already_fine(self):
+        """The location-scale identity must survive untouched on healthy rows."""
+        mean = 70.0
+        params = gamma_params(mean, 0.4 * mean, 0.0)
+        projection = Projection(
+            market_key="rec_yards", distribution="gamma", params=params, mean=mean,
+        )
+        widened = rescale(projection, 1.6)
+        assert widened.params["shape"] == pytest.approx(params["shape"])
+        assert widened.params["scale"] == pytest.approx(params["scale"] * 1.6)
+        assert widened.params["loc"] == pytest.approx(mean * (1.0 - 1.6))
+
+    def test_it_keeps_as_much_negative_tail_as_it_can(self):
+        """Minimal intervention: not clamped all the way to zero."""
+        mean = 28.0
+        projection = Projection(
+            market_key="rec_yards", distribution="gamma",
+            params=self._collapsed_gamma(mean), mean=mean,
+        )
+        assert rescale(projection, 2.17).params["loc"] < 0.0
+
+    def test_lognormal_is_handled_too(self):
+        mean = 20.0
+        params = lognormal_params(mean, 1.6 * mean, 0.0)
+        projection = Projection(
+            market_key="rec_yards", distribution="lognormal",
+            params=params, mean=mean,
+        )
+        widened = rescale(projection, 2.2)
+        assert distribution_median("lognormal", widened.params) >= 0.0
+        assert widened.mean == pytest.approx(mean)

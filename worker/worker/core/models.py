@@ -83,7 +83,12 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from worker.core.probability import prob_over, validate_params
+from worker.core.probability import (
+    distribution_median,
+    distribution_sd,
+    prob_over,
+    validate_params,
+)
 from worker.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -414,6 +419,7 @@ def rescale(projection: Projection, scale: float) -> Projection:
                 "sigma": float(params["sigma"]),
                 "loc": shifted_loc,
             }
+        params = _lift_location_to_positive_median(distribution, params, mean)
 
     elif distribution == "negative_binomial":
         # variance = mean * dispersion, so the width scales with sqrt(dispersion).
@@ -454,6 +460,56 @@ def rescale(projection: Projection, scale: float) -> Projection:
         efficiency=projection.efficiency,
         matchup_multiplier=projection.matchup_multiplier,
     )
+
+
+def _lift_location_to_positive_median(
+    distribution: str, params: dict[str, float], mean: float
+) -> dict[str, float]:
+    """Raise `loc` just far enough that the median is not negative.
+
+    THE DEFECT THIS CLOSES. `rescale` widens a right-skewed family by the
+    location-scale identity, which sends `loc` to `mean * (1 - scale)` — negative
+    for any scale above 1. That is normally harmless: the docstring above trades
+    a little misplaced mass below zero against a systematic bias through the
+    middle of the range, and it is the right trade.
+
+    It stops being harmless when the gamma's SHAPE has collapsed. Measured on the
+    live table, rec_yards rows with a negative median averaged shape 0.419 and
+    none exceeded 0.617, against 4.305 for the rest — and a shape that low puts
+    the median itself below zero, which is not a little misplaced tail mass but a
+    nonsense headline number. 163 of 38,616 rows (0.4%). rush_yards never hit it
+    because its shape floors near 9.
+
+    `_blended_sd` removes most of the cause by shrinking the sd/mean ratio that
+    collapses the shape. This is the backstop for whatever survives that, and it
+    is deliberately MINIMAL: it searches for the most negative `loc` that still
+    yields a non-negative median, so the negative tail QB rushing genuinely needs
+    (23% of those games lose yardage) is preserved as far as it can be.
+
+    Re-solving at each candidate holds the mean and the target SD exactly —
+    `gamma_params(m, sd, L)` is algebraically identical to the location-scale
+    result when `L` is the unclamped `shifted_loc`, so this is a no-op on every
+    row whose median was already fine.
+    """
+    if distribution_median(distribution, params) >= 0.0:
+        return params
+
+    target_sd = distribution_sd(distribution, params)
+    solve = gamma_params if distribution == "gamma" else lognormal_params
+
+    low, high = float(params.get("loc", 0.0)), 0.0
+    if distribution_median(distribution, solve(mean, target_sd, high)) < 0.0:
+        # Cannot be rescued by moving the location alone; a support starting at
+        # zero is the most that can be done.
+        return solve(mean, target_sd, high)
+
+    for _ in range(40):
+        mid = 0.5 * (low + high)
+        if distribution_median(distribution, solve(mean, target_sd, mid)) < 0.0:
+            low = mid
+        else:
+            high = mid
+    return solve(mean, target_sd, high)
 
 
 def shift_mean(projection: Projection, multiplier: float) -> Projection:
@@ -573,6 +629,39 @@ def _sd(mean: float, observed_sd: float | None) -> float:
 # -----------------------------------------------------------------------------
 # Baselines
 # -----------------------------------------------------------------------------
+def median_of(values: list[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return 0.5 * (ordered[middle - 1] + ordered[middle])
+
+
+def _cv_samples(rows: list[dict[str, Any]]) -> dict[str, dict[str, list[float]]]:
+    """Per-player sd/mean ratios, by position and `{stat}_cv` key.
+
+    Only rows carrying BOTH a mean and a positive SD contribute. A player with
+    one game has a NULL `stddev_samp` and simply does not vote on the typical
+    spread — which is the point: the baseline exists so that a player with no
+    usable width of their own can borrow one.
+    """
+    samples: dict[str, dict[str, list[float]]] = {}
+    for row in rows:
+        position = row.get("position_group")
+        if not position:
+            continue
+        bucket = samples.setdefault(str(position), {})
+        for key in row:
+            if not key.endswith("_pg") or key.startswith(("prior_", "team_", "opp_")):
+                continue
+            mean = _value(row, key)
+            sd = _value(row, key.replace("_pg", "_sd"))
+            if mean is None or mean <= 0 or sd is None or sd <= 0:
+                continue
+            bucket.setdefault(f"{key[: -len('_pg')]}_cv", []).append(sd / mean)
+    return samples
+
+
 def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     """Median of each per-game stat, by position, over the projectable pool.
 
@@ -597,15 +686,8 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
     for position, stats in by_position.items():
         resolved: dict[str, float] = {}
         for key, values in stats.items():
-            if not values:
-                continue
-            ordered = sorted(values)
-            middle = len(ordered) // 2
-            resolved[key] = (
-                ordered[middle]
-                if len(ordered) % 2
-                else 0.5 * (ordered[middle - 1] + ordered[middle])
-            )
+            if values:
+                resolved[key] = median_of(values)
         baselines[position] = resolved
 
     # Shrinkage strength, estimated per stat rather than fixed.
@@ -648,6 +730,22 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
             resolved[f"{key}__pseudo_games"] = min(
                 max(within / between, MIN_PSEUDO_GAMES), MAX_PSEUDO_GAMES
             )
+
+    # Typical game-to-game SPREAD, as a coefficient of variation, per stat.
+    #
+    # Width is blended and shrunk exactly like every mean is (`_blended_sd`), and
+    # this is what it shrinks toward. Held as sd/mean rather than as a raw SD
+    # because spread scales with level: a receiver averaging 80 yards and one
+    # averaging 20 do not share a standard deviation, but they do share a
+    # coefficient of variation closely enough to be a sensible prior.
+    #
+    # Median rather than mean, for the same reason the level baselines use one —
+    # a handful of players with a near-zero mean produce enormous ratios.
+    for position, ratios in _cv_samples(rows).items():
+        resolved = baselines.setdefault(position, {})
+        for key, values in ratios.items():
+            if len(values) >= 8:
+                resolved[key] = median_of(values)
 
     # Touchdown conversion rates are POOLED, not per-player medians: they are
     # ratios of counts, and the median of per-player ratios is dominated by
@@ -756,12 +854,73 @@ def _blend_rate(
     )
 
 
-def _dispersion(row: dict[str, Any], stat: str) -> float:
-    """Observed variance/mean for a count stat, clamped to a usable range."""
+def _cv(row: dict[str, Any], stat: str, prefix: str = "") -> float | None:
+    """One season's spread as a coefficient of variation, or None if undefined."""
+    mean = _value(row, f"{prefix}{stat}_pg")
+    sd = _value(row, f"{prefix}{stat}_sd")
+    if mean is None or mean <= 0 or sd is None or sd <= 0:
+        return None
+    return sd / mean
+
+
+def _blended_sd(
+    row: dict[str, Any], stat: str, baselines: dict[str, float], mean: float
+) -> float:
+    """Projected SD, blended across current season, prior season and baseline.
+
+    WHY THIS IS NOT JUST `{stat}_sd`. Reading the current season's sample SD
+    directly had two faults that only showed up once the early-season weeks were
+    examined (Phase 6a):
+
+      * **It is unreachable early.** `stddev_samp` over one game is NULL, so
+        weeks 1 and 2 fell to `MIN_RELATIVE_SD` — the NARROWEST width the model
+        can produce — on the thinnest evidence of the season. That inverts
+        CLAUDE.md §6, which asks for wider uncertainty early. `prior_{stat}_sd`
+        was already materialized by `features.prior_column_names()` and simply
+        never read.
+      * **It was measured at the wrong level.** The raw SD came from the
+        player's own scale while the mean it decorated had been shrunk toward a
+        position baseline. A receiver averaging 80 yards who is projected at 45
+        was handed the spread of an 80-yard receiver.
+
+    Blending the COEFFICIENT of variation fixes both: it is the scale-free
+    quantity, so it survives the shrinkage the mean underwent, and it has a
+    position baseline to fall back on when neither season offers one.
+
+    It also removes the cause of the negative medians Phase 5 recorded. Those
+    came from `rescale` widening a gamma whose shape had collapsed below ~0.6,
+    which requires sd/mean above about 1.3 — an unshrunk per-player ratio.
+    Shrinking the ratio toward its position baseline keeps the shape in range.
+    """
+    weight = _value(row, "prior_weight", 0.0) or 0.0
+    cv = blend(
+        current=_cv(row, stat),
+        current_games=_value(row, "games_played", 0.0) or 0.0,
+        prior=_cv(row, stat, prefix="prior_"),
+        prior_games=_value(row, "prior_games_played", 0.0) or 0.0,
+        prior_weight=weight,
+        baseline=baselines.get(f"{stat}_cv", MIN_RELATIVE_SD),
+        pseudo_games=baselines.get(
+            f"{stat}_pg__pseudo_games", BASELINE_PSEUDO_GAMES
+        ),
+    )
+    return _sd(mean, cv * abs(mean))
+
+
+def _dispersion(row: dict[str, Any], stat: str, baselines: dict[str, float]) -> float:
+    """Variance/mean for a count stat, clamped to a usable range.
+
+    Derived from the same blended CV as `_blended_sd` rather than from the
+    current season's sample alone, so a count market has a usable dispersion in
+    week 1 instead of falling to the flat 2.0 default. var/mean = (cv*mean)^2 /
+    mean = cv^2 * mean.
+    """
     mean = _value(row, f"{stat}_pg")
-    sd = _value(row, f"{stat}_sd")
-    if not mean or mean <= 0 or sd is None or sd <= 0:
+    if mean is None or mean <= 0:
+        mean = baselines.get(f"{stat}_pg")
+    if not mean or mean <= 0:
         return 2.0
+    sd = _blended_sd(row, stat, baselines, mean)
     return min(max((sd * sd) / mean, MIN_DISPERSION), MAX_DISPERSION)
 
 
@@ -1003,7 +1162,7 @@ def project(
         return finalize(
             market_key,
             distribution,
-            negative_binomial_params(mean, _dispersion(row, "pass_attempts")),
+            negative_binomial_params(mean, _dispersion(row, "pass_attempts", baselines)),
             mean,
             volume=mean,
         )
@@ -1017,7 +1176,7 @@ def project(
         return finalize(
             market_key,
             distribution,
-            negative_binomial_params(mean, _dispersion(row, "pass_completions")),
+            negative_binomial_params(mean, _dispersion(row, "pass_completions", baselines)),
             mean,
             volume=attempts,
             efficiency=rate,
@@ -1034,7 +1193,7 @@ def project(
         return finalize(
             market_key,
             distribution,
-            {"mu": mean, "sigma": _sd(mean, _value(row, "pass_yards_sd"))},
+            {"mu": mean, "sigma": _blended_sd(row, "pass_yards", baselines, mean)},
             mean,
             volume=attempts,
             efficiency=yards_per_attempt,
@@ -1063,7 +1222,7 @@ def project(
         return finalize(
             market_key,
             distribution,
-            negative_binomial_params(mean, _dispersion(row, "rush_attempts")),
+            negative_binomial_params(mean, _dispersion(row, "rush_attempts", baselines)),
             mean,
             volume=mean,
         )
@@ -1074,7 +1233,7 @@ def project(
         position = str(row.get("position_group") or "")
         multiplier = defensive_ratio("adj_rush_yards_allowed_pg", (position,))
         mean = carries * yards_per_carry * multiplier
-        observed_sd = _sd(mean, _value(row, "rush_yards_sd"))
+        observed_sd = _blended_sd(row, "rush_yards", baselines, mean)
 
         if distribution == "normal":
             params = {"mu": mean, "sigma": observed_sd}
@@ -1109,15 +1268,15 @@ def project(
 
         if distribution == "beta_binomial":
             # Spread of the TARGET count, which is what n must cover.
-            target_sd = math.sqrt(max(targets, 1.0) * _dispersion(row, "targets"))
+            target_sd = math.sqrt(max(targets, 1.0) * _dispersion(row, "targets", baselines))
             params = beta_binomial_params(
                 targets,
                 catch_rate,
-                _dispersion(row, "receptions"),
+                _dispersion(row, "receptions", baselines),
                 trials_sd=target_sd,
             )
         else:
-            params = negative_binomial_params(mean, _dispersion(row, "receptions"))
+            params = negative_binomial_params(mean, _dispersion(row, "receptions", baselines))
         return finalize(
             market_key,
             distribution,
@@ -1155,7 +1314,7 @@ def project(
         ) * (yards_per_reception * efficiency_multiplier)
         if mean <= 0:
             return None
-        observed_sd = _sd(mean, _value(row, "rec_yards_sd"))
+        observed_sd = _blended_sd(row, "rec_yards", baselines, mean)
 
         if distribution == "lognormal":
             params = lognormal_params(mean, observed_sd, 0.0)

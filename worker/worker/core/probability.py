@@ -407,6 +407,40 @@ def distribution_sd(distribution: str, params: dict[str, Any]) -> float:
     raise ValueError(f"Unknown distribution family: {distribution!r}")
 
 
+def distribution_median(distribution: str, params: dict[str, Any]) -> float:
+    """Median of a fitted continuous distribution.
+
+    Exact, and deliberately not a bisection on `prob_over`. `rescale` consults
+    this on every gamma and lognormal row it widens, and inverting the survival
+    function numerically there cost about sixty scipy calls per projection —
+    enough to take a single week of `run_projections` from seconds to minutes.
+
+    Only the continuous yardage families are supported, because they are the
+    only ones whose location can be shifted below zero. A caller asking for the
+    median of a count family wants a quantile, not this.
+    """
+    validate_params(distribution, params)
+
+    if distribution == "normal":
+        return float(params["mu"])
+
+    if distribution == "lognormal":
+        # median of a lognormal is exp(mu), shifted by the location.
+        return float(params.get("loc", 0.0)) + math.exp(float(params["mu"]))
+
+    if distribution == "gamma":
+        return float(
+            _stats.gamma.ppf(
+                0.5,
+                a=float(params["shape"]),
+                loc=float(params.get("loc", 0.0)),
+                scale=float(params["scale"]),
+            )
+        )
+
+    raise ValueError(f"No closed-form median for family: {distribution!r}")
+
+
 def prob_over(distribution: str, params: dict[str, Any], line: float) -> float:
     """P(outcome > line) — the number every card is built from.
 

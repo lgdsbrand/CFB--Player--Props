@@ -269,12 +269,35 @@ The fix is cheap: `features.prior_column_names()` already materializes
 `prior_{stat}_sd` into the frame and `models.py` never reads it. Nothing needs
 to be ingested.
 
-**It also cannot be done after grading.** Widening a distribution raises
-`observed_sd`, and QB rush yards sets its gamma location at
-`min(0.0, mean - 3.0 × observed_sd)` — so a wider SD drives `loc` further
-negative, which is the mechanism behind the 140 negative medians Phase 5 handed
-forward. The width fix and the negative-median fix are the same fix, and doing
-either alone makes the other worse.
+### Correction: where the negative medians actually come from
+
+An earlier draft of this section blamed the QB rush-yards location,
+`loc = min(0.0, mean - 3.0 × observed_sd)`, and concluded that widening the SD
+would make the negative medians worse. **Both halves were wrong**, and the live
+table says so plainly: `rush_yards` has **zero** negative medians in 3,960 gamma
+rows. Every one of them is in `rec_yards`, which is built at `loc = 0.0` and
+cannot produce a negative median at projection time at all.
+
+The mechanism is `rescale`. Widening a right-skewed family by the location-scale
+identity sends `loc` to `mean × (1 − scale)` — negative for any scale above 1 —
+and `rec_yards@thin` carries the largest fitted scale in the table, ×2.17. That
+is normally harmless, and the docstring makes the trade deliberately. It stops
+being harmless when the gamma's **shape** collapses:
+
+| rec_yards gamma rows | n | mean shape | max shape |
+|---|---|---|---|
+| negative median | 127 | 0.419 | 0.617 |
+| the rest | 5,675 | 4.305 | 16.000 |
+
+A shape that low requires sd/mean above roughly 1.3, which only an unshrunk
+per-player ratio produces. `rush_yards` never reaches it because its shape floors
+near 9.
+
+**So the width fix and the negative medians are still one job, but the sign is
+the opposite of what was written here.** Blending the coefficient of variation
+shrinks pathological sd/mean ratios toward the position baseline, which keeps the
+shape in range and removes most of the cause rather than aggravating it. A
+minimal location lift in `rescale` is the backstop for whatever survives.
 
 ---
 

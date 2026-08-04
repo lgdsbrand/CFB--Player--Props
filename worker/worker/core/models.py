@@ -113,6 +113,43 @@ MAX_PSEUDO_GAMES = 12.0
 # week 1 there are none at all, and in week 2 only the teams that opened.
 MIN_BASELINE_SAMPLES = 8
 
+# Prior-season games a player needs before voting on the PRIOR-season baseline.
+#
+# WHY THERE HAS TO BE A FILTER AT ALL. The current-season baseline carries an
+# implicit one: a row only votes if it has played, so from week 3 the pool is
+# "players with a role this season". Entering week 1 nobody has played, the
+# prior-season fallback takes over, and its pool is every player on a roster
+# with any prior production whatever — third-string quarterbacks included. The
+# projection is then shrunk toward that while being applied to the ~850 players
+# who actually dress and clear the usage floor. Phase 6b.4 measured the
+# consequence: the week-1 projection came out 27-43% low, and the `@priors` mean
+# multiplier sat pinned at MAX_MEAN_MULTIPLIER, which is the correction layer
+# reporting a bias larger than it is permitted to repair.
+#
+# WHY 8, measured on 2025 and 2024 week 1 (docs/phase-6b-opening-weekend.md).
+# Ratio of actual to projected, worst market of the eight:
+#
+#   min prior games   0      4      5      6      7      8      9     10     12
+#   2025 wk1        1.430  1.319  1.295  1.243  1.205  1.175  1.137  1.116  1.035
+#   2024 wk1        1.585  1.331  1.261  1.243  1.191  1.116  1.095  1.064  0.971
+#
+# The curve is monotone rather than U-shaped, so there is no optimum to find —
+# only the question of how strong a filter the evidence justifies. Eight is the
+# smallest threshold at which EVERY market in BOTH seasons lands inside the
+# +/-20% the mean correction is allowed to apply, which is the whole point of
+# fixing this at source; whatever bias remains is then the layer's job. Going
+# further looks better on one season and worse on the other (2024's worst is
+# 0.971 at twelve, over-projecting), which is the signature of fitting the
+# residual, and it thins the pool: at eight the smallest position still holds
+# 88 players, at twelve only 19.
+#
+# NOT the same number as `projections.MIN_PRIOR_GAMES_TO_PROJECT`, which asks a
+# different question — that one decides who is worth PROJECTING, this one who
+# describes the position. Four is deliberately generous for the first and
+# measurably too generous for the second (1.319 and 1.331 above, still outside
+# the clamp).
+MIN_PRIOR_GAMES_FOR_BASELINE = 8
+
 # Floor on a projected standard deviation, as a fraction of the mean. Guards the
 # degenerate case where a player's handful of games happened to be near-identical
 # and the sample SD collapses toward zero — which would otherwise produce a
@@ -676,6 +713,14 @@ def _cv_samples(
     spread — which is the point: the baseline exists so that a player with no
     usable width of their own can borrow one. Entering week 1 nobody has one, so
     `prefix="prior_"` reads the same ratios off last season instead.
+
+    NO ROLE FILTER HERE, unlike the LEVEL baseline in `position_baselines`, and
+    the asymmetry is deliberate. A coefficient of variation is scale-free: a
+    backup's week-to-week swing relative to his own average is a reasonable
+    estimate of a starter's relative swing, while his yards per game is not a
+    reasonable estimate of a starter's yards per game. Filtering the level pool
+    fixed a measured 27-43% bias; filtering this one would only thin a sample
+    that has no equivalent bias to remove.
     """
     samples: dict[str, dict[str, list[float]]] = {}
     for row in rows:
@@ -700,20 +745,39 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
     Median rather than mean: the pool includes deep-bench players whose zeros
     would drag a mean well below anything a projectable player produces, and the
     baseline exists to be a sensible thing to shrink a thin sample TOWARD.
+
+    TWO POOLS, EACH WITH A ROLE FILTER. The current-season median is taken over
+    rows that have played; the prior-season median, used only where the current
+    season is too thin to speak for itself, over rows that played at least
+    `MIN_PRIOR_GAMES_FOR_BASELINE` of last season. Both filters exist for one
+    reason: a baseline is applied to players with a role, so it has to be
+    measured on players with a role.
     """
     by_position: dict[str, dict[str, list[float]]] = {}
     prior_by_position: dict[str, dict[str, list[float]]] = {}
+    prior_any_by_position: dict[str, dict[str, list[float]]] = {}
     for row in rows:
         position = row.get("position_group")
         if not position:
             continue
         bucket = by_position.setdefault(str(position), {})
         prior_bucket = prior_by_position.setdefault(str(position), {})
+        prior_any_bucket = prior_any_by_position.setdefault(str(position), {})
         # A row with no current-season game says nothing about this season's
         # typical output, so it does not vote on the current-season median. It
         # still votes on the PRIOR one below, which entering week 1 is the only
         # evidence any row has.
         has_current = (_value(row, "games_played", 0.0) or 0.0) > 0
+        # ...and the prior-season median takes the same kind of filter, for the
+        # same reason. "Has played" is what keeps the current-season pool a
+        # description of the position rather than of everyone on a roster; last
+        # season's equivalent is having played enough of it to have had a role.
+        # Without this the week-1 board shrinks every projection toward a median
+        # that includes the third-string quarterback. See
+        # MIN_PRIOR_GAMES_FOR_BASELINE.
+        has_prior_role = (
+            _value(row, "prior_games_played", 0.0) or 0.0
+        ) >= MIN_PRIOR_GAMES_FOR_BASELINE
         for key in _stat_keys(row):
             number = _value(row, key) if has_current else None
             if number is not None:
@@ -725,21 +789,39 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
             # nothing to stand on. Used ONLY where the current season is too thin
             # to speak for itself, so no established week borrows from it.
             prior_number = _value(row, f"prior_{key}")
-            if prior_number is not None:
+            if prior_number is None:
+                continue
+            prior_any_bucket.setdefault(key, []).append(prior_number)
+            if has_prior_role:
                 prior_bucket.setdefault(key, []).append(prior_number)
 
     baselines: dict[str, dict[str, float]] = {}
     for position, stats in by_position.items():
         resolved: dict[str, float] = {}
         prior_stats = prior_by_position.get(position, {})
-        for key in set(stats) | set(prior_stats):
+        prior_any = prior_any_by_position.get(position, {})
+        for key in set(stats) | set(prior_stats) | set(prior_any):
             values = stats.get(key) or []
             # MIN_BASELINE_SAMPLES, not "any": one or two players who happen to
             # have played is not a position's typical output, and in week 2 that
             # is the whole current-season sample. Falling back keeps the baseline
             # a description of the position rather than of whoever kicked off.
             if len(values) < MIN_BASELINE_SAMPLES:
-                values = prior_stats.get(key) or values
+                role = prior_stats.get(key) or []
+                # AN EMPTY POOL IS THE ONE OUTCOME WORSE THAN A BROAD ONE. A
+                # missing baseline reads as 0.0 downstream — the blend shrinks
+                # toward nothing and the usage floor stops filtering — so where
+                # the role filter leaves too few players to describe a position,
+                # the unfiltered prior pool is still better than silence. On
+                # real frames this does not fire: the smallest position holds 88
+                # players at the threshold. It exists so that a thinner
+                # backfill, or a position CFBD barely populates, degrades
+                # instead of disappearing.
+                values = (
+                    role
+                    if len(role) >= MIN_BASELINE_SAMPLES
+                    else (prior_any.get(key) or values)
+                )
             if values:
                 resolved[key] = median_of(values)
         baselines[position] = resolved

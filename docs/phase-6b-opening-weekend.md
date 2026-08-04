@@ -2,193 +2,295 @@
 
 **The review gate.** Weeks 1 and 2 had never been scored by any walk
 (`MIN_BACKTEST_WEEK` was 3), so "can the board open with the season" had no
-numeric answer. It has one now. Run `d606279b`, 2026-08-04, 360,725 graded
-predictions across 2024 and 2025.
+numeric answer.
+
+Two runs stand behind this document, both 2024 and 2025, point-in-time:
+
+| Run | | n |
+|---|---|---|
+| `d606279b` | the gate: weeks 1-2 graded for the first time | 360,725 |
+| `0930961f` | after the fix that grading exposed | 360,058 |
 
 Companion documents: [phase-6a-early-season-ceiling.md](phase-6a-early-season-ceiling.md)
 measured the ceiling before any of this was graded;
-[calibration-report.html](calibration-report.html) is the rendered report this
-summarises.
+[calibration-report.html](calibration-report.html) is the rendered report.
 
 ---
 
 ## The answer
 
-**Ship week 2 as it stands. Do not ship week 1 until its overconfidence is
-fixed, and that fix is a specific one rather than a scope cut.**
+**Ship both opening weekends.** After the fix, weeks 1-2 are the
+**best-calibrated stratum of the season** and carry its highest skill.
 
-The opening weekends discriminate nearly as well as the settled season. What
-they do not do yet is state honest probabilities, and the failure is confined to
-week 1 and to the top of the confidence range — which is exactly where a user
-acts.
+| Stratum | n | Brier skill | ECE |
+|---|---|---|---|
+| `wk1-2 opening` | 38,971 | **+0.2104** | **0.0184** |
+| `wk3-6 early` | 95,021 | +0.1874 | 0.0191 |
+| `wk7+ late` | 226,066 | +0.1971 | 0.0215 |
+| overall | 360,058 | +0.1960 | 0.0162 |
+
+That is not a claim the opening board knows as much as a settled one. It knows
+less, and it now *says* so honestly — which is the only property CLAUDE.md §6
+asks for.
 
 ---
 
-## 1. The phase table
+## 1. What the gate found
+
+Before the fix:
 
 | Stratum | n | Brier skill | ECE |
 |---|---|---|---|
 | `wk1-2 opening` | 39,638 | +0.1778 | **0.0558** |
 | `wk3-6 early` | 95,021 | +0.1885 | 0.0182 |
 | `wk7+ late` | 226,066 | +0.1960 | 0.0243 |
-| overall | 360,725 | +0.1921 | 0.0174 |
 
-Skill holds up: the opening weeks reach 91% of what the late season manages.
-**Calibration does not: 0.0558 is three times any other stratum.**
+Skill was fine. Calibration was three times worse than any other stratum, and
+splitting the two opening weeks located it precisely:
 
-Note what the overall row does *not* say. Pooled ECE is computed on pooled bins,
-so an overconfident group and an underconfident one partly cancel — the headline
-0.0174 is *better* than the previous run's 0.0184 while containing a stratum at
-0.0558. That cancellation is the entire reason weeks 1-2 are reported apart.
-
-**Weeks 3-16 moved, as expected and as agreed.** They are graded with a
-calibration accumulator that now carries two more weeks of residuals and a
-separate `priors` bucket, so the numbers are not identical to the previous run:
-overall skill +0.1934 → +0.1921, ECE 0.0184 → 0.0174. The early stratum improved
-on both counts (+0.1850 → +0.1885, ECE 0.0218 → 0.0182); late gave back a little
-(+0.1968 → +0.1960, ECE 0.0229 → 0.0243). The population of weeks 3+ is
-unchanged — same players, same markets, same rows.
-
-## 2. It is week 1, not "the opening weeks"
-
-2025 only, which [phase-6a](phase-6a-early-season-ceiling.md) established as the
-primary evidence because 2024's prior season carries no `targets`:
-
-| | n | Brier skill | ECE |
+| 2025 | n | Brier skill | ECE |
 |---|---|---|---|
 | week 1 | 12,506 | +0.1611 | **0.0780** |
-| week 2 | 10,933 | **+0.2130** | 0.0240 |
+| week 2 | 10,933 | +0.2130 | 0.0240 |
 | weeks 3+ | 163,551 | +0.1945 | 0.0163 |
 
-**Week 2 grades better than the season it opens.** One completed game is enough:
-skill above the full-season figure, ECE in the normal range. Nothing about week 2
-needs fixing or hedging.
+**Week 2 already graded better than the season it opens.** One completed game is
+enough. Week 1 was the whole defect, and it showed up where it costs most —
+stated 0.87 against 0.837 actual at the top of the confidence range.
 
-Week 1 is where the cold start actually bites. 2024's opening weeks are worse
-again (+0.1643, ECE 0.0633) and carry no receiving or touchdown markets at all,
-which is the missing-`targets` hole rather than a modelling result.
+The calibration layer named the mechanism without identifying it: the `@priors`
+**mean** multiplier sat pinned at `MAX_MEAN_MULTIPLIER` (x1.200) for rec_yards,
+receptions and rush_yards. A binding clamp is not a correction, it is a report
+that the projection is biased low by more than the layer is permitted to repair.
 
-## 3. What "overconfident" means here, concretely
+## 2. The cause was not what this document first said
 
-2025 opening weeks, by stated confidence:
+The first version of this write-up blamed **survivorship in the anchor**: a
+week-1 projection rests on the player's full prior-season average, and players
+who dress in week 1 disproportionately *ended* last season with a role, so a
+full-season average should understate them. The prescribed fix was to blend the
+anchor toward `prior_{stat}_recent_pg`, the last five games.
 
-| Stated | n | Model says | Actually happened |
+**Measured, that hypothesis is wrong twice over.** Over the graded population
+the two anchors barely differ:
+
+| stat | prior full season | prior last 5 | ratio |
 |---|---|---|---|
-| 0.50-0.60 | 5,746 | 0.550 | 0.554 |
-| 0.60-0.70 | 5,774 | 0.650 | 0.643 |
-| 0.70-0.80 | 5,792 | 0.750 | **0.729** |
-| 0.80+ | 6,127 | 0.870 | **0.837** |
+| pass_yards | 142.85 | 141.67 | 0.992 |
+| rec_yards | 26.67 | 26.78 | 1.004 |
+| receptions | 2.29 | 2.34 | 1.020 |
+| rush_yards | 27.55 | 28.11 | 1.020 |
+| rush_attempts | 5.52 | 5.78 | 1.046 |
 
-The coin-flip end is honest. The confident end is overstated by two to three
-points — and a props board is read from the confident end down.
+And running the real projector at anchor weights from 0 to 1 moves the bias
+almost not at all — `rec_yards` gets *worse* (1.271 → 1.294), `pass_attempts`
+improves only 1.319 → 1.289. Had the fix been implemented as recommended it
+would have shipped, changed nothing measurable, and left the clamp binding.
 
-## 4. The mechanism, and why it is fixable at source
+## 3. The cause was the shrinkage target
 
-The calibration snapshot names it. In the new `priors` bucket the **mean**
-multiplier is pinned at the clamp:
+The projection is an empirical-Bayes blend of the player's own record and a
+position baseline. Entering week 1 the player's own record is a prior season
+discounted by `prior_weight` (0.5, halved again for transfers), so the baseline
+term carries roughly 40% of the projection — far more than in any settled week.
 
-| Market | `@priors` mean multiplier | n |
-|---|---|---|
-| rec_yards | **x1.200** (= `MAX_MEAN_MULTIPLIER`) | 1,584 |
-| receptions | **x1.200** | 1,642 |
-| rush_yards | **x1.200** | 1,419 |
-| anytime_td | x1.186 | 2,270 |
+And that baseline was measured on the wrong population. In weeks 3+ it is a
+median over rows **with current-season games**, which is an implicit role
+filter: only players who have appeared vote. Entering week 1 nobody has appeared,
+the prior-season fallback added in 6b.2 takes over, and its pool was *every*
+player on a roster with any prior production at all — third-string quarterbacks
+included.
 
-A binding clamp is not a correction, it is a report that the projection is
-biased low by *more* than the correction layer is permitted to fix.
-`MAX_MEAN_MULTIPLIER` exists precisely to say so: CLAUDE.md §6 treats a
-projection wrong by more than a fifth as a modelling failure to fix at source
-rather than paper over.
+| 2025 week 1 | baseline used | median of the players it was applied to | ratio |
+|---|---|---|---|
+| QB pass_yards | 91.44 | 185.67 | **2.03** |
+| TE rec_yards | 15.00 | 23.50 | 1.57 |
+| WR rec_yards | 24.77 | 33.92 | 1.37 |
+| RB rush_yards | 25.71 | 32.50 | 1.26 |
 
-The likely cause is survivorship in the anchor. A week-1 projection and its line
-both rest on the player's **full prior-season average**, and the players who
-dress in week 1 are disproportionately those who *ended* last season with a role
-— their full-season average is dragged down by the weeks they spent behind
-someone. The base rate agrees: outcomes clear the line 46.6% of the time in week
-1 against 43.0% from week 3 on.
+A baseline is what a projection with no evidence of its own shrinks toward. This
+one was shrinking every opening-weekend projection toward the bench.
 
-`prior_{stat}_recent_pg` — the last five games of the prior season — is already
-materialized in the feature frame and read by nothing, exactly as
-`prior_{stat}_sd` was before 6b.1. Blending the anchor toward it is the obvious
-first attempt and costs no new ingest.
+## 4. The fix, and how the threshold was chosen
 
-## 5. Two things I expected that the grading contradicts
+`MIN_PRIOR_GAMES_FOR_BASELINE = 8`: a row votes on the prior-season baseline
+only if it played at least eight games of that season. The current-season pool
+already carries the equivalent filter; this gives the prior-season pool the same
+one.
 
-**Anytime touchdown does not carry the opening board.** 6a measured the prior
-season's scoring record as the signal that survives the cold start best (AUC
-0.52-0.72, higher for transfers than stayers at QB) and I built the
-prior-season goal-line path on that basis. Graded on its own probabilities it
-adds almost nothing at the opening — 2025 weeks 1-2 skill **+0.0104** on 1,687
-predictions, against +0.0440 in weeks 3+. The difference is roughly one standard
-error on that sample, so the honest reading is "no worse than usual, and usual is
-weak", not "broken". Ranking power and calibrated probability are different
-claims and 6a only measured the first. The path still earns its place — without
-it the market is absent from opening weekend entirely, and week 2 depends on it
-— but the board should not lead with it in week 1.
+The threshold was swept rather than picked. Ratio of actual to projected, worst
+of the eight markets:
 
-**Narrowing to returning starters would not help.** The phase-6 plan's stated
-fallback, if the numbers disappointed, was a smaller opening board of players who
-stayed at the same school. The data says the opposite: in the opening weeks
-changed-team rows are the *better-calibrated* half.
+| min prior games | 0 | 4 | 5 | 6 | 7 | **8** | 9 | 10 | 12 |
+|---|---|---|---|---|---|---|---|---|---|
+| 2025 wk1 | 1.430 | 1.319 | 1.295 | 1.243 | 1.205 | **1.175** | 1.137 | 1.116 | 1.035 |
+| 2024 wk1 | 1.585 | 1.331 | 1.261 | 1.243 | 1.191 | **1.116** | 1.095 | 1.064 | 0.971 |
 
-| 2025 opening weeks | skill | ECE |
-|---|---|---|
-| same team (n 27,020 both seasons) | +0.1831 | 0.0591 |
-| changed team (n 12,618 both seasons) | +0.1651 | 0.0505 |
+The curve is monotone, not U-shaped, so there is no optimum to find — only the
+question of how strong a filter the evidence justifies. **Eight is the smallest
+threshold at which every market in both seasons lands inside the ±20% the mean
+correction is allowed to apply**, which is the entire point of fixing this at
+source; whatever bias remains is then the layer's job, and it can now do it.
+Going further looks better on one season and worse on the other (2024's worst
+market reaches 0.971 at twelve — over-projecting), which is the signature of
+fitting the residual rather than removing a cause. It also thins the pool: at
+eight the smallest position still holds 88 players, at twelve only 19.
 
-Per market the pattern is consistent — rec_yards ECE 0.069 same vs 0.033
-changed, receptions 0.063 vs 0.039, rush_yards 0.041 vs 0.017.
-`CHANGED_TEAM_PRIOR_MULTIPLIER` shrinks a transfer's projection toward the
-baseline, which costs discrimination and buys calibration. So the transfer
-discount is not too generous in the sense 6a suspected, and cutting transfers
-from the board would remove its best-calibrated rows.
+Note this is deliberately **not** the same number as
+`MIN_PRIOR_GAMES_TO_PROJECT = 4`. Those constants answer different questions —
+who is worth projecting, and who describes the position. Four is generous for
+the first and measurably too generous for the second (1.319 and 1.331 above,
+still outside the clamp).
 
-## 6. Markets, 2025 opening weeks
+**An empty pool is worse than a broad one**, so where the filter cannot reach
+`MIN_BASELINE_SAMPLES` the unfiltered prior pool still answers. A missing
+baseline reads as 0.0 downstream: the blend would shrink toward nothing and the
+usage floor would stop filtering. On real frames the fallback never fires; it
+exists so a thinner backfill degrades instead of disappearing.
+
+The **CV baseline was deliberately left alone.** A coefficient of variation is
+scale-free — a backup's week-to-week swing relative to his own average is a
+reasonable estimate of a starter's relative swing, while his yards per game is
+not a reasonable estimate of a starter's yards per game.
+
+## 5. What it did
+
+| 2025 | skill before | after | ECE before | after |
+|---|---|---|---|---|
+| week 1 | +0.1611 | **+0.2050** | 0.0780 | **0.0228** |
+| week 2 | +0.2130 | +0.2134 | 0.0240 | 0.0320 |
+| weeks 1-2 | +0.1868 | +0.2101 | 0.0522 | **0.0166** |
+| 2024 weeks 1-2 | +0.1643 | +0.2104 | 0.0633 | 0.0308 |
+| overall | +0.1921 | +0.1960 | 0.0174 | 0.0162 |
+
+Every `@priors` mean multiplier came off the clamp: rec_yards 1.200 → **1.168**,
+receptions 1.200 → **1.151**, rush_yards 1.200 → **1.181**, anytime_td 1.186 →
+1.163. The correction layer has authority over the residual again.
+
+**Confidence bands, the number a user actually experiences.** 2025 week 1 alone,
+against the settled weeks as the reference:
+
+| Stated | week 1 actual | gap | weeks 3+ gap |
+|---|---|---|---|
+| 0.550 | 0.566 | +1.6 pts | +0.4 pts |
+| 0.651 | 0.677 | +2.7 pts | +1.5 pts |
+| 0.749 | 0.773 | +2.3 pts | +2.3 pts |
+| 0.856 | 0.865 | **+0.9 pts** | −0.3 pts |
+
+The pre-registered bar was the top band within a point, and week 1 meets it at
++0.9. Two things are worth saying precisely rather than rounding off:
+
+- **The sign flipped.** Week 1 was overconfident (−3.3 pts at the top) and is now
+  marginally *under*-confident. Understating a probability is the error to
+  prefer, and its shape now matches the settled season's.
+- **The pooled `wk1-2` figure is −1.7 pts, not +0.9.** Week 2 drags it. Week 1 is
+  the deliverable — 29 August is a week 1 — so the week-1 row is the one the bar
+  was written about, and the pooled row is reported here rather than quietly
+  dropped.
+
+**Weeks 3+ are untouched.** Not argued — checksummed. Every projected mean at
+2025 w2, w3, w8, w14 and 2024 w8 is identical to nine decimals across the change,
+and the reason is recorded alongside: the prior-season pool is only consulted
+where the current-season one holds fewer than `MIN_BASELINE_SAMPLES` rows, and
+the smallest current-season pool in any of those weeks is 226. The stratum
+metrics for weeks 3+ do move a little (early +0.1885 → +0.1874, late +0.1960 →
++0.1971) purely because the calibration accumulator now carries different week-1
+residuals, not because any settled projection changed.
+
+**The opening board got smaller and more selective**: 2025 week 1 goes from 4,923
+projections to 4,669. A higher baseline raises the usage floor with it, so 255
+marginal players drop off. That is the intended direction — the floor exists to
+match the population a book would price.
+
+## 6. What did not improve, and is not hidden
+
+**Anytime touchdown still adds almost nothing at the opening.** 2025 weeks 1-2:
+skill +0.0065 (it was +0.0104 before the fix), against +0.0440 in weeks 3+ on
+n=1,518. Phase 6a measured the prior season's scoring record as the signal that
+best survives the cold start and this project built the prior-season goal-line
+path on that basis; graded on its own probabilities, it does not carry the
+opening board. Ranking power and calibrated probability are different claims and
+6a measured only the first. The path still earns its place — without it the
+market is absent from opening weekend entirely, and week 2 depends on it — but
+the opening headline belongs elsewhere.
+
+**Week 2 gave a little back**: ECE 0.0240 → 0.0320, skill unchanged. Its
+projections are provably identical; what changed is the correction it inherits,
+because the `@priors` bucket it shares with week-1 rows now measures a smaller
+bias. Net across the two weeks is strongly positive (0.0522 → 0.0166) and this is
+the smaller half of that trade.
+
+**2024's opening weekends remain overconfident at the top** (−5.0 pts at 0.8+,
+against +0.9 for 2025), even though they improved substantially in aggregate.
+That is the configuration whose prior season is 2023 — no `targets`, no
+play-by-play — so it carries no receiving or touchdown markets and its passing
+and rushing markets rest on thinner priors. **2026 will run in the 2025
+configuration**, whose prior season is complete. This is the reason 6a designated
+2025 the primary evidence.
+
+## 7. Markets, 2025 opening weeks
 
 | Market | n | skill | ECE | wk3+ skill |
 |---|---|---|---|---|
-| receptions | 5,472 | +0.2506 | 0.0482 | +0.2714 |
-| rush_yards | 3,471 | +0.1894 | 0.0326 | +0.1531 |
-| pass_yards | 1,209 | +0.1875 | 0.0591 | +0.1680 |
-| rush_attempts | 2,654 | +0.1867 | 0.0798 | +0.1646 |
-| rec_yards | 5,553 | +0.1643 | 0.0548 | +0.1645 |
-| pass_tds | 945 | +0.1524 | 0.0806 | +0.1922 |
-| pass_attempts | 1,227 | +0.1486 | 0.0822 | +0.1577 |
-| pass_completions | 1,221 | +0.1159 | 0.1034 | +0.1660 |
-| anytime_td | 1,687 | +0.0104 | 0.0622 | +0.0440 |
+| receptions | 5,410 | +0.2593 | 0.0271 | +0.2714 |
+| pass_completions | 1,200 | +0.2385 | 0.0272 | +0.1651 |
+| rush_attempts | 2,618 | +0.2277 | 0.0429 | +0.1644 |
+| pass_yards | 1,185 | +0.2169 | 0.0509 | +0.1725 |
+| pass_attempts | 1,211 | +0.2154 | 0.0476 | +0.1541 |
+| rush_yards | 3,391 | +0.2047 | 0.0443 | +0.1532 |
+| rec_yards | 5,471 | +0.1770 | 0.0264 | +0.1645 |
+| pass_tds | 960 | +0.1730 | 0.0502 | +0.1931 |
+| anytime_td | 1,518 | +0.0065 | 0.0647 | +0.0440 |
 
-Receiving volume and rushing yards open strongest. The quarterback volume
-markets are the weakest calibrated (`pass_completions` at ECE 0.103), which is
-consistent with them being the markets whose mean correction was already largest.
+Every market except the two touchdown ones now grades at or above its
+settled-season skill. Receptions and receiving yards are the best-calibrated and
+the highest-volume, and they are what the opening board should lead with.
 
-## 7. What the population actually is
+## 8. Transfers
 
-2025 week 1 grades 852 players and 3,169 player-markets, against 844 and 3,086 in
-week 3 — the opening board is not a thin version of the settled one. 2024 week 1
-grades 425 players, and the gap is entirely the receiving and touchdown markets
-its prior season cannot supply.
+The phase-6 plan named a narrower opening board — returning starters only — as
+the fallback if the numbers disappointed. **The data ruled that out before the
+fix and still rules it out after.** Changed-team rows are not the weak half:
 
-The hard ceiling from 6a is unchanged and is not a modelling problem: only
-70-74% of players who produce in week 1 have any prior season at all. The board
-should be visibly incomplete rather than quietly so.
+| 2025 opening weeks | skill | ECE |
+|---|---|---|
+| same team | +0.2137 | 0.0254 |
+| changed team | +0.2020 | 0.0190 |
+
+`CHANGED_TEAM_PRIOR_MULTIPLIER` shrinks a transfer's projection harder toward
+the baseline, which costs a little discrimination and buys calibration. Cutting
+transfers would remove the better-calibrated half of the board.
+
+## 9. The population
+
+2025 week 1 publishes 4,669 projections across 852 players — against 3,086
+player-markets and 844 players at week 3. The opening board is not a thin version
+of the settled one.
+
+The ceiling from 6a is unchanged and is not a modelling problem: only 70-74% of
+players who produce in week 1 have any prior season at all. The board should be
+visibly incomplete rather than quietly so.
 
 ---
 
 ## Recommendation
 
-1. **Publish week 2 with the rest of the season.** It grades better than the
-   season average. No caveat is needed beyond the usual.
-2. **Hold week 1 until the low bias is fixed.** Blend the week-1 anchor toward
-   `prior_{stat}_recent_pg`, re-walk, and require the `@priors` mean multiplier
-   to come off its clamp and the 0.8+ confidence band to land within a point.
-   This is a narrow fix on a column already in the frame.
-3. **Do not narrow the board by transfer status.** It would remove the
+1. **Publish both opening weekends.** Weeks 1-2 are the best-calibrated stratum
+   of the season and carry its highest skill.
+2. **Lead with receptions, receiving yards and rushing volume.** They grade at or
+   above their settled-season skill and are the best calibrated.
+3. **Do not lead week 1 with anytime touchdown.** Keep the market — the board is
+   incomplete without it and week 2 depends on it — but it adds almost nothing
+   on opening weekend.
+4. **Do not narrow the board by transfer status.** It would remove the
    better-calibrated half.
-4. **Do not lead week 1 with anytime touchdown.** Keep the market — week 2 needs
-   it and the board is incomplete without it — but the opening-weekend headline
-   belongs to receptions, receiving yards and rushing yards.
-5. **Say on the board that week 1 is a priors-only projection**, and that roughly
-   a quarter of opening-weekend production comes from players no model can reach.
+5. **Say on the board that week 1 is a priors-only projection**, that no matchup
+   adjustment exists yet (`defense_position_ratings` has no week-1 rows), and
+   that roughly a quarter of opening-weekend production comes from players no
+   model can reach.
+6. **Re-check the top confidence band once 2026 week 1 is graded for real.** The
+   +0.9 pt figure rests on one season in the configuration 2026 will run in.
 
 **Still blocking 29 Aug independently of all this:** `player_team_seasons` holds
-0 rows for 2026. No roster, no board, however well it grades.
+0 rows for 2026, re-probed 2026-08-04 against 15,601 rows for 2025. No roster, no
+board, however well it grades.

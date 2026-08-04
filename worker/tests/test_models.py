@@ -8,6 +8,7 @@ solvers and the composition behave the way the model claims they do.
 from __future__ import annotations
 
 import math
+import statistics
 
 import pytest
 from scipy import stats as st
@@ -15,6 +16,8 @@ from scipy import stats as st
 from worker.core.models import (
     BASELINE_PSEUDO_GAMES,
     MAX_PSEUDO_GAMES,
+    MIN_BASELINE_SAMPLES,
+    MIN_PRIOR_GAMES_FOR_BASELINE,
     MIN_PSEUDO_GAMES,
     MIN_RELATIVE_SD,
     Projection,
@@ -256,6 +259,119 @@ class TestPositionBaselines:
         assert "rec_yards_pg" in baselines
         assert not any(
             k.startswith(("prior_", "team_", "opp_")) for k in baselines
+        )
+
+
+class TestPriorSeasonBaselinePool:
+    """Who describes the position when nobody has played yet.
+
+    Phase 6b.4 graded the opening weekends and found the week-1 projection
+    27-43% low, with the `@priors` mean multiplier pinned at its clamp. The
+    cause was not the anchor — a player's last-5 and full-season prior averages
+    agree within 5% — but the shrinkage target: the prior-season pool had no
+    role filter, so every projection was pulled toward a median that included
+    the third-string quarterback.
+    """
+
+    @staticmethod
+    def _rows(*prior_games: int) -> list[dict]:
+        """A week-1 frame: on a roster, nothing played yet, last season behind.
+
+        Whoever has the most prior games is the starter, at 100 yards a game;
+        everyone else is a backup at 10.
+        """
+        rows = []
+        for index, games in enumerate(prior_games):
+            rows.append(
+                {
+                    "player_id": index,
+                    "position_group": "WR",
+                    "games_played": 0,
+                    "prior_games_played": games,
+                    "prior_rec_yards_pg": 100.0 if games >= 12 else 10.0,
+                }
+            )
+        return rows
+
+    def test_a_bench_season_does_not_describe_the_position(self):
+        starters = [12] * MIN_BASELINE_SAMPLES
+        bench = [1] * 40
+        baselines = position_baselines(self._rows(*starters, *bench))["WR"]
+        assert baselines["rec_yards_pg"] == pytest.approx(100.0)
+
+    def test_without_the_filter_the_bench_would_carry_the_median(self):
+        """Pins the SIZE of the effect, not just its direction: the bench
+        outnumbers the starters here exactly as it does on a real roster."""
+        rows = self._rows(*([12] * MIN_BASELINE_SAMPLES), *([1] * 40))
+        unfiltered = statistics.median(
+            [float(r["prior_rec_yards_pg"]) for r in rows]
+        )
+        assert unfiltered == pytest.approx(10.0)
+        assert position_baselines(rows)["WR"]["rec_yards_pg"] == pytest.approx(100.0)
+
+    def test_one_game_short_of_the_threshold_does_not_vote(self):
+        just_under = [MIN_PRIOR_GAMES_FOR_BASELINE - 1] * 40
+        enough = [12] * MIN_BASELINE_SAMPLES
+        baselines = position_baselines(self._rows(*enough, *just_under))["WR"]
+        assert baselines["rec_yards_pg"] == pytest.approx(100.0)
+
+    def test_the_threshold_is_the_one_that_was_measured(self):
+        """Asserted as a literal, and that is the point.
+
+        Eight is a finding rather than a preference: the smallest threshold at
+        which every market in both graded seasons lands inside the +/-20% the
+        mean correction is permitted to apply, which is what takes the
+        `@priors` multiplier off its clamp. The sweep behind it is in the
+        constant's comment and in docs/phase-6b-opening-weekend.md.
+
+        The test above cannot protect that — it reads the constant back to
+        itself and would pass at any value. This one has to be a literal or the
+        number is unguarded.
+        """
+        assert MIN_PRIOR_GAMES_FOR_BASELINE == 8
+
+    def test_too_few_experienced_players_falls_back_rather_than_vanishing(self):
+        """An EMPTY baseline is worse than a broad one: it reads as 0.0
+        downstream, so the blend shrinks toward nothing and the usage floor
+        stops filtering. Where the role filter cannot fill a pool, the
+        unfiltered prior one still has to answer."""
+        rows = self._rows(*([12] * (MIN_BASELINE_SAMPLES - 1)), *([1] * 40))
+        baselines = position_baselines(rows)["WR"]
+        assert "rec_yards_pg" in baselines
+        # The broad pool, because the narrow one could not reach the threshold.
+        assert baselines["rec_yards_pg"] == pytest.approx(10.0)
+
+    def test_a_current_season_row_is_untouched_by_the_filter(self):
+        """THE GUARANTEE THAT KEEPS WEEKS 3+ IDENTICAL. The prior pool is only
+        consulted below MIN_BASELINE_SAMPLES current-season rows, and every
+        settled week has hundreds. A row with games played votes on the
+        current-season median no matter how little of last season it played."""
+        rows = [
+            {
+                "position_group": "WR",
+                "games_played": 6,
+                "rec_yards_pg": 60.0,
+                "prior_games_played": 1,
+                "prior_rec_yards_pg": 5.0,
+            }
+            for _ in range(MIN_BASELINE_SAMPLES)
+        ]
+        assert position_baselines(rows)["WR"]["rec_yards_pg"] == pytest.approx(60.0)
+
+    def test_the_prior_pool_is_not_consulted_while_the_current_one_suffices(self):
+        current = [
+            {
+                "position_group": "WR",
+                "games_played": 6,
+                "rec_yards_pg": 60.0,
+            }
+            for _ in range(MIN_BASELINE_SAMPLES)
+        ]
+        with_prior = [dict(r, prior_games_played=12, prior_rec_yards_pg=5.0)
+                      for r in current]
+        assert (
+            position_baselines(with_prior)["WR"]["rec_yards_pg"]
+            == position_baselines(current)["WR"]["rec_yards_pg"]
         )
 
 
@@ -1029,6 +1145,9 @@ class TestBaselinesWithoutACurrentSeason:
             {
                 "position_group": "WR",
                 "games_played": 0,
+                # A full prior season, so these rows describe the position
+                # through the role filter rather than through its fallback.
+                "prior_games_played": 12,
                 "prior_rec_yards_pg": 20.0 + i * 5,
                 "prior_rec_yards_sd": (20.0 + i * 5) * 0.7,
                 "prior_receptions_pg": 2.0 + i * 0.3,

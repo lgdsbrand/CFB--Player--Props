@@ -142,6 +142,25 @@ class TestHistoryConditioning:
         assert history_bucket(2) != history_bucket(11)
         assert history_bucket(5) not in (history_bucket(2), history_bucket(11))
 
+    def test_no_games_played_is_not_a_thin_sample_but_no_sample(self):
+        """The opening weekends must not share a cell with the 2-3 game rows.
+
+        Every `thin` scale was fitted on rows with a current-season record; a
+        week-1 row has none at all. One cell would hand each regime the other's
+        correction, which is the mixing this bucketing exists to prevent.
+        """
+        assert history_bucket(0) == history_bucket(1)
+        assert history_bucket(0) != history_bucket(2)
+        assert history_bucket(0) != history_bucket(11)
+
+    def test_a_bucket_with_no_measurement_of_its_own_falls_back_to_the_market(self):
+        """Which is what the opening weeks get on the first walk that grades
+        them: nothing has been measured at 0 games, so they take the market
+        estimate rather than 1.0."""
+        c = VarianceCalibration()
+        _feed(c, "rec_yards", "WR", MIN_RESIDUALS + 10, spread=1.3, games=11.0)
+        assert c.scale("rec_yards", "WR", 0.0) == pytest.approx(1.3, abs=0.1)
+
     def test_an_unmeasured_bucket_falls_back_rather_than_guessing(self):
         c = VarianceCalibration()
         # Everything measured on established players only.

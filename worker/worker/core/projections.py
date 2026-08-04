@@ -16,10 +16,10 @@ will dress on Saturday, and a board built from the players who turned out to
 appear is a board built from the future.
 
 So the population here is defined only by what was knowable before kickoff:
-the player has a role (`MIN_GAMES_TO_PROJECT`), and the role is large enough
-that a book would price it (`MIN_USAGE_FRACTION_OF_BASELINE`). Some of those
-players will not play. Their projections will sit on the board unresolved, and
-that is correct — it is what a projection is.
+the player has a role (`is_projectable`), and the role is large enough that a
+book would price it (`MIN_USAGE_FRACTION_OF_BASELINE`). Some of those players
+will not play. Their projections will sit on the board unresolved, and that is
+correct — it is what a projection is.
 
 WHY THE UNIVERSE RULES LIVE HERE AND THE BACKTEST IMPORTS THEM
 --------------------------------------------------------------
@@ -74,6 +74,48 @@ MIN_USAGE_FRACTION_OF_BASELINE = 0.5
 # nothing about — publishing them would put unvalidated probabilities on the
 # screen next to validated ones, indistinguishable.
 MIN_GAMES_TO_PROJECT = 2
+
+# Weeks 1 and 2, where no player can satisfy `MIN_GAMES_TO_PROJECT` because the
+# season has barely started. They get their own rule below rather than a relaxed
+# version of this one.
+LAST_OPENING_WEEK = 2
+
+# Prior-season games required of a player with no current-season record. NOT a
+# round number picked for tidiness — Phase 6a measured what each candidate rule
+# does to the one thing `MIN_GAMES_TO_PROJECT` is really buying in weeks 1-2,
+# which is guessing who will dress (`docs/phase-6a-early-season-ceiling.md` §4):
+#
+#   prior usage + on a roster          1,816-1,937 candidates, 60-63% played
+#   + at least this many prior games   1,161-1,280 candidates, 70-73% played
+#   the shipped week-3 rule            1,108-1,182 candidates, 71.4% played
+#
+# So an opening-weekend board built this way is as good at picking who plays as
+# the week-3 board already shipped, on a pool of comparable size. Without the
+# prior-games filter it is ten points worse and a third larger.
+MIN_PRIOR_GAMES_TO_PROJECT = 4
+
+
+def is_projectable(row: dict[str, Any], week: int) -> bool:
+    """Whether this player-week has enough record behind it to be projected.
+
+    WHY THE OPENING WEEKS GET A SEPARATE RULE RATHER THAN A LOWER THRESHOLD.
+    Lowering `MIN_GAMES_TO_PROJECT` to admit weeks 1-2 would also admit, in
+    every later week, players whose only qualification is one game — changing
+    the population the calibration report was measured on as a side effect of a
+    change that was supposed to be about opening weekend. Keyed on the week
+    instead, weeks 3+ admit exactly the population they admitted before.
+
+    The two rules ask the same question of different evidence. From week 3 the
+    player's own current season answers it. In weeks 1-2 there is no current
+    season, so a full prior one has to — and `roster_universe` has already
+    established that the player is on a roster now, which is what makes last
+    year's production a claim about this week rather than a fact about last year.
+    """
+    if float(row.get("games_played") or 0) >= MIN_GAMES_TO_PROJECT:
+        return True
+    if week > LAST_OPENING_WEEK:
+        return False
+    return float(row.get("prior_games_played") or 0) >= MIN_PRIOR_GAMES_TO_PROJECT
 
 
 def market_catalogue() -> list[dict[str, Any]]:
@@ -157,7 +199,7 @@ def project_slate(
     for row in rows:
         position = str(row.get("position_group") or "")
         games_played = float(row.get("games_played") or 0)
-        if games_played < MIN_GAMES_TO_PROJECT:
+        if not is_projectable(row, as_of.week):
             skipped_thin += 1
             continue
 
@@ -205,14 +247,19 @@ def project_slate(
                 )
             )
 
+    rule = (
+        f"{MIN_PRIOR_GAMES_TO_PROJECT} prior-season games"
+        if as_of.week <= LAST_OPENING_WEEK
+        else f"{MIN_GAMES_TO_PROJECT} games"
+    )
     log.info(
         "%s: %d projections from %d player-games (%d players below "
-        "%d games, %d markets below the usage floor)",
+        "%s, %d markets below the usage floor)",
         as_of,
         len(projected),
         len(rows),
         skipped_thin,
-        MIN_GAMES_TO_PROJECT,
+        rule,
         skipped_usage,
     )
     return projected

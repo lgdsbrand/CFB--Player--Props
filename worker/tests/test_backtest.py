@@ -179,6 +179,21 @@ class TestGrouping:
         assert season_phase(3) != season_phase(11)
         assert season_phase(3) == season_phase(4)
 
+    def test_the_opening_weekends_are_their_own_stratum(self):
+        """Weeks 1-2 are a different regime, not a harder corner of "early":
+        no game has been played, so the players are admitted by a different
+        universe rule and the matchup adjustment is neutral."""
+        assert season_phase(1) == season_phase(2)
+        assert season_phase(2) != season_phase(3)
+        assert season_phase(1) != season_phase(11)
+
+    def test_phase_labels_sort_chronologically_as_text(self):
+        """`--render-only` rebuilds the report from a query ordered by
+        `group_key`, so the label is the only thing that can keep the phase
+        table in season order."""
+        labels = [season_phase(w) for w in (1, 3, 11)]
+        assert labels == sorted(labels)
+
 
 class TestPredictionGrading:
     def test_hit_is_not_the_same_as_outcome_over(self):

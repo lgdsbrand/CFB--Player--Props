@@ -109,7 +109,7 @@ class TestRender:
             overall=_metrics(REAL_SHAPE),
             by_market={"receptions": _metrics(REAL_SHAPE)},
             by_position={"WR": _metrics(REAL_SHAPE)},
-            by_phase={"early (wk<=6)": _metrics(REAL_SHAPE)},
+            by_phase={"wk1-2 opening": _metrics(REAL_SHAPE)},
             by_season={"2024": _metrics(REAL_SHAPE)},
             seasons=[2024, 2025],
             config={"devig_method": "shin"},

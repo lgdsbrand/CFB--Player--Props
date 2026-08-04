@@ -63,8 +63,9 @@ from worker.core.models import (
 )
 from worker.core.probability import distribution_sd
 from worker.core.projections import (
-    MIN_GAMES_TO_PROJECT,
+    LAST_OPENING_WEEK,
     MIN_USAGE_FRACTION_OF_BASELINE,
+    is_projectable,
     market_catalogue,
     project_row,
 )
@@ -89,12 +90,18 @@ LINE_OFFSETS_SD = (-1.0, -0.5, 0.0, 0.5, 1.0)
 # question identical to the one the product will actually ask.
 LINE_QUANTUM = 0.5
 
-# Weeks 1 and 2 have almost no within-season history, so a projection there is
-# nearly all prior and baseline. They are included deliberately — early-season
-# behaviour is exactly what CLAUDE.md §6 warns about and what the report must
-# show — but never earlier than 3, where a cutoff of week < 3 still leaves two
-# weeks of evidence.
-MIN_BACKTEST_WEEK = 3
+# The walk starts at week 1. It used to start at 3, on the reasoning that a
+# projection with no within-season history behind it is nearly all prior and
+# baseline — true, and beside the point: the board is expected to price those
+# weeks (CLAUDE.md §6 asks for exactly that, priors early and wider bands), and
+# not grading them did not make them safe, it made them unmeasurable. The client
+# rejected an empty opening weekend; the answer to "can we fill it" has to be a
+# number, and until this floor moved there was no way to produce one.
+#
+# What makes them gradeable now is the priors-only feature path (6b.2) and the
+# opening-week universe rule in `core.projections`, without which week 1 built
+# no frame at all.
+MIN_BACKTEST_WEEK = 1
 
 CALIBRATION_BINS = 10
 
@@ -107,8 +114,10 @@ CALIBRATION_BINS = 10
 # scored, every number would still look reasonable while describing a different
 # set of players from the one +0.186 skill was measured on.
 #
-# `MIN_GAMES_TO_GRADE` is kept as the name this module and its tests already use.
-MIN_GAMES_TO_GRADE = MIN_GAMES_TO_PROJECT
+# `is_projectable` is that shared rule, and it is week-aware: from week 3 it
+# asks for the player's own current-season games, in weeks 1-2 for a full prior
+# season. Importing the function rather than the threshold is what keeps the two
+# populations identical now that the rule has more than one branch.
 
 
 @dataclass
@@ -253,7 +262,7 @@ def backtest_week(
     observations: list[Observation] = []
     for row in rows:
         position = str(row.get("position_group") or "")
-        if (row.get("games_played") or 0) < MIN_GAMES_TO_GRADE:
+        if not is_projectable(row, as_of.week):
             continue
         key = (int(row["player_id"]), int(row["game_id"]))
         actual_row = actuals.get(key)
@@ -532,11 +541,30 @@ def group_metrics(
 
 
 def season_phase(week: int, split: int = 7) -> str:
-    """Early vs late season.
+    """Opening vs early vs late season.
 
     Reported separately because CLAUDE.md §6 says early-season college
     projections lean hardest on priors and are least trustworthy. Averaging the
-    two together would hide precisely the weakness the client needs to see when
-    deciding when to launch.
+    phases together would hide precisely the weakness the client needs to see
+    when deciding when to launch.
+
+    WEEKS 1-2 ARE THEIR OWN STRATUM, not the bottom of "early". They are a
+    different regime rather than a harder corner of the same one: no
+    current-season game has been played, the players are admitted by a different
+    universe rule (`is_projectable`), and the opponent adjustment is neutral
+    because `defense_position_ratings` has no week-1 rows to adjust with. Folded
+    into "early", two opening weekends would be averaged with four ordinary
+    weeks — and whether those two weekends can be shipped is the entire question
+    Phase 6 exists to answer.
+
+    LABELS LEAD WITH THEIR WEEK RANGE so that sorting them alphabetically sorts
+    them chronologically. `--render-only` rebuilds the report from
+    `backtest_metrics ... order by group_key`, so a label the database can only
+    sort as text is the one thing standing between the report and a phase table
+    reading early/late/opening. (Holds for any single-digit `split`.)
     """
-    return "early (wk<=6)" if week < split else "late (wk>=7)"
+    if week <= LAST_OPENING_WEEK:
+        return f"wk1-{LAST_OPENING_WEEK} opening"
+    if week < split:
+        return f"wk{LAST_OPENING_WEEK + 1}-{split - 1} early"
+    return f"wk{split}+ late"

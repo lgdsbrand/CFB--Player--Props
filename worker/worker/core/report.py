@@ -321,11 +321,18 @@ and sharpness have to be read together.</p>
 <h2>By position</h2>
 {_table("Position", by_position)}
 
-<h2>Early vs late season</h2>
+<h2>Opening, early and late season</h2>
 <p>College projections lean hardest on priors early, when roster turnover from
 the transfer portal means last year's production often happened at another
 school and the opponent adjustment is fitted on a barely-connected schedule
 graph. Averaging the season together would hide exactly that.</p>
+<p><strong>Weeks 1-2 are reported apart from the rest of the early season</strong>
+because they are a different regime rather than a harder version of the same
+one: no current-season game has been played, so the projection is prior season
+and position baseline throughout; the players are admitted by a different rule
+(a full prior season in place of two current games); and the opponent adjustment
+is neutral, there being no defensive ratings to adjust with until week 2. Read
+this row on its own when deciding whether the board opens with the season.</p>
 {_table("Phase", by_phase)}
 
 <h2>By season</h2>

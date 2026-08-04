@@ -68,7 +68,18 @@ def history_bucket(games_played: float) -> str:
     Bucketing on games rather than on calendar week is deliberate. A player
     returning from injury in week 12 with two games on the board has the same
     thin evidence as anyone in week 3, and deserves the same widening.
+
+    `priors` IS NOT A DEGREE OF `thin`, IT IS THE ABSENCE OF THE THING `thin`
+    MEASURES. A row with no completed game rests entirely on last season and a
+    position baseline; the `thin` scales were every one of them fitted on rows
+    with two or three games, back when weeks 1-2 were outside the walk. Letting
+    the two share a cell would average two regimes into one number and hand each
+    the other's correction — which is precisely the mixing this function's
+    game-based bucketing exists to prevent, arriving through the back door the
+    moment Phase 6b opened the walk to the opening weekends.
     """
+    if games_played < 2:
+        return "priors"
     if games_played <= 3:
         return "thin"
     if games_played <= 6:

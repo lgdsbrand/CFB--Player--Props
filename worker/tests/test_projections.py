@@ -26,9 +26,12 @@ from worker.core.calibration import (
 )
 from worker.core.models import Projection
 from worker.core.projections import (
+    LAST_OPENING_WEEK,
     MIN_GAMES_TO_PROJECT,
+    MIN_PRIOR_GAMES_TO_PROJECT,
     MIN_USAGE_FRACTION_OF_BASELINE,
     ProjectedRow,
+    is_projectable,
     project_row,
 )
 
@@ -45,13 +48,56 @@ class TestSharedUniverse:
         """
         from worker.core import backtest
 
-        assert backtest.MIN_GAMES_TO_GRADE is MIN_GAMES_TO_PROJECT
+        assert backtest.is_projectable is is_projectable
         assert backtest.MIN_USAGE_FRACTION_OF_BASELINE is MIN_USAGE_FRACTION_OF_BASELINE
 
     def test_both_modules_project_through_the_same_function(self):
         from worker.core import backtest
 
         assert backtest.project_row is project_row
+
+
+# -----------------------------------------------------------------------------
+# Who is projectable, and when
+# -----------------------------------------------------------------------------
+def _candidate(games: float, prior_games: float) -> dict[str, float]:
+    return {"games_played": games, "prior_games_played": prior_games}
+
+
+class TestProjectableUniverse:
+    def test_the_established_rule_is_unchanged_after_the_opening_weeks(self):
+        """Weeks 3+ must be the exact population the calibration report scored.
+
+        Phase 6b.3 opened weeks 1-2; if it also moved the settled weeks, every
+        number the client reviewed would describe a different set of players.
+        """
+        week = LAST_OPENING_WEEK + 1
+        assert is_projectable(_candidate(MIN_GAMES_TO_PROJECT, 0), week)
+        assert not is_projectable(_candidate(MIN_GAMES_TO_PROJECT - 1, 12), week)
+
+    def test_a_full_prior_season_carries_a_player_through_the_opening_weeks(self):
+        assert is_projectable(
+            _candidate(0, MIN_PRIOR_GAMES_TO_PROJECT), LAST_OPENING_WEEK
+        )
+        assert is_projectable(_candidate(0, MIN_PRIOR_GAMES_TO_PROJECT), 1)
+
+    def test_a_thin_prior_season_does_not(self):
+        """Without this filter the opening board is ten points worse at
+        guessing who dresses — 60-63% against 70-73% (Phase 6a §4)."""
+        assert not is_projectable(
+            _candidate(0, MIN_PRIOR_GAMES_TO_PROJECT - 1), 1
+        )
+
+    def test_current_season_evidence_still_wins_where_it_exists(self):
+        # Week 2, one game played, no prior season worth the name: the opening
+        # rule is the only way in and it is not satisfied.
+        assert not is_projectable(_candidate(1, 0), 2)
+        # ...but two games in is projectable at any week, opening or not.
+        assert is_projectable(_candidate(2, 0), 2)
+
+    def test_a_missing_column_is_read_as_no_history_rather_than_raising(self):
+        assert not is_projectable({}, 1)
+        assert not is_projectable({"games_played": None}, 8)
 
 
 # -----------------------------------------------------------------------------

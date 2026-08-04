@@ -109,12 +109,18 @@ def resolve_season(explicit: int | None) -> int:
 def projectable_weeks(season: int) -> list[int]:
     """Weeks with a schedule and enough history behind them to project.
 
-    The floor follows from `MIN_GAMES_TO_PROJECT` rather than being chosen: a
-    player needs that many completed games, and features may only read weeks
-    strictly before the target, so week `MIN_GAMES_TO_PROJECT + 1` is the first
-    one where anybody qualifies. Asking for week 1 is not an error, it just
-    returns nothing, and a job that silently produces nothing is worse than one
-    that never offers the option.
+    The floor USED to follow from `MIN_GAMES_TO_PROJECT`: a player needed that
+    many completed games, features may only read weeks strictly before the
+    target, so week `MIN_GAMES_TO_PROJECT + 1` was the first at which anybody
+    qualified and week 1 returned nothing.
+
+    Since Phase 6b.3 that is no longer arithmetic — `is_projectable` admits a
+    returning player in weeks 1-2 on a prior season, so `--all-weeks` COULD
+    start at 1. The floor stays where it is on purpose until the walk that now
+    grades those weeks has been reviewed: the whole point of grading them is to
+    find out at what confidence they can be published, and publishing first
+    would answer the question by assuming it. `--weeks 1` still works, which is
+    how the opening board gets looked at before the gate opens.
     """
     first = MIN_GAMES_TO_PROJECT + 1
     return [

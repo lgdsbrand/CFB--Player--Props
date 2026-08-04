@@ -36,6 +36,7 @@ from typing import Any
 from worker.config import ConfigError, get_settings
 from worker.core import report as report_module
 from worker.core.backtest import (
+    MIN_BACKTEST_WEEK,
     MIN_USAGE_FRACTION_OF_BASELINE,
     CalibrationBin,
     Metrics,
@@ -48,6 +49,11 @@ from worker.core.backtest import (
 )
 from worker.core.calibration import Calibration
 from worker.core.models import can_rescale
+from worker.core.projections import (
+    LAST_OPENING_WEEK,
+    MIN_GAMES_TO_PROJECT,
+    MIN_PRIOR_GAMES_TO_PROJECT,
+)
 from worker.db import execute, fetch_all, fetch_one, get_config_value, pipeline_run
 from worker.logging_setup import configure_logging, get_logger
 
@@ -147,6 +153,14 @@ def _caveats(lines_per_projection: float, seasons: list[int]) -> list[str]:
         "are graded, matching the population a book would post lines for. "
         "Including everyone would improve every aggregate while saying nothing "
         "about the picks the product actually shows.",
+
+        f"<strong>Weeks 1-{LAST_OPENING_WEEK} are a different population.</strong> "
+        "With no current-season game behind them they are admitted by a prior "
+        f"season of at least {MIN_PRIOR_GAMES_TO_PROJECT} games instead of "
+        f"{MIN_GAMES_TO_PROJECT} games played, their lines are anchored on last "
+        "season's average rather than this one's, and no defensive ratings exist "
+        "yet to adjust the matchup with. The overall figure now averages them in; "
+        "the phase table is where they can be judged on their own.",
     ]
 
 
@@ -447,6 +461,15 @@ def main(argv: list[str] | None = None) -> int:
         "hit_rate_basis": hit_rate_basis,
         "prior_season_weight_max": prior_ceiling,
         "usage_filter": f"{MIN_USAGE_FRACTION_OF_BASELINE:.0%} of position baseline",
+        # Recorded because it CHANGED in Phase 6b.3, and a stored run whose
+        # population is only implied is a run that cannot be compared to the one
+        # before it without reading the git history.
+        "first_week": MIN_BACKTEST_WEEK,
+        "universe": (
+            f"{MIN_GAMES_TO_PROJECT}+ games played, or "
+            f"{MIN_PRIOR_GAMES_TO_PROJECT}+ prior-season games "
+            f"in weeks 1-{LAST_OPENING_WEEK}"
+        ),
         "model_version": MODEL_VERSION,
         "git_sha": _git_sha(),
     }

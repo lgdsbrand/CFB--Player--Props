@@ -316,13 +316,20 @@ def check_data_freshness(report: MonitorReport, slate: Slate | None) -> None:
     while the board is empty: a job that ran, exited 0, and wrote no rows looks
     identical to one that had nothing to do.
 
-    Each comparison is against THE SAME SEASON'S earlier weeks rather than
-    against a fixed threshold, which makes it self-calibrating. Projections
-    genuinely do not exist for the first few weeks of a season — a player needs
-    completed games behind him before he can be projected — so "zero rows this
-    week" is only evidence of a problem once some earlier week has produced
-    some. That phrasing also survives a rule change about which weeks are
-    projectable, whereas a hardcoded floor would quietly go wrong.
+    Each comparison is against SOMETHING THAT ALREADY PRODUCED rather than
+    against a fixed threshold, which makes it self-calibrating and survives a
+    rule change about which weeks are projectable — a hardcoded floor would
+    quietly go wrong.
+
+    WEEK 1 NEEDED ITS OWN REFERENCE, and the lack of one was the exact hole
+    Phase 6 exists to close. The original check asked whether an EARLIER WEEK OF
+    THE SAME SEASON had produced, on the reasoning that the opening weeks
+    legitimately have nothing. Week 1 has no earlier week, so an empty opening
+    board could never trip it — and an empty opening board is precisely what the
+    client rejected, sitting behind a `run_projections` that exits 0 because it
+    genuinely succeeded at projecting nobody. Since Phase 6c the opening weeks
+    are published, so the prior SEASON's same week is the reference that makes
+    week 1 checkable at all.
     """
     if slate is None or not slate.in_season:
         report.skipped.append("data freshness (out of season)")
@@ -334,21 +341,39 @@ def check_data_freshness(report: MonitorReport, slate: Slate | None) -> None:
         select (select count(*) from projections
                  where season = %(season)s and week = %(week)s) as this_week,
                (select count(*) from projections
-                 where season = %(season)s and week < %(week)s) as earlier_weeks
+                 where season = %(season)s and week < %(week)s) as earlier_weeks,
+               (select count(*) from projections
+                 where season = %(season)s - 1 and week = %(week)s) as last_season
         """,
         {"season": slate.season, "week": slate.week},  # type: ignore[arg-type]
     )
     assert row is not None
-    if int(row["this_week"]) == 0 and int(row["earlier_weeks"]) > 0:
-        report.add(
-            "critical",
-            "empty-board",
-            f"No projections for {slate.season} week {slate.week}",
-            f"{row['earlier_weeks']} projections exist for earlier weeks of this "
-            "season, so the pipeline has been producing and has stopped. The "
-            "board renders empty for every reader in this state, and no job has "
-            "necessarily failed to cause it.",
-        )
+    if int(row["this_week"]) == 0:
+        if int(row["earlier_weeks"]) > 0:
+            report.add(
+                "critical",
+                "empty-board",
+                f"No projections for {slate.season} week {slate.week}",
+                f"{row['earlier_weeks']} projections exist for earlier weeks of "
+                "this season, so the pipeline has been producing and has "
+                "stopped. The board renders empty for every reader in this "
+                "state, and no job has necessarily failed to cause it.",
+            )
+        elif int(row["last_season"]) > 0:
+            report.add(
+                "critical",
+                "empty-board",
+                f"No projections for {slate.season} week {slate.week}, the "
+                "first week of the season",
+                f"{row['last_season']} projections existed for week "
+                f"{slate.week} of {slate.season - 1}, so this week is "
+                "projectable in principle and something specific to this season "
+                "is missing — most likely the roster, which no amount of "
+                "modelling substitutes for. Nothing else would report this: "
+                "there is no earlier week of this season to compare against, "
+                "and run_projections exits 0 having genuinely succeeded at "
+                "projecting nobody.",
+            )
 
     if str(get_config_value("odds_adapter") or "none") != "none":
         report.checks_run += 1

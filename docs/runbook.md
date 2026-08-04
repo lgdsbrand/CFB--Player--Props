@@ -140,6 +140,12 @@ Four checks, in this order for a reason:
    excluded everyone. Checks 1–3 all go green on that. This is the check that
    asks whether the board a reader opens actually has anything on it.
 
+   Week 1 is compared against **the same week of the prior season**, not against
+   earlier weeks of this one — it has none, which is why an empty opening
+   weekend was invisible to every check until Phase 6c. That is not a
+   hypothetical: an empty 2026 week 1 fires this alert today, because 2025 week
+   1 holds 4,669 projections and 2026 has no roster to build one from.
+
 Expectations live in `MONITORED_JOBS` in the same module, one per scheduled job.
 `tests/test_monitor.py` parses `render.yaml` and asserts the two agree: that
 every scheduled job has an expectation, that every expectation names a job that
@@ -363,6 +369,14 @@ deliverable itself.
 **Gotcha: the `backtests` row is written *before* the metrics and the report.** A
 watcher polling for that row fires roughly three minutes early. Poll
 `backtest_metrics` instead.
+
+**Since Phase 6c `--all-weeks` starts at week 1, not week 3.** There is no week
+floor left in `projectable_weeks`: eligibility is entirely a per-player question
+and lives in `is_projectable`, so a week with nobody eligible produces nothing —
+a fact about the roster rather than a rule about the calendar. One consequence
+worth knowing: the `season_type = 'regular'` predicate is now the ONLY thing
+keeping bowl games off the board. Before 6c a mislabelled postseason game sat at
+week 1 and the floor excluded it as well.
 
 **Since Phase 6b.3 the walk starts at week 1, not week 3.** Weeks 1-2 are graded
 under their own universe rule — a prior season of at least four games in place of

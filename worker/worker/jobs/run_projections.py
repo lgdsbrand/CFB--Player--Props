@@ -51,7 +51,9 @@ from worker.core.calibration import StoredCalibration
 from worker.core.features import AsOf
 from worker.core.probability import side_and_confidence
 from worker.core.projections import (
+    LAST_OPENING_WEEK,
     MIN_GAMES_TO_PROJECT,
+    MIN_PRIOR_GAMES_TO_PROJECT,
     MIN_USAGE_FRACTION_OF_BASELINE,
     ProjectedRow,
     market_catalogue,
@@ -107,38 +109,41 @@ def resolve_season(explicit: int | None) -> int:
 
 
 def projectable_weeks(season: int) -> list[int]:
-    """Weeks with a schedule and enough history behind them to project.
+    """Every regular-season week with a schedule. THE SEASON STARTS AT WEEK 1.
 
-    The floor USED to follow from `MIN_GAMES_TO_PROJECT`: a player needed that
-    many completed games, features may only read weeks strictly before the
-    target, so week `MIN_GAMES_TO_PROJECT + 1` was the first at which anybody
-    qualified and week 1 returned nothing.
+    There is no week floor here any more, and its removal is the deliverable of
+    Phase 6c rather than a tidy-up. The floor used to be arithmetic: a player
+    needed `MIN_GAMES_TO_PROJECT` completed games, features may only read weeks
+    strictly before the target, so nobody qualified before week 3 and asking for
+    week 1 returned nothing. `is_projectable` replaced that with a rule the
+    opening weeks can satisfy — a prior season in place of a current one — and
+    the walk then graded those weeks rather than assuming them: weeks 1-2 came
+    out the best-calibrated stratum of the season, ECE 0.0184 against 0.0191
+    and 0.0215 for the rest (docs/phase-6b-opening-weekend.md).
 
-    Since Phase 6b.3 that is no longer arithmetic — `is_projectable` admits a
-    returning player in weeks 1-2 on a prior season, so `--all-weeks` COULD
-    start at 1. The floor stays where it is on purpose until the walk that now
-    grades those weeks has been reviewed: the whole point of grading them is to
-    find out at what confidence they can be published, and publishing first
-    would answer the question by assuming it. `--weeks 1` still works, which is
-    how the opening board gets looked at before the gate opens.
+    Eligibility is now entirely a per-player question and lives in
+    `is_projectable`. A week with nobody eligible simply produces nothing, which
+    is a fact about the roster rather than a rule about the calendar.
     """
-    first = MIN_GAMES_TO_PROJECT + 1
     return [
         int(r["week"])
         for r in fetch_all(
             # REGULAR SEASON ONLY. Postseason weeks are stored offset past the
             # regular season (migration 0020), which makes them ordinary weeks
-            # on the time axis and therefore projectable — they were not before,
-            # because they were mislabelled as week 1 and week 1 is below the
-            # floor. Silently gaining bowl games as a side effect of a bug fix
-            # would be a scope change nobody asked for, and bowls are a
-            # different regime anyway: month-long layoffs and opt-outs. Whether
-            # to project them is a product decision; dropping this predicate is
-            # all it takes.
+            # on the time axis and therefore projectable. Bowls are a different
+            # regime — month-long layoffs and opt-outs — and the backtest
+            # excludes them for the same reason, so the published population
+            # stays the graded one. Whether to project them is a product
+            # decision; dropping this predicate is all it takes.
+            #
+            # This predicate now carries weight it did not before: until Phase
+            # 6c a mislabelled postseason game sat at week 1 and was excluded by
+            # the floor as well. The floor is gone, so this is the only thing
+            # keeping bowls off the board.
             "select distinct week from games "
-            " where season = %s and week >= %s and season_type = 'regular' "
+            " where season = %s and season_type = 'regular' "
             " order by week",
-            (season, first),
+            (season,),
         )
     ]
 
@@ -778,7 +783,13 @@ def main(argv: list[str] | None = None) -> int:
         "devig_method": str(get_config_value("devig_method") or "shin"),
         "odds_adapter": str(get_config_value("odds_adapter") or "none"),
         "usage_filter": f"{MIN_USAGE_FRACTION_OF_BASELINE:.0%} of position baseline",
+        # Both halves of the universe rule, because a stored run whose
+        # population is only implied cannot be compared with the one before it.
         "min_games_to_project": MIN_GAMES_TO_PROJECT,
+        "opening_weeks_rule": (
+            f"weeks 1-{LAST_OPENING_WEEK}: {MIN_PRIOR_GAMES_TO_PROJECT}+ "
+            "prior-season games"
+        ),
         "calibrated": calibration is not None,
         "synthetic_lines": bool(args.synthetic_lines),
     }

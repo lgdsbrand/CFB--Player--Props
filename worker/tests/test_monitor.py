@@ -216,3 +216,74 @@ def test_a_healthy_report_says_so_rather_than_saying_nothing() -> None:
     report.checks_run = 12
     assert "healthy" in report.summary()
     assert "12" in report.summary()
+
+
+# -----------------------------------------------------------------------------
+# The empty board, and the week that could never report one
+# -----------------------------------------------------------------------------
+class TestEmptyBoardDetection:
+    """An empty opening weekend is the failure this project was reopened for.
+
+    `run_projections` exits 0 having genuinely succeeded at projecting nobody,
+    so checks 1-3 all go green. Until Phase 6c the freshness check could not
+    catch it either: it asked whether an EARLIER WEEK OF THE SAME SEASON had
+    produced, and week 1 has no earlier week.
+
+    Counts are stubbed rather than inserted. The SQL is exercised against a real
+    database by `test_monitor_queries.py`; what these pin is the decision made
+    on the numbers it returns, which is where the hole was.
+    """
+
+    @staticmethod
+    def _freshness(monkeypatch, **counts) -> MonitorReport:
+        from worker.core.schedule import Slate
+        from worker.jobs import monitor_pipeline
+
+        week = counts.pop("week", 1)
+        monkeypatch.setattr(
+            monitor_pipeline,
+            "fetch_one",
+            lambda sql, params=None: dict(
+                {"this_week": 0, "earlier_weeks": 0, "last_season": 0}, **counts
+            ),
+        )
+        monkeypatch.setattr(
+            monitor_pipeline, "get_config_value", lambda key: "none"
+        )
+        report = MonitorReport()
+        monitor_pipeline.check_data_freshness(
+            report,
+            Slate(season=2026, week=week, in_season=True, complete=False),
+        )
+        return report
+
+    def test_an_empty_week_one_reports_when_last_season_managed_it(
+        self, monkeypatch
+    ) -> None:
+        """THE HOLE. No earlier week exists to compare against, so before Phase
+        6c this state was silent — and it is exactly the state a missing 2026
+        roster produces."""
+        report = self._freshness(monkeypatch, this_week=0, last_season=4669)
+        assert [f.key for f in report.critical] == ["empty-board"]
+        assert "first week of the season" in report.critical[0].title
+
+    def test_a_populated_week_one_is_quiet(self, monkeypatch) -> None:
+        report = self._freshness(monkeypatch, this_week=4669, last_season=4669)
+        assert report.critical == []
+
+    def test_a_first_ever_season_is_not_blamed_for_having_no_predecessor(
+        self, monkeypatch
+    ) -> None:
+        """Self-calibrating, still: with nothing to compare against, silence is
+        the honest answer rather than a false alarm on every new deployment."""
+        report = self._freshness(monkeypatch, this_week=0, last_season=0)
+        assert report.critical == []
+
+    def test_a_mid_season_stoppage_still_reports_the_original_way(
+        self, monkeypatch
+    ) -> None:
+        report = self._freshness(
+            monkeypatch, week=9, this_week=0, earlier_weeks=30000, last_season=0
+        )
+        assert [f.key for f in report.critical] == ["empty-board"]
+        assert "first week" not in report.critical[0].title

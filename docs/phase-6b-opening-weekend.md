@@ -1,4 +1,4 @@
-# Phase 6b — grading the opening weekends
+# Phases 6b-6c — the opening weekends, graded and published
 
 **The review gate.** Weeks 1 and 2 had never been scored by any walk
 (`MIN_BACKTEST_WEEK` was 3), so "can the board open with the season" had no
@@ -294,3 +294,81 @@ visibly incomplete rather than quietly so.
 **Still blocking 29 Aug independently of all this:** `player_team_seasons` holds
 0 rows for 2026, re-probed 2026-08-04 against 15,601 rows for 2025. No roster, no
 board, however well it grades.
+
+---
+
+# Phase 6c — publishing them
+
+The week floor is gone from `run_projections.projectable_weeks`. Eligibility is
+now entirely a per-player question in `is_projectable`, so a week with nobody
+eligible produces nothing — a fact about the roster rather than a rule about the
+calendar. 2025 projects end to end, weeks 1 through 16, 81,198 rows:
+
+| | wk1 | wk2 | wk3 | wk8 | wk14 |
+|---|---|---|---|---|---|
+| projections | 4,669 | 4,534 | 3,985 | 6,466 | 8,125 |
+| players | 1,161 | 1,158 | — | 1,725 | — |
+
+**The opening board is not the thin one.** Week 1 publishes more rows than week
+3, because a full prior season admits more players than two current-season games
+do.
+
+## The deliverable's own claim did not survive contact
+
+Phase 6's plan promised "p10-p90 visibly wider than later weeks". Compared in
+aggregate that is simply false — week 1's relative width is 0.87x to 1.10x week
+8's, *narrower* for rushing yards and passing volume.
+
+It is a population artefact, and pairing the same player-market across both
+weeks says so:
+
+| Market | n | wk1 | wk8 | ratio |
+|---|---|---|---|---|
+| pass_yards | 123 | 2.077 | 1.680 | **x1.38** |
+| pass_completions | 124 | 1.598 | 1.447 | x1.20 |
+| rush_attempts | 273 | 1.979 | 1.834 | x1.13 |
+| rec_yards | 716 | 3.665 | 3.711 | x1.11 |
+| receptions | 519 | 2.011 | 1.878 | x1.10 |
+| rush_yards | 375 | 3.543 | 4.024 | x1.00 |
+
+For the same player the week-1 band **is** wider. The aggregate hides it because
+week 8 admits ~560 more players, and the ones only a settled season qualifies are
+marginal ones whose relative spread is large.
+
+**And the widening should not be forced beyond this.** Weeks 1-2 grade as the
+best-calibrated stratum of the season and their top confidence band is slightly
+*under*-confident. A band widened to look appropriately uncertain would be a
+worse band. The honest signals for the UI are the two the model already stores,
+where the difference is unmistakable:
+
+| paired, n=3,285 | week 1 | week 8 |
+|---|---|---|
+| `prior_weight` | 0.416 | 0.194 |
+| `effective_sample` | 3.83 | 6.61 |
+
+**That is what Phase 6d should surface** — "this rests on last season, 3.8 games
+of effective evidence" — rather than a bar width that is doing its job quietly
+and correctly.
+
+## The alert that could not fire
+
+`check_data_freshness` asked whether an EARLIER WEEK OF THE SAME SEASON had
+produced projections. Week 1 has no earlier week, so an empty opening board —
+the exact thing the client rejected, behind a `run_projections` that exits 0
+having genuinely succeeded at projecting nobody — was invisible to every check
+the monitor runs.
+
+Week 1 now compares against the same week of the prior season. This is not
+hypothetical: **an empty 2026 week 1 fires a critical alert today**, because 2025
+week 1 holds 4,669 projections and 2026 has no roster to build one from. A first
+season with no predecessor still stays quiet, so the check remains
+self-calibrating rather than acquiring a hardcoded floor.
+
+## What needed no change
+
+`v_slate_weeks`, which drives the week selector, was built over `projections`
+rather than `games` so it could never offer a week that renders empty. It picked
+up weeks 1 and 2 with no code change. Migration 0018's header claim that "the
+first projectable week of a season is week 3" is now false and is corrected by
+migration 0027 on the view's own comment, where a reader inspecting the schema
+will meet it.

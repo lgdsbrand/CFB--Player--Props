@@ -26,12 +26,16 @@ import pytest
 from worker.core.features import (
     CHANGED_TEAM_PRIOR_MULTIPLIER,
     PRIOR_GAMES_EQUIVALENT,
+    PRIOR_SCORING_WEEKS,
     SKILL_POSITIONS,
     AsOf,
     LookaheadError,
     _assert_no_lookahead,
     _assert_snapshot_cutoff,
     build_feature_frame,
+    player_goal_line_usage,
+    prior_goal_line_column_names,
+    prior_goal_line_usage,
     prior_weight,
     roster_universe,
 )
@@ -525,3 +529,76 @@ class TestOpeningWeekFrame:
         frame = build_feature_frame(opening_week)
         roster = len(roster_universe(opening_week))
         assert frame["player_id"].n_unique() < roster * 0.75
+
+    def test_the_scoring_columns_exist_even_with_no_plays_behind_them(
+        self, opening_week
+    ):
+        """A frame's schema may depend on the cutoff and never on how much
+        history happens to be ingested, or a walk changes feature set as it
+        crosses a season boundary."""
+        frame = build_feature_frame(opening_week)
+        for column in prior_goal_line_column_names():
+            assert column in frame.columns
+        assert frame["goal_line_opportunities"].max() == 0
+
+
+class TestPriorScoringRecord:
+    """The prior season's goal-line record, which is all week 1 has.
+
+    `player_goal_line_usage` reads the current season, so entering week 1 every
+    opportunity count is zero and `project_anytime_td` returned None for the
+    whole board — losing the market Phase 6a measured as holding up best across
+    the cold start.
+    """
+
+    def test_the_weeks_that_read_it_are_the_weeks_that_can_use_it(self):
+        """`features` cannot import the universe rule without a cycle, so the
+        two constants are held in step here instead. Setting the feature-side
+        one lower would strip anytime TD off the opening board, and nothing else
+        would complain."""
+        from worker.core.projections import LAST_OPENING_WEEK
+
+        assert PRIOR_SCORING_WEEKS == LAST_OPENING_WEEK
+
+    @pytest.fixture
+    def season_with_prior_plays(self, conn):
+        row = conn.execute(
+            """
+            select g.season
+              from games g
+             where exists (select 1 from plays p where p.season = g.season - 1)
+             group by g.season
+             order by g.season desc
+             limit 1
+            """
+        ).fetchone()
+        if not row:
+            pytest.skip("no season whose prior season has play-by-play")
+        return int(row["season"])
+
+    def test_it_reads_the_whole_prior_season(self, season_with_prior_plays):
+        """The completed season, not a week-bounded slice of it — which is what
+        distinguishes this from every other feature query in this module."""
+        season = season_with_prior_plays
+        prior = prior_goal_line_usage(AsOf(season=season, week=1))
+        whole = player_goal_line_usage(AsOf(season=season - 1, week=99))
+        assert prior
+        assert {r["player_id"] for r in prior} == {r["player_id"] for r in whole}
+        assert sum(r["prior_goal_line_opportunities"] for r in prior) == sum(
+            r["goal_line_opportunities"] for r in whole
+        )
+
+    def test_it_does_not_move_with_the_cutoff_week(self, season_with_prior_plays):
+        """A completed season is knowable in full before this one kicks off, so
+        the week we are predicting cannot change it."""
+        season = season_with_prior_plays
+        early = prior_goal_line_usage(AsOf(season=season, week=1))
+        late = prior_goal_line_usage(AsOf(season=season, week=10))
+        assert early == late
+
+    def test_every_column_is_namespaced(self, season_with_prior_plays):
+        """Or it would collide with the current-season column of the same name
+        on the join, and the model could not tell the two apart."""
+        rows = prior_goal_line_usage(AsOf(season=season_with_prior_plays, week=1))
+        assert rows
+        assert set(rows[0]) == {"player_id", *prior_goal_line_column_names()}

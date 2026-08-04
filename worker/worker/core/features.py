@@ -89,6 +89,27 @@ USAGE_STAT_COLUMNS = (
     "snaps",
 )
 
+# Play-derived scoring columns feeding the anytime-TD model. Named once because
+# they are read three times — the current season, the prior season, and the
+# schema stub that keeps a week-1 frame the same shape as a week-10 one.
+GOAL_LINE_COLUMNS = (
+    "scoring_games",
+    "goal_line_opportunities",
+    "goal_line_tds",
+    "open_field_opportunities",
+    "open_field_tds",
+)
+
+# Weeks in which a projectable player can still have no current-season game, and
+# therefore the only weeks whose rows can read a prior-season scoring record.
+#
+# MUST EQUAL `projections.LAST_OPENING_WEEK`, which is the rule this follows
+# from — features cannot import it without a cycle, so the agreement is pinned by
+# test instead (`test_features.TestPriorScoringRecord`). Setting this lower would
+# silently strip the anytime-TD market off the opening board; higher only wastes
+# a whole-season play aggregation on weeks that cannot use it.
+PRIOR_SCORING_WEEKS = 2
+
 # Metrics pivoted into the opponent's full defensive profile, so a row can read
 # what its opponent allows to ANY position rather than only to its own. A QB's
 # passing markets depend on what the defense concedes to WRs and TEs; without
@@ -455,8 +476,74 @@ def player_goal_line_usage(
     user a receiver "scores on 59% of goal-line targets" — that number is an
     artifact of the provider's attribution, not a fact about the player.
     """
+    rows = _goal_line_usage(as_of.season, as_of.week, goal_line_yards)
+    return _assert_no_lookahead(rows, as_of, "player_goal_line_usage")
+
+
+def prior_goal_line_usage(
+    as_of: AsOf, goal_line_yards: int = 10
+) -> list[dict[str, Any]]:
+    """The same scoring record, over the whole PRIOR season.
+
+    WHY THIS EXISTS. `player_goal_line_usage` reads the current season, and in
+    week 1 there is none — so `project_anytime_td` saw zero opportunities and
+    returned None for every player, and the opening board carried no
+    anytime-touchdown market at all. That is the market Phase 6a measured as
+    holding up BEST across the cold start, and the only one that survives a
+    transfer (AUC 0.52-0.72 for players who changed team, higher than stayers at
+    QB): scoring propensity travels with a player, target share does not.
+
+    No week predicate, for the same reason `prior_season_usage` has none: a
+    completed season was knowable in full before this one kicked off. The guard
+    that matters is the season one, asserted below.
+
+    NOT A UNIVERSAL FALLBACK. The model reads these only when the current season
+    is empty. From week 2 a player's own current-season goal-line work exists and
+    is already shrunk toward the position baseline, so nothing about the graded
+    weeks changes.
+
+    NO RUNTIME GUARD HERE, deliberately. `season` is an equality predicate on a
+    constant, so a per-row check would read back the parameter it was handed and
+    pass by construction — a guard that cannot fail is worse than none, because
+    it reads like verification. What could actually be wrong is which season the
+    call site asks for, and that is pinned by test instead: the figures returned
+    must equal the completed prior season's, and must not move with `as_of.week`.
+    """
+    rows = _goal_line_usage(as_of.prior_season, None, goal_line_yards)
+    # Namespaced so the prior columns cannot collide with the current-season
+    # ones, and so `models` can read either set by prefix alone.
+    return [
+        {
+            ("prior_" + k if k != "player_id" else k): v
+            for k, v in row.items()
+            if k != "max_source_week"
+        }
+        for row in rows
+    ]
+
+
+def prior_goal_line_column_names() -> list[str]:
+    """The prior-season scoring columns, whether or not a prior season exists.
+
+    Same contract as `prior_column_names`: a frame's schema must depend on the
+    cutoff and never on how much history happens to be ingested, or a walk
+    changes feature set as it crosses a season boundary.
+    """
+    return [f"prior_{c}" for c in GOAL_LINE_COLUMNS]
+
+
+def _goal_line_usage(
+    season: int, week: int | None, goal_line_yards: int
+) -> list[dict[str, Any]]:
+    """One season of goal-line and open-field opportunities, up to `week`.
+
+    `week=None` takes the whole season, which is what a completed prior season
+    means. The SQL is shared rather than copied so the two readings can never
+    define an opportunity differently — the definitional notes in
+    `player_goal_line_usage` apply to both.
+    """
     rows = fetch_all(
-        """
+        f"""
         with per_play as (
           select pps.play_id,
                  pps.player_id,
@@ -473,7 +560,7 @@ def player_goal_line_usage(
             from play_player_stats pps
             join plays p on p.id = pps.play_id
            where pps.season = %(season)s
-             and pps.week   < %(week)s
+             {"and pps.week < %(week)s" if week is not None else ""}
              and pps.position_group = any(%(positions)s::position_group[])
              and p.yards_to_goal is not null
            group by pps.play_id, pps.player_id, p.game_id, p.week, p.yards_to_goal
@@ -497,13 +584,13 @@ def player_goal_line_usage(
          group by player_id
         """,
         {
-            "season": as_of.season,
-            "week": as_of.week,
+            "season": season,
+            "week": week,
             "goal_line": goal_line_yards,
             "positions": list(SKILL_POSITIONS),
         },
     )
-    return _assert_no_lookahead(rows, as_of, "player_goal_line_usage")
+    return rows
 
 
 def team_context(as_of: AsOf) -> list[dict[str, Any]]:
@@ -804,24 +891,29 @@ def build_feature_frame(
         frame = frame.join(
             goal_line_frame.drop("max_source_week"), on="player_id", how="left"
         )
-    for column in (
-        "scoring_games",
-        "goal_line_opportunities",
-        "goal_line_tds",
-        "open_field_opportunities",
-        "open_field_tds",
-    ):
-        if column not in frame.columns:
-            frame = frame.with_columns(pl.lit(0, dtype=pl.Int64).alias(column))
-    frame = frame.with_columns(
-        [pl.col(c).fill_null(0) for c in (
-            "scoring_games",
-            "goal_line_opportunities",
-            "goal_line_tds",
-            "open_field_opportunities",
-            "open_field_tds",
-        )]
-    )
+
+    # The same record from the prior season, which is all a week-1 row has: the
+    # current-season frame above is empty entering week 1, and without this the
+    # anytime-TD market produced nothing at all on opening weekend.
+    #
+    # Read only in the opening weeks, and that is a cost decision with a
+    # correctness argument under it. It aggregates a whole season of
+    # play-by-play, 2-5s a week against the database; and a row with no
+    # current-season games is only ever PROJECTED in those weeks, so from week 3
+    # the columns would be built and never read. The frame's shape does not
+    # depend on it either way — the stub below materializes them regardless.
+    if as_of.week <= PRIOR_SCORING_WEEKS:
+        prior_goal_line_frame = _frame(prior_goal_line_usage(as_of, goal_line_yards))
+        if not prior_goal_line_frame.is_empty():
+            frame = frame.join(prior_goal_line_frame, on="player_id", how="left")
+
+    scoring_columns = [*GOAL_LINE_COLUMNS, *prior_goal_line_column_names()]
+    missing_scoring = [c for c in scoring_columns if c not in frame.columns]
+    if missing_scoring:
+        frame = frame.with_columns(
+            [pl.lit(0, dtype=pl.Int64).alias(c) for c in missing_scoring]
+        )
+    frame = frame.with_columns([pl.col(c).fill_null(0) for c in scoring_columns])
 
     context_frame = _frame(context)
     if not context_frame.is_empty():

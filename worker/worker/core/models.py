@@ -808,20 +808,46 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
             if len(values) >= MIN_BASELINE_SAMPLES:
                 resolved[key] = median_of(values)
 
-    # Touchdown conversion rates are POOLED, not per-player medians: they are
-    # ratios of counts, and the median of per-player ratios is dominated by
-    # players with one or two chances, whose rate is 0 or 1 and neither.
+    # Touchdown conversion and opportunity rates, from the current season where
+    # it exists and last season where it does not.
+    totals = _scoring_totals(rows)
+    prior_totals = _scoring_totals(rows, prefix="prior_")
+    for position in set(totals) | set(prior_totals):
+        resolved = baselines.setdefault(position, {})
+        rates = _scoring_rates(totals.get(position) or {})
+        # Entering week 1 the current-season pool is empty for EVERY position,
+        # and an absent baseline is not neutral here: `opportunity_rate` shrinks
+        # toward `_chances_pg` and would read a missing one as zero — a
+        # confident claim that nobody gets a goal-line carry. The prior season
+        # is the only pool that exists, so it stands in whole.
+        for key, value in _scoring_rates(prior_totals.get(position) or {}).items():
+            rates.setdefault(key, value)
+        resolved.update(rates)
+
+    return baselines
+
+
+def _scoring_totals(
+    rows: list[dict[str, Any]], *, prefix: str = ""
+) -> dict[str, dict[str, float]]:
+    """Goal-line and open-field counts pooled by position, from one season.
+
+    `prefix` selects the current-season columns or the prior-season ones, which
+    are namespaced identically — one pass, two seasons, no duplicated arithmetic.
+    """
+    games_key = f"{prefix}games_played"
     totals: dict[str, dict[str, float]] = {}
     for row in rows:
         position = row.get("position_group")
         if not position:
             continue
-        # These are CURRENT-SEASON per-game rates, so a row with no current
-        # season has nothing to contribute and must not contribute a numerator
-        # either. Roster rows carry no games but can still carry play-level
-        # opportunities, which would inflate every `_chances_pg` while adding
-        # nothing to the denominator.
-        if not (_value(row, "games_played", 0.0) or 0.0) > 0:
+        # A row with no games in the season being pooled has nothing to
+        # contribute and must not contribute a NUMERATOR either. Roster rows
+        # carry no games but can still carry play-level opportunities, which
+        # would inflate every `_chances_pg` while adding nothing to the
+        # denominator.
+        games = _value(row, games_key, 0.0) or 0.0
+        if not games > 0:
             continue
         bucket = totals.setdefault(str(position), {})
         for key in (
@@ -830,31 +856,43 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
             "open_field_opportunities",
             "open_field_tds",
         ):
-            bucket[key] = bucket.get(key, 0.0) + (_value(row, key, 0.0) or 0.0)
-        # Games are accumulated in the same pass so the opportunity rates below
+            bucket[key] = bucket.get(key, 0.0) + (
+                _value(row, f"{prefix}{key}", 0.0) or 0.0
+            )
+        # Games are accumulated in the same pass so the opportunity rates
         # divide by the right denominator without a second scan.
-        bucket["games"] = bucket.get("games", 0.0) + (
-            _value(row, "games_played", 0.0) or 0.0
+        bucket["games"] = bucket.get("games", 0.0) + games
+    return totals
+
+
+def _scoring_rates(counts: dict[str, float]) -> dict[str, float]:
+    """Conversion and opportunity rates from one pooled bucket.
+
+    POOLED, not per-player medians: they are ratios of counts, and the median of
+    per-player ratios is dominated by players with one or two chances, whose
+    rate is 0 or 1 and neither.
+    """
+    rates: dict[str, float] = {}
+    goal_line_chances = counts.get("goal_line_opportunities", 0.0)
+    open_chances = counts.get("open_field_opportunities", 0.0)
+    if goal_line_chances > 0:
+        rates["goal_line_conversion"] = (
+            counts.get("goal_line_tds", 0.0) / goal_line_chances
         )
-
-    for position, counts in totals.items():
-        resolved = baselines.setdefault(position, {})
-        goal_line_chances = counts.get("goal_line_opportunities", 0.0)
-        open_chances = counts.get("open_field_opportunities", 0.0)
-        if goal_line_chances > 0:
-            resolved["goal_line_conversion"] = (
-                counts.get("goal_line_tds", 0.0) / goal_line_chances
-            )
-        if open_chances > 0:
-            resolved["open_field_conversion"] = (
-                counts.get("open_field_tds", 0.0) / open_chances
-            )
-        games = counts.get("games", 0.0)
-        if games > 0:
-            resolved["goal_line_chances_pg"] = goal_line_chances / games
-            resolved["open_field_chances_pg"] = open_chances / games
-
-    return baselines
+    if open_chances > 0:
+        rates["open_field_conversion"] = (
+            counts.get("open_field_tds", 0.0) / open_chances
+        )
+    games = counts.get("games", 0.0)
+    # A whole position with games but not one recorded opportunity means the
+    # play data is missing for that season, not that nobody carried the ball —
+    # 2023 was backfilled box-scores-only and has no `play_player_stats` at all.
+    # Publishing 0.0 as the position's opportunity rate would turn an absence of
+    # data into a confident claim, and `opportunity_rate` shrinks toward it.
+    if games > 0 and (goal_line_chances > 0 or open_chances > 0):
+        rates["goal_line_chances_pg"] = goal_line_chances / games
+        rates["open_field_chances_pg"] = open_chances / games
+    return rates
 
 
 def _blend_stat(
@@ -1084,13 +1122,30 @@ def project_anytime_td(
     league = league or {}
     position = str(row.get("position_group") or "")
     games = _value(row, "games_played", 0.0) or 0.0
+    prefix = ""
+
+    # WEEK 1 READS LAST SEASON'S SCORING RECORD INSTEAD. Not a blend: a player
+    # with even one game this season has current-season goal-line work, and the
+    # opportunity shrinkage below already handles how little of it there is. The
+    # substitution happens only where there is nothing to blend WITH, which
+    # leaves every graded week untouched and keeps this attributable.
+    #
+    # Undiscounted for a transfer, unlike every other market. Phase 6a measured
+    # anytime TD as the one thing that survives a change of school — AUC
+    # 0.52-0.72 for players who moved, higher than for stayers at QB — because
+    # scoring propensity belongs to the player while target share belongs to the
+    # offense around him. `CHANGED_TEAM_PRIOR_MULTIPLIER` would discount exactly
+    # the signal that travels.
+    if games <= 0:
+        prefix = "prior_"
+        games = _value(row, "prior_games_played", 0.0) or 0.0
     if games <= 0:
         return None
 
-    raw_goal_line = _value(row, "goal_line_opportunities", 0.0) or 0.0
-    raw_open = _value(row, "open_field_opportunities", 0.0) or 0.0
-    goal_line_tds = _value(row, "goal_line_tds", 0.0) or 0.0
-    open_tds = _value(row, "open_field_tds", 0.0) or 0.0
+    raw_goal_line = _value(row, f"{prefix}goal_line_opportunities", 0.0) or 0.0
+    raw_open = _value(row, f"{prefix}open_field_opportunities", 0.0) or 0.0
+    goal_line_tds = _value(row, f"{prefix}goal_line_tds", 0.0) or 0.0
+    open_tds = _value(row, f"{prefix}open_field_tds", 0.0) or 0.0
 
     if raw_goal_line <= 0 and raw_open <= 0:
         return None
@@ -1133,12 +1188,12 @@ def project_anytime_td(
     position_league = league.get(position) or {}
     goal_line_rate = conversion(
         goal_line_tds,
-        _value(row, "goal_line_opportunities", 0.0) or 0.0,
+        raw_goal_line,
         position_league.get("goal_line_conversion", DEFAULT_GOAL_LINE_CONVERSION),
     )
     open_rate = conversion(
         open_tds,
-        _value(row, "open_field_opportunities", 0.0) or 0.0,
+        raw_open,
         position_league.get("open_field_conversion", DEFAULT_OPEN_FIELD_CONVERSION),
     )
 

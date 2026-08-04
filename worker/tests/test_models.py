@@ -259,6 +259,82 @@ class TestPositionBaselines:
         )
 
 
+class TestScoringBaselines:
+    """The pooled goal-line rates the anytime-TD model shrinks toward.
+
+    An ABSENT one is not neutral: `opportunity_rate` shrinks toward
+    `_chances_pg` and reads a missing baseline as zero, which is a confident
+    claim that nobody at the position gets a goal-line carry.
+    """
+
+    @staticmethod
+    def _row(**overrides):
+        row = {
+            "position_group": "RB",
+            "games_played": 6,
+            "goal_line_opportunities": 12,
+            "goal_line_tds": 3,
+            "open_field_opportunities": 60,
+            "open_field_tds": 1,
+        }
+        row.update(overrides)
+        return row
+
+    def test_pooled_across_players_not_averaged_per_player(self):
+        baselines = position_baselines([self._row(), self._row()])["RB"]
+        assert baselines["goal_line_chances_pg"] == pytest.approx(2.0)
+        assert baselines["goal_line_conversion"] == pytest.approx(0.25)
+
+    def test_week_one_falls_back_to_the_prior_seasons_pool(self):
+        """Every current-season pool is empty entering week 1, so without this
+        the whole position shrinks toward zero opportunities."""
+        rows = [
+            {
+                "position_group": "RB",
+                "games_played": 0,
+                "prior_games_played": 12,
+                "prior_goal_line_opportunities": 24,
+                "prior_goal_line_tds": 6,
+                "prior_open_field_opportunities": 120,
+                "prior_open_field_tds": 2,
+            }
+        ]
+        baselines = position_baselines(rows)["RB"]
+        assert baselines["goal_line_chances_pg"] == pytest.approx(2.0)
+        assert baselines["goal_line_conversion"] == pytest.approx(0.25)
+
+    def test_the_current_season_wins_wherever_it_exists(self):
+        rows = [
+            self._row(
+                prior_games_played=12,
+                prior_goal_line_opportunities=120,
+                prior_goal_line_tds=60,
+                prior_open_field_opportunities=120,
+                prior_open_field_tds=60,
+            )
+        ]
+        baselines = position_baselines(rows)["RB"]
+        assert baselines["goal_line_chances_pg"] == pytest.approx(2.0)
+        assert baselines["goal_line_conversion"] == pytest.approx(0.25)
+
+    def test_a_season_with_games_but_no_play_data_sets_no_rate(self):
+        """2023 was backfilled box-scores-only: prior games exist and prior
+        opportunities do not. Pooling that as 0.0 chances a game would turn an
+        absence of data into a claim about the position."""
+        rows = [
+            {
+                "position_group": "RB",
+                "games_played": 0,
+                "prior_games_played": 12,
+                "prior_goal_line_opportunities": 0,
+                "prior_goal_line_tds": 0,
+                "prior_open_field_opportunities": 0,
+                "prior_open_field_tds": 0,
+            }
+        ]
+        assert "goal_line_chances_pg" not in position_baselines(rows)["RB"]
+
+
 def _rows(position: str, stat: str, means, sd: float, games: int = 6) -> list[dict]:
     # `games_played` is not decoration: since Phase 6b.2 a row with no
     # current-season game does not vote on the current-season baseline, because
@@ -600,8 +676,75 @@ class TestAnytimeTdProjection:
             {}, self._league(),
         ) is None
 
-    def test_no_games_played_yields_no_projection(self):
+    def test_no_games_and_no_prior_season_yields_no_projection(self):
         assert project_anytime_td(self._row(games_played=0), {}, self._league()) is None
+
+    @staticmethod
+    def _prior_row(**overrides):
+        """A week-1 row: on a roster, nothing played yet, last season behind it."""
+        row = TestAnytimeTdProjection._row(
+            games_played=0,
+            goal_line_opportunities=0,
+            goal_line_tds=0,
+            open_field_opportunities=0,
+            open_field_tds=0,
+            prior_games_played=12,
+            prior_goal_line_opportunities=24,
+            prior_goal_line_tds=6,
+            prior_open_field_opportunities=120,
+            prior_open_field_tds=2,
+        )
+        row.update(overrides)
+        return row
+
+    def test_week_one_scores_off_last_seasons_record(self):
+        """Before this the market produced NOTHING on opening weekend: the
+        current-season columns are all zero, so `project_anytime_td` returned
+        None for every player on the board."""
+        week_one = project_anytime_td(self._prior_row(), {}, self._league())
+        assert week_one is not None
+        assert 0.0 < week_one.params["p"] < 1.0
+
+    def test_last_seasons_volume_still_separates_players(self):
+        quiet = project_anytime_td(
+            self._prior_row(
+                prior_goal_line_opportunities=1, prior_goal_line_tds=0
+            ),
+            {}, self._league(),
+        )
+        heavy = project_anytime_td(
+            self._prior_row(
+                prior_goal_line_opportunities=40, prior_goal_line_tds=12
+            ),
+            {}, self._league(),
+        )
+        assert quiet is not None and heavy is not None
+        assert heavy.params["p"] > quiet.params["p"]
+
+    def test_a_prior_season_with_no_play_data_yields_no_projection(self):
+        """2023 holds box scores and no plays, so a 2024 week-1 row has prior
+        games and no prior opportunities. Nothing to project from."""
+        assert project_anytime_td(
+            self._prior_row(
+                prior_goal_line_opportunities=0, prior_open_field_opportunities=0
+            ),
+            {}, self._league(),
+        ) is None
+
+    def test_a_player_who_has_played_ignores_the_prior_season(self):
+        """The substitution happens only where there is nothing to blend with,
+        which is what keeps every already-graded week identical."""
+        played = self._row(
+            prior_games_played=12,
+            prior_goal_line_opportunities=99,
+            prior_goal_line_tds=40,
+            prior_open_field_opportunities=200,
+            prior_open_field_tds=20,
+        )
+        with_prior = project_anytime_td(played, {}, self._league())
+        without = project_anytime_td(self._row(), {}, self._league())
+        assert with_prior is not None and without is not None
+        assert with_prior.params["p"] == without.params["p"]
 
     def test_probability_never_reaches_certainty(self):
         p = project_anytime_td(

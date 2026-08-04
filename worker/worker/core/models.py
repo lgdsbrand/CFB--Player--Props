@@ -83,6 +83,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from worker.core.features import USAGE_STAT_COLUMNS
 from worker.core.probability import (
     distribution_median,
     distribution_quantile,
@@ -105,6 +106,12 @@ BASELINE_PSEUDO_GAMES = 4.0
 # shrunk into the population mean and losing the player entirely.
 MIN_PSEUDO_GAMES = 0.5
 MAX_PSEUDO_GAMES = 12.0
+
+# Current-season samples a position needs before its baseline stops borrowing
+# from last season. Set at the point where a median starts describing the
+# position rather than the handful of players who happened to play early: in
+# week 1 there are none at all, and in week 2 only the teams that opened.
+MIN_BASELINE_SAMPLES = 8
 
 # Floor on a projected standard deviation, as a fraction of the mean. Guards the
 # degenerate case where a player's handful of games happened to be near-identical
@@ -628,25 +635,59 @@ def median_of(values: list[float]) -> float:
     return 0.5 * (ordered[middle - 1] + ordered[middle])
 
 
-def _cv_samples(rows: list[dict[str, Any]]) -> dict[str, dict[str, list[float]]]:
+def _stat_keys(row: dict[str, Any]) -> list[str]:
+    """The `{stat}_pg` names this row can speak about, current season or prior.
+
+    Two kinds of key, and both are load-bearing:
+
+      * the player's own usage, from `USAGE_STAT_COLUMNS`, which is what a thin
+        projection is shrunk toward;
+      * the opponent's per-game ALLOWANCES, which look like `_pg` columns but
+        describe a defense. `defensive_ratio` divides a specific opponent's
+        allowance by the league mean of the same quantity, and the league mean is
+        read straight out of this dict — so dropping them does not remove clutter,
+        it silently sets every matchup multiplier to 1.0 and turns off the
+        position-split signal that CLAUDE.md §5 calls the core of the model.
+
+    Derived from BOTH namespaces on purpose. Discovering stat names only from the
+    row's current-season columns worked until week 1, where those columns do not
+    exist at all — a roster row carries nothing but `prior_*`, so the loop found
+    no keys, every baseline came out empty, and the opening-weekend board
+    produced zero projections while looking perfectly healthy.
+    """
+    keys: set[str] = set()
+    for stat in USAGE_STAT_COLUMNS:
+        key = f"{stat}_pg"
+        if key in row or f"prior_{key}" in row:
+            keys.add(key)
+    for key in row:
+        if key.endswith("_pg") and "_allowed_" in key:
+            keys.add(key)
+    return sorted(keys)
+
+
+def _cv_samples(
+    rows: list[dict[str, Any]], prefix: str = ""
+) -> dict[str, dict[str, list[float]]]:
     """Per-player sd/mean ratios, by position and `{stat}_cv` key.
 
     Only rows carrying BOTH a mean and a positive SD contribute. A player with
     one game has a NULL `stddev_samp` and simply does not vote on the typical
     spread — which is the point: the baseline exists so that a player with no
-    usable width of their own can borrow one.
+    usable width of their own can borrow one. Entering week 1 nobody has one, so
+    `prefix="prior_"` reads the same ratios off last season instead.
     """
     samples: dict[str, dict[str, list[float]]] = {}
     for row in rows:
         position = row.get("position_group")
         if not position:
             continue
+        if not prefix and not (_value(row, "games_played", 0.0) or 0.0) > 0:
+            continue  # see `position_baselines`: no current season, no vote
         bucket = samples.setdefault(str(position), {})
-        for key in row:
-            if not key.endswith("_pg") or key.startswith(("prior_", "team_", "opp_")):
-                continue
-            mean = _value(row, key)
-            sd = _value(row, key.replace("_pg", "_sd"))
+        for key in _stat_keys(row):
+            mean = _value(row, f"{prefix}{key}")
+            sd = _value(row, f"{prefix}{key.replace('_pg', '_sd')}")
             if mean is None or mean <= 0 or sd is None or sd <= 0:
                 continue
             bucket.setdefault(f"{key[: -len('_pg')]}_cv", []).append(sd / mean)
@@ -661,22 +702,44 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
     baseline exists to be a sensible thing to shrink a thin sample TOWARD.
     """
     by_position: dict[str, dict[str, list[float]]] = {}
+    prior_by_position: dict[str, dict[str, list[float]]] = {}
     for row in rows:
         position = row.get("position_group")
         if not position:
             continue
         bucket = by_position.setdefault(str(position), {})
-        for key in row:
-            if not key.endswith("_pg") or key.startswith(("prior_", "team_", "opp_")):
-                continue
-            number = _value(row, key)
+        prior_bucket = prior_by_position.setdefault(str(position), {})
+        # A row with no current-season game says nothing about this season's
+        # typical output, so it does not vote on the current-season median. It
+        # still votes on the PRIOR one below, which entering week 1 is the only
+        # evidence any row has.
+        has_current = (_value(row, "games_played", 0.0) or 0.0) > 0
+        for key in _stat_keys(row):
+            number = _value(row, key) if has_current else None
             if number is not None:
                 bucket.setdefault(key, []).append(number)
+            # The same stat from last season, kept separately. Entering week 1
+            # there is no current-season column to take a median of, and a
+            # baseline is exactly what a projection with no evidence shrinks
+            # toward — so without this the whole opening-weekend board would have
+            # nothing to stand on. Used ONLY where the current season is too thin
+            # to speak for itself, so no established week borrows from it.
+            prior_number = _value(row, f"prior_{key}")
+            if prior_number is not None:
+                prior_bucket.setdefault(key, []).append(prior_number)
 
     baselines: dict[str, dict[str, float]] = {}
     for position, stats in by_position.items():
         resolved: dict[str, float] = {}
-        for key, values in stats.items():
+        prior_stats = prior_by_position.get(position, {})
+        for key in set(stats) | set(prior_stats):
+            values = stats.get(key) or []
+            # MIN_BASELINE_SAMPLES, not "any": one or two players who happen to
+            # have played is not a position's typical output, and in week 2 that
+            # is the whole current-season sample. Falling back keeps the baseline
+            # a description of the position rather than of whoever kicked off.
+            if len(values) < MIN_BASELINE_SAMPLES:
+                values = prior_stats.get(key) or values
             if values:
                 resolved[key] = median_of(values)
         baselines[position] = resolved
@@ -732,10 +795,17 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
     #
     # Median rather than mean, for the same reason the level baselines use one —
     # a handful of players with a near-zero mean produce enormous ratios.
-    for position, ratios in _cv_samples(rows).items():
+    current_cv = _cv_samples(rows)
+    prior_cv = _cv_samples(rows, prefix="prior_")
+    for position in set(current_cv) | set(prior_cv):
         resolved = baselines.setdefault(position, {})
-        for key, values in ratios.items():
-            if len(values) >= 8:
+        ratios = current_cv.get(position, {})
+        fallback = prior_cv.get(position, {})
+        for key in set(ratios) | set(fallback):
+            values = ratios.get(key) or []
+            if len(values) < MIN_BASELINE_SAMPLES:
+                values = fallback.get(key) or values
+            if len(values) >= MIN_BASELINE_SAMPLES:
                 resolved[key] = median_of(values)
 
     # Touchdown conversion rates are POOLED, not per-player medians: they are
@@ -745,6 +815,13 @@ def position_baselines(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]
     for row in rows:
         position = row.get("position_group")
         if not position:
+            continue
+        # These are CURRENT-SEASON per-game rates, so a row with no current
+        # season has nothing to contribute and must not contribute a numerator
+        # either. Roster rows carry no games but can still carry play-level
+        # opportunities, which would inflate every `_chances_pg` while adding
+        # nothing to the denominator.
+        if not (_value(row, "games_played", 0.0) or 0.0) > 0:
             continue
         bucket = totals.setdefault(str(position), {})
         for key in (

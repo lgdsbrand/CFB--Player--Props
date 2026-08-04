@@ -223,19 +223,19 @@ class TestPositionBaselines:
     def test_uses_median_not_mean(self):
         """The pool includes bench players whose zeros would drag a mean down."""
         rows = [
-            {"position_group": "WR", "rec_yards_pg": 0.0},
-            {"position_group": "WR", "rec_yards_pg": 0.0},
-            {"position_group": "WR", "rec_yards_pg": 60.0},
-            {"position_group": "WR", "rec_yards_pg": 70.0},
-            {"position_group": "WR", "rec_yards_pg": 80.0},
+            {"position_group": "WR", "games_played": 6, "rec_yards_pg": 0.0},
+            {"position_group": "WR", "games_played": 6, "rec_yards_pg": 0.0},
+            {"position_group": "WR", "games_played": 6, "rec_yards_pg": 60.0},
+            {"position_group": "WR", "games_played": 6, "rec_yards_pg": 70.0},
+            {"position_group": "WR", "games_played": 6, "rec_yards_pg": 80.0},
         ]
         baselines = position_baselines(rows)
         assert baselines["WR"]["rec_yards_pg"] == pytest.approx(60.0)
 
     def test_positions_are_kept_separate(self):
         rows = [
-            {"position_group": "WR", "rec_yards_pg": 60.0},
-            {"position_group": "RB", "rec_yards_pg": 15.0},
+            {"position_group": "WR", "games_played": 6, "rec_yards_pg": 60.0},
+            {"position_group": "RB", "games_played": 6, "rec_yards_pg": 15.0},
         ]
         baselines = position_baselines(rows)
         assert baselines["WR"]["rec_yards_pg"] == pytest.approx(60.0)
@@ -245,6 +245,7 @@ class TestPositionBaselines:
         rows = [
             {
                 "position_group": "WR",
+                "games_played": 6,
                 "rec_yards_pg": 60.0,
                 "prior_rec_yards_pg": 99.0,
                 "team_pass_yards_pg": 250.0,
@@ -258,9 +259,19 @@ class TestPositionBaselines:
         )
 
 
-def _rows(position: str, stat: str, means, sd: float) -> list[dict]:
+def _rows(position: str, stat: str, means, sd: float, games: int = 6) -> list[dict]:
+    # `games_played` is not decoration: since Phase 6b.2 a row with no
+    # current-season game does not vote on the current-season baseline, because
+    # the frame now carries roster players who have not played yet. Every real
+    # frame row has this column, so a fixture without one was describing a row
+    # that cannot exist.
     return [
-        {"position_group": position, f"{stat}_pg": mean, f"{stat}_sd": sd}
+        {
+            "position_group": position,
+            "games_played": games,
+            f"{stat}_pg": mean,
+            f"{stat}_sd": sd,
+        }
         for mean in means
     ]
 
@@ -858,3 +869,92 @@ class TestLocationLift:
         widened = rescale(projection, 2.2)
         assert distribution_median("lognormal", widened.params) >= 0.0
         assert widened.mean == pytest.approx(mean)
+
+
+class TestBaselinesWithoutACurrentSeason:
+    """Entering week 1 the frame is all roster rows and no current season.
+
+    Before Phase 6b.2 `build_feature_frame` returned nothing at all in that
+    state, so none of this could arise. Now it can, and a baseline is what a
+    projection with no evidence of its own shrinks toward — if it comes out
+    empty the whole opening-weekend board silently produces zero projections.
+    """
+
+    @staticmethod
+    def _week_one_rows(n: int = 12):
+        return [
+            {
+                "position_group": "WR",
+                "games_played": 0,
+                "prior_rec_yards_pg": 20.0 + i * 5,
+                "prior_rec_yards_sd": (20.0 + i * 5) * 0.7,
+                "prior_receptions_pg": 2.0 + i * 0.3,
+                "prior_receptions_sd": 1.5,
+            }
+            for i in range(n)
+        ]
+
+    def test_a_week_one_frame_still_produces_a_baseline(self):
+        baselines = position_baselines(self._week_one_rows())["WR"]
+        assert baselines["rec_yards_pg"] == pytest.approx(47.5)
+        assert baselines["receptions_pg"] == pytest.approx(3.65)
+
+    def test_it_produces_a_cv_baseline_too(self):
+        """Without this the week-1 width falls to MIN_RELATIVE_SD — the 6a defect."""
+        baselines = position_baselines(self._week_one_rows())["WR"]
+        assert baselines["rec_yards_cv"] == pytest.approx(0.70, abs=0.01)
+
+    def test_a_row_with_no_current_season_does_not_vote_on_the_current_median(self):
+        """The rule that keeps established weeks byte-identical.
+
+        A roster row knows nothing about this season, so letting it into the
+        current-season median would move every established week's baselines the
+        moment the universe widened.
+        """
+        # At least MIN_BASELINE_SAMPLES of them, or the prior fallback fires for
+        # a different and legitimate reason and the test proves nothing.
+        played = _rows("WR", "rec_yards", [40.0 + i for i in range(10)], 20.0)
+        # The roster rows carry an explicit ZERO, not a null. Today the frame
+        # gives newcomers nulls, which `_value` skips anyway — so this pins the
+        # guard against the day someone fills them with 0.0 instead and silently
+        # collapses every position baseline toward the bench.
+        with_roster = played + [
+            {
+                "position_group": "WR",
+                "games_played": 0,
+                "rec_yards_pg": 0.0,
+                "prior_rec_yards_pg": 5.0,
+            }
+            for _ in range(50)
+        ]
+        assert (
+            position_baselines(with_roster)["WR"]["rec_yards_pg"]
+            == position_baselines(played)["WR"]["rec_yards_pg"]
+        )
+
+    def test_an_established_position_ignores_the_prior_fallback(self):
+        """The prior only fills a gap; it never overrides a real sample."""
+        rows = _rows("WR", "rec_yards", [40.0] * 10, 12.0)
+        for row in rows:
+            row["prior_rec_yards_pg"] = 999.0
+        assert position_baselines(rows)["WR"]["rec_yards_pg"] == pytest.approx(40.0)
+
+    def test_the_league_mean_of_a_defensive_allowance_survives(self):
+        """REGRESSION, and a silent one.
+
+        `defensive_ratio` divides an opponent's allowance by the league mean of
+        the same quantity, and reads that mean out of this dict. Filtering the
+        `_allowed_pg` columns out as clutter left every matchup multiplier at
+        1.0 — the position-split signal CLAUDE.md §5 calls the core of the model,
+        switched off with no error and a perfectly plausible-looking board.
+        """
+        rows = [
+            {
+                "position_group": "WR",
+                "games_played": 6,
+                "rec_yards_pg": 60.0,
+                "adj_rec_yards_allowed_pg": 150.0 + i,
+            }
+            for i in range(10)
+        ]
+        assert "adj_rec_yards_allowed_pg" in position_baselines(rows)["WR"]

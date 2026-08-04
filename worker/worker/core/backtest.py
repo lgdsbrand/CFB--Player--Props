@@ -358,15 +358,26 @@ def _trailing_centre(row: dict[str, Any], stat_column: str) -> float | None:
 
     Point-in-time by construction: it comes from the feature frame, whose every
     aggregate was already restricted to weeks before the cutoff.
+
+    Falls back to LAST SEASON's average when this season has none. Entering week
+    1 that is every player, and without the fallback `backtest_week` skipped
+    every non-binary market — so weeks 1-2 would have graded anytime TD alone
+    while looking like they had been graded properly. A prior-season average is
+    still knowable before kickoff, which is the only test a line anchor has to
+    pass; it stands in for a book that has not posted, exactly as the
+    current-season average does later in the year.
     """
-    value = row.get(f"{stat_column}_pg")
-    if value is None:
-        return None
-    try:
-        centre = float(value)
-    except (TypeError, ValueError):
-        return None
-    return centre if math.isfinite(centre) else None
+    for key in (f"{stat_column}_pg", f"prior_{stat_column}_pg"):
+        value = row.get(key)
+        if value is None:
+            continue
+        try:
+            centre = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(centre):
+            return centre
+    return None
 
 
 def _projection_sigma(projection: Projection) -> float:

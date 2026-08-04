@@ -280,6 +280,44 @@ def player_usage(as_of: AsOf) -> list[dict[str, Any]]:
     return _assert_no_lookahead(rows, as_of, "player_usage")
 
 
+def roster_universe(as_of: AsOf) -> list[dict[str, Any]]:
+    """Skill-position players on a roster this season, with the team they play for.
+
+    WHY THE ROSTER AND NOT `player_game_stats`. `player_usage` can only see
+    players who have already appeared, so entering week 1 it returns nothing and
+    `build_feature_frame` has no player to project. The roster is the only source
+    that answers "who is on this team" before a snap is played.
+
+    NOT LOOKAHEAD, and checked rather than assumed. `/roster?year=N` describes
+    squad membership for season N, which was knowable before it started — the
+    same standing as `upcoming_slate` knowing the fixture list. The failure mode
+    would be a player joining mid-season and appearing retroactively, so that was
+    measured: across 2024 and 2025 exactly 3 and 2 players respectively hold rows
+    for two different teams in one season. Mid-season movement is nil in college
+    football, where the portal windows are winter and spring.
+
+    THE ROSTER ALONE IS FAR TOO BROAD. 2025 has 15,601 roster rows and only 2,963
+    of those players ever recorded a snap — it includes every walk-on and
+    redshirt. This function is the universe's outer bound, not the universe; the
+    caller narrows it by requiring prior-season production.
+    """
+    rows = fetch_all(
+        """
+        select pts.player_id,
+               pts.team_id,
+               coalesce(pts.position_group, p.position_group)::text as position_group
+          from player_team_seasons pts
+          join players p on p.id = pts.player_id
+         where pts.season = %(season)s
+           and coalesce(pts.position_group, p.position_group)
+                 = any(%(positions)s::position_group[])
+        """,
+        {"season": as_of.season, "positions": list(SKILL_POSITIONS)},
+    )
+    log.info("%s: %d skill-position players on a roster", as_of, len(rows))
+    return rows
+
+
 # -----------------------------------------------------------------------------
 # Player usage — prior season
 # -----------------------------------------------------------------------------
@@ -695,11 +733,46 @@ def build_feature_frame(
 
     matchup_frame = _frame(matchups)
     usage_frame = _frame(usage)
-    if usage_frame.is_empty():
-        log.warning("No current-season usage for %s.", as_of)
-        return pl.DataFrame()
 
-    frame = usage_frame.join(matchup_frame, on="team_id", how="inner")
+    # Players with no current-season snap yet, taken from the roster. Entering
+    # week 1 this is the ENTIRE universe — `player_usage` returns nothing, and
+    # before Phase 6b that emptiness returned an empty frame and ended the run,
+    # which is why the board was blank on opening weekend.
+    #
+    # Carrying them at every cutoff rather than only in weeks 1-2 keeps one code
+    # path. It does not widen the published board: `MIN_GAMES_TO_PROJECT` still
+    # decides who is projected, and a row with no current-season games fails it
+    # exactly as it did before. Phase 6b.3 is where that rule changes.
+    # A roster row on its own is not evidence — 15,601 of them in 2025 against
+    # 2,963 players who ever took a snap. Require prior-season production, which
+    # is the only thing a week-1 projection can be built from anyway. Players
+    # with neither a current season nor a prior one are dropped here rather than
+    # projected off a league-average line that would be pure noise on the board.
+    roster_frame = _frame(roster_universe(as_of))
+    if not roster_frame.is_empty() and prior:
+        roster_frame = roster_frame.join(
+            _frame(prior).select("player_id"), on="player_id", how="semi"
+        )
+    elif not prior:
+        roster_frame = pl.DataFrame()
+
+    if not roster_frame.is_empty():
+        if usage_frame.is_empty():
+            frame = roster_frame.with_columns(
+                pl.lit(0, dtype=pl.Int64).alias("games_played")
+            )
+        else:
+            newcomers = roster_frame.join(
+                usage_frame.select("player_id"), on="player_id", how="anti"
+            ).with_columns(pl.lit(0, dtype=pl.Int64).alias("games_played"))
+            frame = pl.concat([usage_frame, newcomers], how="diagonal")
+    elif usage_frame.is_empty():
+        log.warning("No current-season usage and no roster for %s.", as_of)
+        return pl.DataFrame()
+    else:
+        frame = usage_frame
+
+    frame = frame.join(matchup_frame, on="team_id", how="inner")
 
     prior_frame = _frame(prior)
     if not prior_frame.is_empty():

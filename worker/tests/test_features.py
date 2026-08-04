@@ -31,7 +31,9 @@ from worker.core.features import (
     LookaheadError,
     _assert_no_lookahead,
     _assert_snapshot_cutoff,
+    build_feature_frame,
     prior_weight,
+    roster_universe,
 )
 
 psycopg = pytest.importorskip("psycopg")
@@ -468,3 +470,58 @@ class TestFeatureFrame:
             pytest.skip("no feature rows at this cutoff")
         assert with_weather.height == without.height
         assert "temperature_f" not in without.columns
+
+
+class TestOpeningWeekFrame:
+    """Week 1 must produce a frame. Before Phase 6b.2 it produced nothing.
+
+    `player_usage` can only see players who have already appeared, so entering
+    week 1 it returns an empty list, and `build_feature_frame` used to take that
+    as "nothing to do" and return an empty frame. `run_projections` then exited
+    0 with an empty board — the defect this whole phase exists to close, and one
+    that no alert fired on because the pipeline genuinely succeeded.
+    """
+
+    @pytest.fixture
+    def opening_week(self, conn):
+        row = conn.execute(
+            """
+            select g.season
+              from games g
+             where g.week = 1
+               and exists (
+                     select 1 from player_game_stats s
+                      where s.season = g.season - 1
+                   )
+               and exists (
+                     select 1 from player_team_seasons r where r.season = g.season
+                   )
+             group by g.season
+             order by g.season desc
+             limit 1
+            """
+        ).fetchone()
+        if not row:
+            pytest.skip("no season with a week 1, a prior season and a roster")
+        return AsOf(season=int(row["season"]), week=1)
+
+    def test_a_week_one_frame_is_not_empty(self, opening_week):
+        frame = build_feature_frame(opening_week)
+        assert not frame.is_empty()
+        assert frame.height > 100
+
+    def test_every_week_one_row_has_no_current_season_games(self, opening_week):
+        """There is no week before week 1, so nothing may claim otherwise."""
+        frame = build_feature_frame(opening_week)
+        assert frame["games_played"].max() == 0
+
+    def test_every_week_one_row_carries_prior_season_evidence(self, opening_week):
+        """A roster place alone is not a reason to appear on a board."""
+        frame = build_feature_frame(opening_week)
+        assert frame["prior_games_played"].min() > 0
+
+    def test_the_universe_is_far_narrower_than_the_roster(self, opening_week):
+        """2025 has 15,601 roster rows against 2,963 players who ever played."""
+        frame = build_feature_frame(opening_week)
+        roster = len(roster_universe(opening_week))
+        assert frame["player_id"].n_unique() < roster * 0.75

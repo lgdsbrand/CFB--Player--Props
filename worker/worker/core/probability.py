@@ -407,38 +407,84 @@ def distribution_sd(distribution: str, params: dict[str, Any]) -> float:
     raise ValueError(f"Unknown distribution family: {distribution!r}")
 
 
-def distribution_median(distribution: str, params: dict[str, Any]) -> float:
-    """Median of a fitted continuous distribution.
+def distribution_quantile(
+    distribution: str, params: dict[str, Any], q: float
+) -> float:
+    """The q-th quantile, exactly.
 
-    Exact, and deliberately not a bisection on `prob_over`. `rescale` consults
-    this on every gamma and lognormal row it widens, and inverting the survival
-    function numerically there cost about sixty scipy calls per projection —
-    enough to take a single week of `run_projections` from seconds to minutes.
+    WHY THIS EXISTS RATHER THAN A BISECTION ON `prob_over`. The displayed
+    quantiles used to be found by inverting the survival function numerically,
+    80 iterations per quantile. Profiled on a real week that was 2.5 million
+    `prob_over` calls and 152 seconds of a 171-second projection run — 88% of
+    the job, and the same cost again on every week of the walk-forward.
 
-    Only the continuous yardage families are supported, because they are the
-    only ones whose location can be shifted below zero. A caller asking for the
-    median of a count family wants a quantile, not this.
+    EQUIVALENT, NOT MERELY SIMILAR, and that holds for the discrete families
+    too. The bisection converged on `inf{v : P(X > v) <= 1 - q}`. For a count
+    family P(X > v) is a step function falling at each integer, so that infimum
+    is the smallest integer k with `cdf(k) >= q` — which is the definition of
+    `ppf(q)`. The two agree to bisection tolerance; `tests/test_probability.py`
+    pins that across every family.
+
+    One deliberate difference: the bisection bracketed its search at twelve
+    spreads either side of the mean and silently returned the bracket edge when
+    the true quantile lay outside. This does not, so an extreme tail is now
+    reported rather than clipped.
     """
     validate_params(distribution, params)
+    if not 0.0 < q < 1.0:
+        raise ValueError(f"quantile must be in (0, 1), got {q}")
 
     if distribution == "normal":
-        return float(params["mu"])
+        return float(
+            _stats.norm.ppf(q, loc=float(params["mu"]), scale=float(params["sigma"]))
+        )
 
     if distribution == "lognormal":
-        # median of a lognormal is exp(mu), shifted by the location.
-        return float(params.get("loc", 0.0)) + math.exp(float(params["mu"]))
+        return float(
+            _stats.lognorm.ppf(
+                q,
+                s=float(params["sigma"]),
+                loc=float(params.get("loc", 0.0)),
+                scale=math.exp(float(params["mu"])),
+            )
+        )
 
     if distribution == "gamma":
         return float(
             _stats.gamma.ppf(
-                0.5,
+                q,
                 a=float(params["shape"]),
                 loc=float(params.get("loc", 0.0)),
                 scale=float(params["scale"]),
             )
         )
 
-    raise ValueError(f"No closed-form median for family: {distribution!r}")
+    if distribution == "poisson":
+        return float(_stats.poisson.ppf(q, mu=float(params["lam"])))
+
+    if distribution == "bernoulli":
+        # P(X > v) is p across [0, 1), so the infimum lands at 0 unless the
+        # scoring probability itself exceeds 1 - q.
+        return 0.0 if q <= 1.0 - float(params["p"]) else 1.0
+
+    if distribution == "negative_binomial":
+        return float(
+            _stats.nbinom.ppf(q, n=float(params["r"]), p=float(params["p"]))
+        )
+
+    if distribution == "beta_binomial":
+        return float(
+            _stats.betabinom.ppf(
+                q, n=float(params["n"]), a=float(params["a"]), b=float(params["b"])
+            )
+        )
+
+    raise ValueError(f"Unknown distribution family: {distribution!r}")
+
+
+def distribution_median(distribution: str, params: dict[str, Any]) -> float:
+    """Median. `rescale` consults this on every row it widens, so it is exact."""
+    return distribution_quantile(distribution, params, 0.5)
 
 
 def prob_over(distribution: str, params: dict[str, Any], line: float) -> float:

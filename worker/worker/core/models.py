@@ -85,6 +85,7 @@ from typing import Any
 
 from worker.core.probability import (
     distribution_median,
+    distribution_quantile,
     distribution_sd,
     prob_over,
     validate_params,
@@ -290,28 +291,18 @@ def beta_binomial_params(
 # -----------------------------------------------------------------------------
 # Quantiles
 # -----------------------------------------------------------------------------
-def _quantiles(distribution: str, params: dict[str, float], mean: float) -> dict[str, float]:
-    """Cached display quantiles, found by inverting prob_over numerically.
+def _quantiles(distribution: str, params: dict[str, float]) -> dict[str, float]:
+    """Cached display quantiles, from each family's exact inverse CDF.
 
-    Bisection rather than a per-family ppf: it works for every family including
-    the discrete ones without special-casing, and it runs once per projection.
     These back only the SECONDARY projected range on the player page — never the
-    headline claim (CLAUDE.md §1) — so robustness beats precision.
+    headline claim (CLAUDE.md §1). They were previously found by bisecting
+    `prob_over` 80 times per quantile, which was the single most expensive thing
+    the projection run did: 2.5 million survival-function calls per week, 88% of
+    the job. `distribution_quantile` returns the same values from `ppf`.
     """
-    spread = max(abs(mean), 1.0)
-    low, high = mean - 12 * spread, mean + 12 * spread
-
     result: dict[str, float] = {}
     for q in QUANTILES:
-        target = 1.0 - q  # prob_over is a survival function
-        lo, hi = low, high
-        for _ in range(80):
-            mid = 0.5 * (lo + hi)
-            if prob_over(distribution, params, mid) > target:
-                lo = mid
-            else:
-                hi = mid
-        result[f"p{int(q * 100)}"] = 0.5 * (lo + hi)
+        result[f"p{int(q * 100)}"] = distribution_quantile(distribution, params, q)
     return result
 
 
@@ -328,7 +319,7 @@ def finalize(
         distribution=distribution,
         params=params,
         mean=mean,
-        quantiles=_quantiles(distribution, params, mean),
+        quantiles=_quantiles(distribution, params),
         **extra,
     )
 
@@ -455,7 +446,7 @@ def rescale(projection: Projection, scale: float) -> Projection:
         distribution=distribution,
         params=params,
         mean=mean,
-        quantiles=_quantiles(distribution, params, mean),
+        quantiles=_quantiles(distribution, params),
         volume=projection.volume,
         efficiency=projection.efficiency,
         matchup_multiplier=projection.matchup_multiplier,
@@ -581,7 +572,7 @@ def shift_mean(projection: Projection, multiplier: float) -> Projection:
         distribution=distribution,
         params=params,
         mean=mean,
-        quantiles=_quantiles(distribution, params, mean),
+        quantiles=_quantiles(distribution, params),
         volume=projection.volume,
         efficiency=projection.efficiency,
         matchup_multiplier=projection.matchup_multiplier,

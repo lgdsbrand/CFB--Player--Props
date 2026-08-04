@@ -18,6 +18,8 @@ from worker.core.probability import (
     american_to_implied_probability,
     consensus_book_probability,
     devig_two_way,
+    distribution_median,
+    distribution_quantile,
     edge_on_side,
     prob_over,
     side_and_confidence,
@@ -461,3 +463,93 @@ class TestEndToEnd:
         assert 0.5 < confidence < 1.0
         assert book_prob_over == pytest.approx(0.5)
         assert edge == pytest.approx(model_prob_over - 0.5)
+
+
+class TestDistributionQuantile:
+    """The exact inverse CDF must reproduce the bisection it replaced.
+
+    `_quantiles` used to invert `prob_over` by bisection, 80 iterations per
+    quantile — profiled at 88% of a projection run. Swapping to each family's
+    `ppf` is only legitimate if it returns the SAME numbers, and for the discrete
+    families that is a claim about step functions rather than an obvious
+    identity: the bisection converged on `inf{v : P(X > v) <= 1 - q}`, which for
+    a count family is the smallest integer k with `cdf(k) >= q`, i.e. `ppf(q)`.
+    """
+
+    @staticmethod
+    def _bisect(distribution, params, q, mean):
+        """The replaced implementation, verbatim, as the reference."""
+        spread = max(abs(mean), 1.0)
+        lo, hi = mean - 12 * spread, mean + 12 * spread
+        target = 1.0 - q
+        for _ in range(80):
+            mid = 0.5 * (lo + hi)
+            if prob_over(distribution, params, mid) > target:
+                lo = mid
+            else:
+                hi = mid
+        return 0.5 * (lo + hi)
+
+    CASES = [
+        ("normal", {"mu": 240.0, "sigma": 70.0}, 240.0),
+        ("normal", {"mu": 12.0, "sigma": 9.0}, 12.0),
+        ("gamma", {"shape": 4.2, "scale": 14.0, "loc": 0.0}, 58.8),
+        ("gamma", {"shape": 0.5, "scale": 90.0, "loc": -20.0}, 25.0),
+        ("gamma", {"shape": 9.0, "scale": 3.0, "loc": -40.0}, -13.0),
+        ("lognormal", {"mu": 3.6, "sigma": 0.8, "loc": 0.0}, 50.0),
+        ("lognormal", {"mu": 2.2, "sigma": 1.3, "loc": -5.0}, 16.0),
+        ("poisson", {"lam": 1.7}, 1.7),
+        ("poisson", {"lam": 0.3}, 0.3),
+        ("bernoulli", {"p": 0.28}, 0.28),
+        ("bernoulli", {"p": 0.75}, 0.75),
+        ("negative_binomial", {"r": 6.0, "p": 0.3}, 14.0),
+        ("negative_binomial", {"r": 1.5, "p": 0.6}, 1.0),
+        ("beta_binomial", {"n": 9.0, "a": 3.0, "b": 2.0}, 5.4),
+        ("beta_binomial", {"n": 3.0, "a": 0.8, "b": 4.0}, 0.5),
+    ]
+
+    @pytest.mark.parametrize("distribution,params,mean", CASES)
+    def test_matches_the_bisection_it_replaced(self, distribution, params, mean):
+        for q in (0.10, 0.25, 0.50, 0.75, 0.90):
+            exact = distribution_quantile(distribution, params, q)
+            reference = self._bisect(distribution, params, q, mean)
+            assert exact == pytest.approx(reference, abs=1e-6), (
+                f"{distribution} q={q}: ppf {exact} vs bisection {reference}"
+            )
+
+    @pytest.mark.parametrize("distribution,params,mean", CASES)
+    def test_quantiles_are_ordered(self, distribution, params, mean):
+        values = [
+            distribution_quantile(distribution, params, q)
+            for q in (0.10, 0.25, 0.50, 0.75, 0.90)
+        ]
+        assert values == sorted(values)
+
+    @pytest.mark.parametrize("distribution,params,mean", CASES)
+    def test_the_quantile_inverts_prob_over(self, distribution, params, mean):
+        """P(X > the q-th quantile) must be at most 1 - q, for every family."""
+        for q in (0.10, 0.50, 0.90):
+            value = distribution_quantile(distribution, params, q)
+            assert prob_over(distribution, params, value) <= 1.0 - q + 1e-9
+
+    def test_median_is_the_half_quantile(self):
+        params = {"shape": 2.0, "scale": 11.0, "loc": -3.0}
+        assert distribution_median("gamma", params) == pytest.approx(
+            distribution_quantile("gamma", params, 0.5)
+        )
+
+    def test_a_far_tail_is_no_longer_clipped_to_the_bracket(self):
+        """The one intended difference from the bisection.
+
+        The old search bracketed at twelve spreads either side of the mean and
+        returned the edge when the true quantile lay outside it.
+        """
+        params = {"mu": 1.0, "sigma": 3.0, "loc": 0.0}
+        exact = distribution_quantile("lognormal", params, 0.9)
+        clipped = self._bisect("lognormal", params, 0.9, 1.0)
+        assert exact > clipped
+
+    @pytest.mark.parametrize("q", [0.0, 1.0, -0.1, 1.5])
+    def test_a_quantile_outside_the_open_unit_interval_is_rejected(self, q):
+        with pytest.raises(ValueError):
+            distribution_quantile("normal", {"mu": 0.0, "sigma": 1.0}, q)

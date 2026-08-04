@@ -110,6 +110,7 @@ class TestRender:
             by_market={"receptions": _metrics(REAL_SHAPE)},
             by_position={"WR": _metrics(REAL_SHAPE)},
             by_phase={"wk1-2 opening": _metrics(REAL_SHAPE)},
+            by_transfer={"wk1-2 changed team": _metrics(REAL_SHAPE)},
             by_season={"2024": _metrics(REAL_SHAPE)},
             seasons=[2024, 2025],
             config={"devig_method": "shin"},
@@ -125,7 +126,8 @@ class TestRender:
         assume. Calibration and profitability are separate claims."""
         html = render(
             overall=_metrics(REAL_SHAPE),
-            by_market={}, by_position={}, by_phase={}, by_season={},
+            by_market={}, by_position={}, by_phase={}, by_transfer={},
+            by_season={},
             seasons=[2024, 2025], config={}, caveats=[],
         )
         assert "What this does not measure" in html
@@ -135,7 +137,7 @@ class TestRender:
         html = render(
             overall=_metrics(REAL_SHAPE),
             by_market={"<script>x</script>": _metrics(REAL_SHAPE)},
-            by_position={}, by_phase={}, by_season={},
+            by_position={}, by_phase={}, by_transfer={}, by_season={},
             seasons=[2024], config={}, caveats=[],
         )
         assert "<script>x</script>" not in html

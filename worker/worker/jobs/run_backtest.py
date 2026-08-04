@@ -435,6 +435,7 @@ def main(argv: list[str] | None = None) -> int:
                 by_market=stored["groups"].get("market", {}),
                 by_position=stored["groups"].get("position", {}),
                 by_phase=stored["groups"].get("phase", {}),
+                by_transfer=stored["groups"].get("transfer", {}),
                 by_season=stored["groups"].get("season", {}),
                 seasons=stored["seasons"],
                 config=stored["config"],
@@ -544,6 +545,21 @@ def main(argv: list[str] | None = None) -> int:
                 if (m := compute_metrics(v)) is not None
             }
 
+            # Season phase x transfer, because in weeks 1-2 the projection IS
+            # the prior season and Phase 6a found the prior does not travel
+            # evenly. Reported for the later weeks too, as the control: if the
+            # gap is the same there, it is not an opening-weekend problem.
+            by_transfer_groups: dict[str, list[Prediction]] = {}
+            for p in predictions:
+                phase = "wk1-2" if p.week <= LAST_OPENING_WEEK else "wk3+"
+                moved = "changed team" if p.changed_team else "same team"
+                by_transfer_groups.setdefault(f"{phase} {moved}", []).append(p)
+            by_transfer = {
+                k: m
+                for k, v in sorted(by_transfer_groups.items())
+                if (m := compute_metrics(v)) is not None
+            }
+
             for name, metrics in by_market.items():
                 log.info("  %-18s %s", name, metrics.summary())
 
@@ -580,6 +596,7 @@ def main(argv: list[str] | None = None) -> int:
                     "market": by_market,
                     "position": by_position,
                     "phase": by_phase,
+                    "transfer": by_transfer,
                     "season": {str(k): v for k, v in by_season.items()},
                 },
             )
@@ -604,6 +621,7 @@ def main(argv: list[str] | None = None) -> int:
                         by_market=by_market,
                         by_position=by_position,
                         by_phase=by_phase,
+                        by_transfer=by_transfer,
                         by_season=by_season,
                         seasons=seasons,
                         config=config,

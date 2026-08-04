@@ -364,6 +364,15 @@ deliverable itself.
 watcher polling for that row fires roughly three minutes early. Poll
 `backtest_metrics` instead.
 
+**Since Phase 6b.3 the walk starts at week 1, not week 3.** Weeks 1-2 are graded
+under their own universe rule — a prior season of at least four games in place of
+two current-season ones — and reported as their own phase stratum rather than
+folded into "early". Two consequences when comparing runs: the overall figures
+now average in two weeks that no earlier run contained, and the `phase` group
+keys changed (`wk1-2 opening`, `wk3-6 early`, `wk7+ late`). A `transfer` grouping
+was added alongside, because a weeks 1-2 projection is last season's production
+and last season's production does not travel evenly across a transfer.
+
 ### `probe_odds`
 
 ```bash

@@ -138,6 +138,12 @@ class Prediction:
     actual_value: float
     outcome_over: bool
     hit: bool
+    # Carried so the report can split the opening weeks by it. In weeks 1-2 the
+    # projection is a prior season and nothing else, and Phase 6a found the
+    # prior does not travel evenly: WR receptions correlate 0.402 year over year
+    # for players who stayed and 0.112 for those who moved. Whether the opening
+    # board is a full one or only returning starters turns on this cut.
+    changed_team: bool = False
 
 
 @dataclass
@@ -357,6 +363,7 @@ def backtest_week(
                         actual_value=float(actual),
                         outcome_over=outcome_over,
                         hit=(outcome_over if side == "over" else not outcome_over),
+                        changed_team=bool(row.get("changed_team")),
                     )
                 )
     return predictions, observations

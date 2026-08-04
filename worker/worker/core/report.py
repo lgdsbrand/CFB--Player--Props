@@ -217,6 +217,7 @@ def render(
     by_market: dict[str, Metrics],
     by_position: dict[str, Metrics],
     by_phase: dict[str, Metrics],
+    by_transfer: dict[str, Metrics],
     by_season: dict[str, Metrics],
     seasons: Sequence[int],
     config: dict[str, object],
@@ -334,6 +335,20 @@ and position baseline throughout; the players are admitted by a different rule
 is neutral, there being no defensive ratings to adjust with until week 2. Read
 this row on its own when deciding whether the board opens with the season.</p>
 {_table("Phase", by_phase)}
+
+<h2>Transfers, in the opening weeks and after</h2>
+<p>A weeks 1-2 projection <em>is</em> last season's production, and last season's
+production does not travel evenly. Measured year over year, a wide receiver who
+stayed carries a receptions correlation of 0.402 and one who moved 0.112; running
+back rush attempts, 0.481 against 0.208. Anytime touchdown is the exception — it
+holds up for both, because scoring propensity belongs to the player while target
+share belongs to the offense around him. Roughly a quarter to a third of the
+opening-weekend pool changed school.</p>
+<p>The later weeks are here as the control. If the same gap appears there, it is
+not an opening-weekend problem; if it appears only at the top, the honest
+opening board is a narrower one — returning starters on the same team — rather
+than no board at all.</p>
+{_table("Phase and transfer", by_transfer)}
 
 <h2>By season</h2>
 {_table("Season", by_season)}

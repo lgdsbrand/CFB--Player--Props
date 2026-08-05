@@ -423,10 +423,28 @@ the one question the probe has not been able to answer yet.
 ### `backfill_odds`
 
 ```bash
-python -m worker.jobs.backfill_odds --season 2025 --weeks 8 --dry-run
-python -m worker.jobs.backfill_odds --season 2025 --weeks 8 --max-credits 1200
-python -m worker.jobs.backfill_odds --season 2025 --weeks 6-8 --max-credits 4000
+python -m worker.jobs.backfill_odds --season 2025 --weeks 8 --dry-run --adapter theoddsapi
+python -m worker.jobs.backfill_odds --season 2025 --weeks 8 --adapter theoddsapi \
+    --max-credits 2000 --exclude-markets anytime_td
 ```
+
+`--adapter theoddsapi` is currently required: `app_config.odds_adapter` is
+`none`, and unlike `ingest_odds` this job **refuses** rather than exiting 0.
+Nobody schedules a backfill by accident, and a silent no-op would read as
+"there were no lines to find".
+
+**Always pass `--exclude-markets anytime_td`.** Measured over 20 games of 2025
+week 8: anytime TD was **1,802 of 2,709 prices bought and 0 of them two-way**.
+Two thirds of the spend, none of it gradeable. Excluding it takes a priced game
+from ~57 credits to ~50.
+
+**Re-running is free for what it already has.** Games with stored closing lines
+from this adapter are skipped. This matters because runs routinely stop at a
+ceiling or on a network blip, so finishing a week means running again — and the
+second week-8 run paid for 20 games it already had before this existed. Nothing
+looked wrong afterwards: `captured_at` is part of the unique key, so the
+duplicate rows were discarded and only the credits were gone. `--refresh` buys
+a second snapshot deliberately.
 
 Buys historical **closing** lines for past weeks and writes them to
 `player_prop_lines` with `is_closing = true`. This is what makes edge gradeable:

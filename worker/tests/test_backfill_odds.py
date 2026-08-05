@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 
 from worker.adapters.odds import NullOddsAdapter, SupportsHistorical
 from worker.adapters.odds.base import QuotaSnapshot
+from worker.adapters.odds.markets import OUR_KEY_TO_PROVIDER
 from worker.adapters.odds.theoddsapi import TheOddsApiAdapter
 from worker.jobs.backfill_odds import (
     BackfillReport,
@@ -356,6 +357,9 @@ class TestDryRun:
         monkeypatch.setattr(
             job, "load_games", lambda conn, season, week: [game(1, kickoff)]
         )
+        monkeypatch.setattr(
+            job, "already_bought", lambda conn, season, week, adapter: set()
+        )
         # Matching is exercised by TestSnapshotTiming and the live job's own
         # tests; here it only needs to succeed so the code reaches the branch
         # under test.
@@ -402,6 +406,151 @@ class TestDryRun:
         adapter = self._run(monkeypatch, dry_run=False)
 
         assert adapter.props_calls == ["evt-1"]
+
+
+class TestExcludedMarkets:
+    """Excluding a market is a straight saving — billing is per market returned.
+
+    MEASURED over 20 games of 2025 week 8: `anytime_td` was 1,802 of 2,709
+    prices bought and **0** of them two-way. A one-sided price cannot be
+    de-vigged, so that two thirds of the spend produced no gradeable edge at
+    all. Excluding it is what brings three weeks inside the remaining pool.
+    """
+
+    def test_an_excluded_market_is_not_requested(self, monkeypatch):
+        from worker.jobs import backfill_odds as job
+
+        kickoff = datetime(2025, 10, 18, 19, 0, tzinfo=UTC)
+        asked: list[list[str]] = []
+
+        class Adapter:
+            name = "recording"
+            quota = QuotaSnapshot(remaining=20_000, used=0, last_cost=1)
+
+            def historical_events(self, iso_timestamp):
+                return {"data": []}
+
+            def historical_props_raw(self, event_id, iso_timestamp, market_keys=None):
+                asked.append(list(market_keys or []))
+                return {"data": {"id": event_id, "bookmakers": []}}
+
+        monkeypatch.setattr(job, "load_teams", lambda conn: object())
+        monkeypatch.setattr(
+            job, "load_games", lambda conn, season, week: [game(1, kickoff)]
+        )
+        monkeypatch.setattr(
+            job, "already_bought", lambda conn, season, week, adapter: set()
+        )
+        monkeypatch.setattr(
+            job,
+            "match_event_to_game_for",
+            lambda g, events, teams: job.OddsEvent(
+                event_id="evt-1",
+                sport_key="ncaaf",
+                commence_time=kickoff,
+                home_team="H",
+                away_team="A",
+            ),
+        )
+
+        job.backfill_week(
+            conn=None,
+            adapter=Adapter(),
+            season=2025,
+            week=8,
+            lead_minutes=60,
+            budget=job.CreditBudget(max_credits=10_000, min_remaining=0),
+            report=job.BackfillReport(),
+            dry_run=False,
+            exclude_markets=("anytime_td",),
+        )
+
+        assert asked, "props should still have been requested"
+        assert "anytime_td" not in asked[0]
+        # Everything else still bought — this is a scalpel, not a switch-off.
+        assert "pass_yards" in asked[0]
+        assert len(asked[0]) == len(OUR_KEY_TO_PROVIDER) - 1
+
+    def test_excluding_nothing_asks_for_every_market(self, monkeypatch):
+        from worker.jobs import backfill_odds as job
+
+        assert sorted(set(OUR_KEY_TO_PROVIDER) - set(())) == sorted(
+            OUR_KEY_TO_PROVIDER
+        )
+        assert job.CREDITS_PER_MARKET * len(OUR_KEY_TO_PROVIDER) == 90
+
+
+class TestResume:
+    """Finishing a week means running again, so re-buying must be free.
+
+    MEASURED: the second week-8 run paid for 20 games the first had already
+    bought. Nothing looked wrong afterwards — `captured_at` is part of the
+    unique key, so the duplicate rows were silently discarded and the database
+    was identical. Only the credits were gone. A no-op that costs money is
+    exactly the kind of waste that leaves no trace to notice.
+    """
+
+    @staticmethod
+    def _run(monkeypatch, *, bought: set[int], refresh: bool) -> list[str]:
+        from worker.jobs import backfill_odds as job
+
+        kickoff = datetime(2025, 10, 18, 19, 0, tzinfo=UTC)
+        asked: list[str] = []
+
+        class Adapter:
+            name = "recording"
+            quota = QuotaSnapshot(remaining=20_000, used=0, last_cost=1)
+
+            def historical_events(self, iso_timestamp):
+                return {"data": []}
+
+            def historical_props_raw(self, event_id, iso_timestamp, market_keys=None):
+                asked.append(event_id)
+                return {"data": {"id": event_id, "bookmakers": []}}
+
+        monkeypatch.setattr(job, "load_teams", lambda conn: object())
+        monkeypatch.setattr(
+            job, "load_games", lambda conn, season, week: [game(1, kickoff)]
+        )
+        monkeypatch.setattr(
+            job, "already_bought", lambda conn, season, week, adapter: set()
+        )
+        monkeypatch.setattr(
+            job, "already_bought", lambda conn, season, week, adapter: bought
+        )
+        monkeypatch.setattr(
+            job,
+            "match_event_to_game_for",
+            lambda g, events, teams: job.OddsEvent(
+                event_id="evt-1",
+                sport_key="ncaaf",
+                commence_time=kickoff,
+                home_team="H",
+                away_team="A",
+            ),
+        )
+
+        job.backfill_week(
+            conn=None,
+            adapter=Adapter(),
+            season=2025,
+            week=8,
+            lead_minutes=60,
+            budget=job.CreditBudget(max_credits=10_000, min_remaining=0),
+            report=job.BackfillReport(),
+            dry_run=False,
+            refresh=refresh,
+        )
+        return asked
+
+    def test_a_game_already_bought_is_not_bought_again(self, monkeypatch):
+        assert self._run(monkeypatch, bought={1}, refresh=False) == []
+
+    def test_a_game_not_yet_bought_is_still_bought(self, monkeypatch):
+        assert self._run(monkeypatch, bought={999}, refresh=False) == ["evt-1"]
+
+    def test_refresh_buys_a_second_snapshot_deliberately(self, monkeypatch):
+        assert self._run(monkeypatch, bought={1}, refresh=True) == ["evt-1"]
 
 
 class TestAdapterCapability:

@@ -15,6 +15,7 @@ rule, not a nicety (CLAUDE.md §0).
 
 from __future__ import annotations
 
+import http.client
 import json
 import random
 import re
@@ -202,13 +203,23 @@ class OddsHttpClient:
                 )
                 time.sleep(delay)
 
-            # TimeoutError IS listed alongside URLError deliberately. A read
-            # timeout from `urlopen(timeout=...)` is raised bare — it is not
-            # wrapped in URLError — so it used to escape this handler entirely
-            # and kill the caller on the first slow response. That is merely
-            # annoying for a probe and expensive for `backfill_odds`, which can
-            # be dozens of paid calls into a run when it happens.
-            except (urllib.error.URLError, TimeoutError) as exc:
+            # CATCH THE TRANSPORT LAYER, DO NOT ENUMERATE IT. This started as
+            # `URLError` alone, which let a read timeout through and killed a
+            # backfill seven paid calls in. Adding `TimeoutError` fixed that one
+            # case and the very next run died on `RemoteDisconnected` — a third
+            # type, from a third module, meaning the same thing: the network
+            # failed and retrying is the answer.
+            #
+            # `OSError` covers all of them, URLError included (it subclasses
+            # OSError), plus connection resets and DNS failures. `HTTPException`
+            # covers http.client's own protocol errors, which are not OSErrors.
+            # HTTPError is handled above and re-raised there, so it never
+            # reaches here despite being a URLError.
+            #
+            # The lesson is the pattern, not the two bugs: a retry loop that
+            # names its exceptions will keep meeting new ones in production,
+            # and every discovery costs a run that has already spent money.
+            except (OSError, http.client.HTTPException) as exc:
                 self.call_count += 1
                 reason = getattr(exc, "reason", None) or exc
                 if attempt >= self.max_retries:

@@ -139,6 +139,7 @@ class BackfillReport:
     snapshots: int = 0
     games_total: int = 0
     games_matched: int = 0
+    games_skipped: int = 0
     games_priced: int = 0
     games_empty: int = 0
     credits_spent: int = 0
@@ -180,7 +181,12 @@ class BackfillReport:
 
         lines.extend([
             f"  of those: {self.games_priced} carried props, "
-            f"{self.games_empty} carried none",
+            f"{self.games_empty} carried none"
+            + (
+                f", {self.games_skipped} already bought (skipped, free)"
+                if self.games_skipped
+                else ""
+            ),
             f"  carry rate: {self.carry_rate:.0%}"
             + (
                 f"  ->  ~{self.credits_per_priced_game():.0f} credits per priced game"
@@ -219,6 +225,35 @@ class BackfillReport:
         lines.append("  --- resolution ---")
         lines.append(self.ingest.render_resolution())
         return "\n".join(lines)
+
+
+def already_bought(
+    conn: psycopg.Connection, season: int, week: int, adapter_name: str
+) -> set[int]:
+    """Games that already hold closing lines from this adapter.
+
+    RESUMING IS THE NORMAL CASE, not the exception. Runs stop at a credit
+    ceiling or a network failure, so finishing a week means running again — and
+    without this, the second run re-buys everything the first one got. The
+    unique key discards the duplicate ROWS, which is what hid the problem: a
+    re-run looks harmless because nothing changes in the database, while the
+    credits are spent all the same. Measured: the second week-8 run paid for 20
+    games it already had.
+
+    Keyed on the game rather than on individual rows because that is the unit
+    that gets billed — one call per game, priced by markets returned.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select distinct game_id
+              from player_prop_lines
+             where season = %s and week = %s
+               and source_adapter = %s and is_closing
+            """,
+            (season, week, adapter_name),
+        )
+        return {int(row["game_id"]) for row in cur.fetchall()}
 
 
 def snapshot_for(game: dict, lead_minutes: int) -> datetime | None:
@@ -355,6 +390,8 @@ def backfill_week(
     budget: CreditBudget,
     report: BackfillReport,
     dry_run: bool,
+    exclude_markets: tuple[str, ...] = (),
+    refresh: bool = False,
 ) -> None:
     """Walk one week's kickoff clusters, buying what the books had posted."""
     teams = load_teams(conn)
@@ -367,7 +404,18 @@ def backfill_week(
         return
 
     report.games_total += len(games)
-    market_keys = sorted(OUR_KEY_TO_PROVIDER)
+    market_keys = sorted(set(OUR_KEY_TO_PROVIDER) - set(exclude_markets or ()))
+
+    bought = set() if refresh else already_bought(
+        conn, season, week, THEODDSAPI_ADAPTER_NAME
+    )
+    if bought:
+        report.games_skipped += len(bought)
+        log.info(
+            "%s week %s: skipping %d game(s) already bought — pass --refresh "
+            "to buy a second snapshot of them.",
+            season, week, len(bought),
+        )
     # Worst case for one props call: every market we ask for comes back, at the
     # measured 10 credits each. The budget reserves this before every call so a
     # single event cannot overshoot the ceiling.
@@ -389,6 +437,8 @@ def backfill_week(
         )
 
         for game in cluster:
+            if game["id"] in bought:
+                continue
             matched = match_event_to_game_for(game, events, teams)
             if matched is None:
                 continue
@@ -495,6 +545,8 @@ def run(
     max_credits: int,
     min_remaining: int,
     dry_run: bool,
+    exclude_markets: tuple[str, ...] = (),
+    refresh: bool = False,
 ) -> BackfillReport:
     report = BackfillReport(weeks=list(weeks), dry_run=dry_run)
     settings = get_settings()
@@ -532,6 +584,8 @@ def run(
                 budget=budget,
                 report=report,
                 dry_run=dry_run,
+                exclude_markets=exclude_markets,
+                refresh=refresh,
             )
         # `backfill_week` commits per game. This catches nothing but a trailing
         # no-op, and is kept so the transaction is definitely closed.
@@ -587,7 +641,33 @@ def main(argv: list[str] | None = None) -> int:
         help="How long before kickoff to snapshot. Default "
              f"{DEFAULT_LEAD_MINUTES}.",
     )
+    parser.add_argument(
+        "--refresh", action="store_true",
+        help="Buy games that already have closing lines stored. Off by "
+             "default: re-buying identical data costs credits and, because "
+             "captured_at is part of the unique key, writes no rows.",
+    )
+    parser.add_argument(
+        "--exclude-markets", default="",
+        help="Comma list of our market keys NOT to buy. Billing is per market "
+             "returned, so excluding one is a straight saving. 'anytime_td' is "
+             "the one worth excluding: measured 0 of 1,802 prices two-way over "
+             "20 games, and a one-sided price yields no edge at all.",
+    )
     args = parser.parse_args(argv)
+
+    exclude = tuple(
+        part.strip() for part in args.exclude_markets.split(",") if part.strip()
+    )
+    unknown = sorted(set(exclude) - set(OUR_KEY_TO_PROVIDER))
+    if unknown:
+        # A typo here silently buys a market you meant to skip, and the bill is
+        # the first place you would notice.
+        log.error(
+            "--exclude-markets has unknown key(s): %s. Known: %s",
+            unknown, sorted(OUR_KEY_TO_PROVIDER),
+        )
+        return 2
 
     try:
         settings = get_settings()
@@ -627,6 +707,7 @@ def main(argv: list[str] | None = None) -> int:
                 "weeks": weeks,
                 "max_credits": args.max_credits,
                 "dry_run": args.dry_run,
+                "excluded_markets": list(exclude),
             },
         ) as run_id:
             report = run(
@@ -637,6 +718,8 @@ def main(argv: list[str] | None = None) -> int:
                 max_credits=args.max_credits,
                 min_remaining=args.min_remaining,
                 dry_run=args.dry_run,
+                exclude_markets=exclude,
+                refresh=args.refresh,
             )
             log.info(
                 "Odds backfill (%s%s):\n%s",

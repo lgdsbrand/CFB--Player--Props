@@ -8,8 +8,11 @@ than as a quietly under-counted coverage report.
 
 from __future__ import annotations
 
+import http.client
+import io
 import json
 import time
+import urllib.error
 import urllib.request
 
 import pytest
@@ -321,9 +324,37 @@ class TestTransientFailures:
     credits do not come back.
     """
 
-    def test_a_read_timeout_is_retried_not_raised(self, monkeypatch):
+    # Every one of these means "the network failed, retry". They come from
+    # three different modules and only one is a URLError, which is why the
+    # handler catches the transport layer rather than naming its members.
+    TRANSIENT = [
+        pytest.param(
+            TimeoutError("The read operation timed out"), id="read-timeout"
+        ),
+        pytest.param(
+            http.client.RemoteDisconnected(
+                "Remote end closed connection without response"
+            ),
+            id="remote-disconnected",
+        ),
+        pytest.param(
+            ConnectionResetError("Connection reset by peer"), id="conn-reset"
+        ),
+        pytest.param(
+            urllib.error.URLError("temporary failure in name resolution"),
+            id="url-error",
+        ),
+        pytest.param(
+            http.client.BadStatusLine("''"), id="bad-status-line"
+        ),
+    ]
+
+    @pytest.mark.parametrize("error", TRANSIENT)
+    def test_a_transient_network_failure_is_retried_not_raised(
+        self, monkeypatch, error
+    ):
         client = OddsHttpClient("test-key", min_interval=0.0)
-        pending = [TimeoutError("The read operation timed out")]
+        pending = [error]
         calls: list[int] = []
 
         def urlopen(request, timeout=None):
@@ -336,7 +367,28 @@ class TestTransientFailures:
         monkeypatch.setattr(time, "sleep", lambda _s: None)
 
         assert client.get("/sports") == {"ok": True}
-        assert len(calls) == 2  # timed out once, then succeeded
+        assert len(calls) == 2  # failed once, then succeeded
+
+    def test_an_entitlement_failure_is_still_not_retried(self, monkeypatch):
+        # The widened handler must not swallow HTTPError, which subclasses
+        # URLError and therefore OSError. A 401 is terminal: retrying it turns
+        # a clear "your plan does not cover this" into a slow timeout.
+        calls: list[int] = []
+
+        def urlopen(request, timeout=None):
+            calls.append(1)
+            raise urllib.error.HTTPError(
+                "https://x", 401, "Unauthorized", {},
+                io.BytesIO(b'{"error_code":"OUT_OF_USAGE_CREDITS"}'),
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+        monkeypatch.setattr(time, "sleep", lambda _s: None)
+
+        client = OddsHttpClient("test-key", min_interval=0.0)
+        with pytest.raises(OddsQuotaError):
+            client.get("/sports")
+        assert len(calls) == 1
 
     def test_a_timeout_that_never_clears_becomes_an_adapter_error(
         self, monkeypatch

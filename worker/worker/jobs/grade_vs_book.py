@@ -38,8 +38,11 @@ from worker.core.book_grading import (
     by_market,
     confidence_bands,
     edge_thresholds,
+    fixed_side,
     grade_bet,
     median_edge,
+    over_base_rate,
+    side_lift,
     summarise,
 )
 from worker.db import fetch_all, pipeline_run
@@ -173,6 +176,56 @@ def render(bets: list[BookBet], thresholds: tuple[float, ...]) -> str:
     lines.append(f"  BY MARKET at edge >= {thresholds[0]:.0%}")
     for market, result in sorted(by_market(bets, thresholds[0]).items()):
         lines.append(f"    {market:<15} {result.summary()}")
+
+    lines.append("")
+    lines.append(
+        "  vs THE NULL HYPOTHESIS — does the model beat ignoring the model?"
+    )
+    base = over_base_rate(bets)
+    if base is not None:
+        shade = (
+            "A market shade this size is the thing to beat."
+            if abs(base - 0.5) > 0.03
+            else "Close to centred."
+        )
+        lines.append(
+            f"    base rate: OVER landed {base:.1%} of decided lines. {shade}"
+        )
+    for threshold in (thresholds[0], 0.05):
+        model = summarise(bets, threshold)
+        if not model.decided or model.roi_median is None:
+            continue
+        lines.append(f"    at edge >= {threshold:.0%}:")
+        lines.append(f"      MODEL        ROI {model.roi_median:>+7.1%}")
+        for side in ("over", "under"):
+            mark = fixed_side(bets, side, threshold)  # type: ignore[arg-type]
+            if mark.roi_median is None:
+                continue
+            gap = model.roi_median - mark.roi_median
+            lines.append(
+                f"      {mark.label:<12} ROI {mark.roi_median:>+7.1%}"
+                f"   (model {gap:+.1%} vs this)"
+            )
+    lines.append(
+        "    If a blind side beats the model, the model's return is that "
+        "market shade, not its player selection."
+    )
+
+    lines.append("")
+    lines.append(
+        "  PLAYER-LEVEL SKILL — hit rate above the base rate for the same side"
+    )
+    for lift in side_lift(bets, thresholds[0]):
+        lines.append(
+            f"    called {lift.side:<6} n={lift.n:>5}  win {lift.win_rate:.1%} "
+            f"vs base {lift.base_rate:.1%}  lift {lift.lift:+.1%}  "
+            f"breakeven {lift.breakeven:.1%}  "
+            f"{'CLEARS THE VIG' if lift.clears_vig else 'does not clear the vig'}"
+        )
+    lines.append(
+        "    Positive lift is real discrimination between players; it only "
+        "becomes money once it clears the vig."
+    )
 
     lines.append("")
     lines.append(

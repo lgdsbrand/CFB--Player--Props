@@ -21,11 +21,15 @@ import pytest
 
 from worker.core.book_grading import (
     BookPriceRow,
+    SideLift,
     american_to_decimal,
     breakeven_rate,
     by_market,
     confidence_bands,
+    fixed_side,
     grade_bet,
+    over_base_rate,
+    side_lift,
     summarise,
 )
 
@@ -342,3 +346,78 @@ class TestByMarket:
         split = by_market(bets, 0.0)
         assert set(split) == {"rec_yards", "rush_yards"}
         assert split["rec_yards"].n == 1
+
+
+# -----------------------------------------------------------------------------
+# The null hypothesis
+# -----------------------------------------------------------------------------
+class TestBenchmarks:
+    """The check that stops a market shade being reported as model skill.
+
+    Weeks 7 and 8 of 2025 both closed with overs landing ~43% of the time. A
+    model that leans UNDER makes money in that market without knowing anything
+    about any player, so "positive ROI" on its own says nothing. These tests
+    pin the arithmetic that separates the two.
+    """
+
+    @staticmethod
+    def _shaded(n_under_hits: int, n_over_hits: int):
+        """Bets on a line of 100 where the actual is known to fall each way."""
+        bets = []
+        for i in range(n_under_hits):
+            bets.append(bet(player_id=i, actual_value=80.0))
+        for i in range(n_over_hits):
+            bets.append(bet(player_id=100 + i, actual_value=120.0))
+        return [b for b in bets if b is not None]
+
+    def test_blind_side_is_settled_on_the_opposite_side_not_the_models(self):
+        # Every bet here is a model OVER that lost. "always under" must show
+        # those as WINS -- if it reused bet.profit() it would report losses.
+        bets = self._shaded(n_under_hits=10, n_over_hits=0)
+        assert all(b.side == "over" for b in bets)  # mu=100 > line, model says over
+        under = fixed_side(bets, "under")
+        assert under.wins == 10
+        assert under.losses == 0
+        assert under.roi_median > 0
+
+    def test_a_profitable_model_that_loses_to_a_blind_side_is_visible(self):
+        # 7 unders, 3 overs. The model calls over on all of them and goes 3-7;
+        # blind under goes 7-3. Both numbers must be available to compare.
+        bets = self._shaded(n_under_hits=7, n_over_hits=3)
+        model = summarise(bets, 0.0)
+        under = fixed_side(bets, "under")
+        assert model.win_rate == pytest.approx(0.3)
+        assert under.win_rate == pytest.approx(0.7)
+        assert under.roi_median > model.roi_median
+
+    def test_base_rate_reveals_the_shade(self):
+        assert over_base_rate(self._shaded(7, 3)) == pytest.approx(0.3)
+        assert over_base_rate(self._shaded(5, 5)) == pytest.approx(0.5)
+
+    def test_base_rate_ignores_pushes(self):
+        bets = self._shaded(1, 1) + [bet(player_id=999, actual_value=100.0)]
+        assert any(b.is_push for b in bets)
+        assert over_base_rate(bets) == pytest.approx(0.5)
+
+    def test_lift_is_zero_when_the_model_only_rides_the_side(self):
+        # The model calls OVER on all ten; overs land 3 of 10. Its hit rate IS
+        # the base rate, so it discriminated between exactly nothing.
+        bets = self._shaded(n_under_hits=7, n_over_hits=3)
+        over = next(x for x in side_lift(bets) if x.side == "over")
+        assert over.win_rate == pytest.approx(over.base_rate)
+        assert over.lift == pytest.approx(0.0)
+
+    def test_lift_can_be_positive_while_still_losing_money(self):
+        # THE CASE THAT MATTERS. Real signal, too small to pay for the vig --
+        # measured on weeks 7+8, where called-over hit 48.1% against a 43.2%
+        # base and a 54.1% break-even.
+        lift = SideLift(side="over", n=655, win_rate=0.481,
+                        base_rate=0.432, breakeven=0.541)
+        assert lift.lift > 0          # the model knows something
+        assert not lift.clears_vig    # and it is not enough to bet on
+
+    def test_a_blind_benchmark_counts_pushes_as_staked_not_won(self):
+        bets = self._shaded(2, 0) + [bet(player_id=999, actual_value=100.0)]
+        under = fixed_side(bets, "under")
+        assert under.n == 3       # the push was staked
+        assert under.decided == 2  # and settled nothing

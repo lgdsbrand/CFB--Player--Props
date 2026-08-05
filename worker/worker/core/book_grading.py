@@ -314,6 +314,133 @@ def median_edge(bets: Sequence[BookBet]) -> float | None:
     return median(bet.edge for bet in bets) if bets else None
 
 
+# -----------------------------------------------------------------------------
+# The null hypothesis
+# -----------------------------------------------------------------------------
+@dataclass
+class Benchmark:
+    """What a strategy that ignores the model would have returned.
+
+    THE REFERENCE POINT A MODEL ROI IS MEANINGLESS WITHOUT, for the same reason
+    a win rate is meaningless without its break-even. A positive ROI is not
+    evidence of a model: if the market shades one side, betting that side
+    blindly is also profitable, and the model has to beat THAT to have earned
+    anything.
+
+    Measured on identical bets at identical prices, so the only difference is
+    which side gets taken.
+    """
+
+    label: str
+    n: int
+    wins: int
+    losses: int
+    profit_median: float
+
+    @property
+    def decided(self) -> int:
+        return self.wins + self.losses
+
+    @property
+    def win_rate(self) -> float | None:
+        return self.wins / self.decided if self.decided else None
+
+    @property
+    def roi_median(self) -> float | None:
+        return self.profit_median / self.n if self.n else None
+
+
+def fixed_side(
+    bets: Sequence[BookBet], side: Outcome, threshold: float = 0.0
+) -> Benchmark:
+    """Take `side` on every bet, at the same median price the model got.
+
+    `bet.profit()` answers for the side the MODEL chose, so it cannot be reused
+    here — the whole point is to re-settle the same line on the other side.
+    """
+    result = Benchmark(label=f"always {side}", n=0, wins=0, losses=0, profit_median=0.0)
+    for bet in bets:
+        if bet.edge < threshold:
+            continue
+        result.n += 1
+        if bet.is_push:
+            continue
+        if bet.outcome == side:
+            result.wins += 1
+            result.profit_median += american_to_decimal(bet.median_price) - 1.0
+        else:
+            result.losses += 1
+            result.profit_median -= 1.0
+    return result
+
+
+def over_base_rate(bets: Sequence[BookBet]) -> float | None:
+    """Share of decided lines that went OVER, regardless of what the model said.
+
+    At a perfectly centred line this is ~50%. It is the number that reveals a
+    market-wide shade, and the baseline any per-player skill claim is measured
+    against.
+    """
+    decided = [b for b in bets if not b.is_push]
+    if not decided:
+        return None
+    return sum(1 for b in decided if b.outcome == "over") / len(decided)
+
+
+@dataclass
+class SideLift:
+    """Model skill on one side, with the side's own base rate removed.
+
+    SEPARATES TWO THINGS A HEADLINE ROI FUSES. A model that always says UNDER
+    in an under-shaded market wins without discriminating between players. Lift
+    asks the narrower question: of the lines where it called this side, did it
+    hit MORE often than that side hit generally? That residue is the only part
+    attributable to picking players rather than picking a direction.
+    """
+
+    side: Outcome
+    n: int
+    win_rate: float
+    base_rate: float
+    breakeven: float
+
+    @property
+    def lift(self) -> float:
+        """Points above blindly betting this side. Positive means real signal."""
+        return self.win_rate - self.base_rate
+
+    @property
+    def clears_vig(self) -> bool:
+        """Signal is necessary; clearing the price is what makes it money."""
+        return self.win_rate > self.breakeven
+
+
+def side_lift(bets: Sequence[BookBet], threshold: float = 0.0) -> list[SideLift]:
+    """One `SideLift` per side the model actually called."""
+    decided = [b for b in bets if not b.is_push and b.edge >= threshold]
+    if not decided:
+        return []
+    over_base = sum(1 for b in decided if b.outcome == "over") / len(decided)
+    base = {"over": over_base, "under": 1.0 - over_base}
+
+    out: list[SideLift] = []
+    for side in ("over", "under"):
+        picks = [b for b in decided if b.side == side]
+        if not picks:
+            continue
+        out.append(
+            SideLift(
+                side=side,  # type: ignore[arg-type]
+                n=len(picks),
+                win_rate=sum(1 for b in picks if b.hit) / len(picks),
+                base_rate=base[side],
+                breakeven=sum(breakeven_rate(b.median_price) for b in picks)
+                / len(picks),
+            )
+        )
+    return out
+
+
 @dataclass
 class ConfidenceBand:
     """Model confidence against what actually happened, at the book's line."""

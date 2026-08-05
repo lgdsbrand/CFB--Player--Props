@@ -2,8 +2,12 @@
 
 Nothing is deployed today. There is no git remote, no Vercel project and no
 Render service; the whole system runs from one machine against a development
-Supabase instance. Everything below is blocked on **accounts the client owns**,
-which is why it has lead time and should start before the data blockers clear.
+Supabase instance (project `nqpmqbeszomyczhgkkrm`, `ca-central-1`, 449 MB).
+
+**Status 2026-08-05:** the client's GitHub and Supabase invites are accepted.
+They have created an empty GitHub repo, and we are inside their Supabase
+**organisation with no project created yet** — so the region in step 2 is still
+ours to choose, and it should be chosen to match Vercel (step 3).
 
 The guiding principle: **every account is created by the client, in the client's
 name, with us invited as a collaborator.** Not because of trust — because when
@@ -21,7 +25,7 @@ These gate everything else and none of them need a technical answer from us.
 | **Where the board lives** | a route inside the existing Next.js site, or its own deployment behind a subdomain (`cfb.lgdsanalytics.com`) | **Own deployment, subdomain.** It ships as a separate Vercel project and cannot break the MLB, tennis or WNBA models when it deploys. The design tokens already match the live site (`docs/` theme notes), so it will look native either way. Merging into their repo is possible later; splitting afterwards is not. |
 | **Who owns the repo** | client's GitHub org, or ours with them invited | **Client's org.** Costs nothing, and the Vercel integration then points at an account they control. |
 | **Hit-rate basis** (CLAUDE.md §9.2) | a fixed threshold applied to past games, or the historical closing line | **Threshold to launch.** It is what most props sites do and it needs no paid backfill. Closing line is a config flag away once the odds plan is known. |
-| **Whether to buy historical prop odds** | yes / no | **Worth pricing.** The model has never been graded against a real book line, only synthetic ones — calibration is proven, profitability is not. This is the single largest open question about the product and it is closeable with data we can buy. |
+| **Whether to buy historical prop odds** | yes / no | **Answered — bought, weeks 7 and 8 of 2025, ~3,800 credits.** It was the right call: it turned "profitability unknown" into a measured answer (§5) that changes what we may claim. Any further weeks need the monthly allowance to reset; ask the client when that is, since the provider sends no reset header. |
 
 ---
 
@@ -97,8 +101,30 @@ Each step is quick; the waiting is all in step 0.
 4. **Apply the migrations** (29 of them) and confirm the ledger. There is no
    `supabase` CLI on our machine, so this runs through the worker's connection;
    see [runbook.md](runbook.md#applying-a-migration).
-5. **Run the backfill** — reference, stats, ratings, splits — for 2023 through
-   2025, then `run_projections`. Hours, not minutes, and it costs CFBD calls.
+5. **MIGRATE the development database — do not re-ingest it.** This step used to
+   read "run the backfill". That is now wrong and following it would destroy
+   data we cannot get back.
+
+   `player_prop_lines` holds **5,752 real closing lines** for weeks 7 and 8 of
+   2025, bought for ~3,800 Odds API credits. The account has ~1,487 spendable
+   credits left against a 5,000 reserve, and **historical props can only be
+   bought for a date, not re-derived** — a fresh backfill would silently come
+   up without them, and every profitability number in
+   `grade_vs_book` rests on them.
+
+   Everything else is regenerable and some of it should not move at all:
+
+   | Table | Size | Move it? |
+   |---|---|---|
+   | `player_prop_lines` | 13 MB | **Yes — irreplaceable.** The `theoddsapi` rows above all. |
+   | `plays`, `play_player_stats` | 176 MB | Yes. Regenerable from CFBD but it is hours and thousands of calls. |
+   | `player_game_stats`, `players`, `player_team_seasons`, ratings, splits | ~53 MB | Yes. Same reasoning, cheaper. |
+   | `projections`, `picks` | 62 MB | Optional — `run_projections` rebuilds them. |
+   | `backtest_predictions` | 129 MB | **No.** Backtest output, 29% of the database, and production never reads it. |
+
+   No `pg_dump` or `psql` on this machine, but psycopg 3 is installed and
+   supports `COPY` both ways, which is the fast path for a table-to-table copy.
+   449 MB total; ~320 MB once `backtest_predictions` is left behind.
 6. **Deploy the worker to Render** from `render.yaml`, which already declares
    every cron and every secret as `sync: false` so nothing is stored in the
    file. A test parses that file to prove every scheduled job has a staleness
@@ -125,8 +151,19 @@ Worth stating plainly so nobody discovers it in production.
   degraded one.
 - **The AI reads are off.** `ai_adapter` is `none` and the job exits cleanly in
   that state. It needs the billed key above.
-- **The model has never been graded against a real book line.** Calibration is
-  measured and good; edge against a live market is not yet measurable. See §1.
+- **The model does not beat blindly betting UNDER.** It has now been graded
+  against real closing lines (2025 weeks 7 and 8, 1,856 bets). Overs landed just
+  43.2% of those lines — college props close shaded toward the over — and the
+  model, which calls UNDER ~65% of the time, is largely riding that shade:
+  +2.9% ROI against +5.3% for betting under blindly, and the gap widens to
+  −4.2 points on the edge ≥5% rows the board actually surfaces.
+
+  There is real player-level skill underneath: called-over hits 48.1% against a
+  43.4% base rate, called-under 59.1% against 56.6%. Both are genuine
+  discrimination and the over side does not clear its 53.6% break-even. So the
+  honest claim on launch day is **calibrated, with measured but sub-vig
+  selection skill** — not profitable. `grade_vs_book` reports the blind-side
+  benchmark next to every model ROI so this cannot be quietly overstated again.
 
 ---
 

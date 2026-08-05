@@ -14,8 +14,9 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import type { SlateWeek } from "@/lib/core/types";
 import { type DbRow, unwrap } from "@/lib/data/query";
+import { cachedRead } from "@/lib/data/cache";
 
-export async function getSlateWeeks(): Promise<SlateWeek[]> {
+async function readSlateWeeks(): Promise<SlateWeek[]> {
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
     await supabase
@@ -123,3 +124,12 @@ export async function getSlateGames(
     };
   });
 }
+
+/**
+ * The weeks with model output, cached.
+ *
+ * Written by `run_projections`, which is a weekly cron. Read by every page —
+ * the week strip is on both — and by `findWeek`, which resolves the week the
+ * rest of the page is scoped to, so this is the read every other read waits on.
+ */
+export const getSlateWeeks = cachedRead("slate-weeks", readSlateWeeks);

@@ -89,23 +89,28 @@ export default async function PlayerDetail({
   const raw = await searchParams;
   const requested = parsePlayerParams(playerId, raw);
 
-  const [identity, weeks, config, markets] = await Promise.all([
-    getPlayerIdentity(playerId),
+  // EVERY READ IN THIS WAVE IS CACHED, which is the point of it being alone.
+  // The page's cost is the number of times it WAITS, not the number of queries
+  // it runs, because a wave's members overlap — so a wave with one uncached
+  // member costs exactly as much as an uncached wave. `getPlayerIdentity` used
+  // to sit here and made this wait a full round trip on every view; it is now
+  // fetched only on the paths that actually need it, all of which end in a
+  // message rather than a board. Measured at ~415ms per round trip from a
+  // development machine (lib/data/cache.ts).
+  const [weeks, config, markets] = await Promise.all([
     getSlateWeeks(),
     getAppConfig(),
     getMarkets(),
   ]);
 
-  // An id nobody has heard of is a 404. An id with no rows this week is not —
-  // that is a real player on a bye, or below the usage floor, and it deserves
-  // an explanation under his own name.
-  if (!identity) notFound();
-
   const active = findWeek(weeks, requested.season, requested.week);
   if (!active) {
     return (
       <Shell>
-        <NotOnSlate name={identity.name} reason="No week has model output yet." />
+        <NotOnSlate
+          name={await nameOr404(playerId)}
+          reason="No week has model output yet."
+        />
       </Shell>
     );
   }
@@ -122,11 +127,12 @@ export default async function PlayerDetail({
 
   const rows = await getPlayerBoardRows(playerId, active.season, active.week);
   if (rows.length === 0) {
+    const name = await nameOr404(playerId);
     return (
       <Shell>
         <NotOnSlate
-          name={identity.name}
-          reason={`Nothing projected for ${identity.name} in ${active.season} week ${active.week}. He is on a bye, did not clear the usage floor, or his team is not on this slate.`}
+          name={name}
+          reason={`Nothing projected for ${name} in ${active.season} week ${active.week}. He is on a bye, did not clear the usage floor, or his team is not on this slate.`}
           season={active.season}
           week={active.week}
         />
@@ -142,7 +148,13 @@ export default async function PlayerDetail({
 
   // Position comes from the board row (season-scoped) rather than from
   // `players` (most recent known) — a transfer can change it between seasons.
-  const position = activeRow.positionGroup ?? identity.positionGroup;
+  // The fallback costs a round trip and is worth keeping: `position_group` is
+  // left-joined through `player_team_seasons`, so a projection written for a
+  // player whose roster row is missing carries none, and everything below —
+  // the defense panel, the splits, the rank bands — is scoped by it.
+  const position =
+    activeRow.positionGroup ?? (await getPlayerIdentity(playerId))?.positionGroup;
+  if (!position) notFound();
 
   const [gameLog, quotes, aiRead, ratings, defenseGames] = await Promise.all([
     getPlayerGameLog(playerId, {
@@ -417,6 +429,21 @@ async function rankLookup(
     if (rank !== undefined) byGame.set(game.gameId, rank);
   }
   return byGame;
+}
+
+/**
+ * The player's name, or a 404 if no such player exists.
+ *
+ * ONLY CALLED ON PATHS THAT END IN A MESSAGE. An id nobody has heard of is a
+ * 404; an id with no rows this week is not — that is a real player on a bye, or
+ * below the usage floor, and it deserves an explanation under his own name. The
+ * distinction needs `players`, so it costs a round trip, and it is paid on the
+ * paths that need it rather than on every page view.
+ */
+async function nameOr404(playerId: number): Promise<string> {
+  const identity = await getPlayerIdentity(playerId);
+  if (!identity) notFound();
+  return identity.name;
 }
 
 /** Markets in catalogue order, so the tabs match the board's sub-cards. */

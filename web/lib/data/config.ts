@@ -10,6 +10,7 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import type { AppConfig, HitRateBasis } from "@/lib/core/types";
 import { unwrap } from "@/lib/data/query";
+import { cachedRead } from "@/lib/data/cache";
 
 /**
  * Fallbacks matching the seed migration.
@@ -34,7 +35,7 @@ const KEYS = [
   "min_games_for_defense_rank",
 ] as const;
 
-export async function getAppConfig(): Promise<AppConfig> {
+async function readAppConfig(): Promise<AppConfig> {
   const supabase = createServerSupabaseClient();
   const rows = unwrap<{ key: string; value: unknown }[]>(
     await supabase.from("app_config").select("key, value").in("key", KEYS),
@@ -85,3 +86,12 @@ function asNumberArray(value: unknown, fallback: number[]): number[] {
 function asBasis(value: unknown): HitRateBasis {
   return value === "closing_line" ? "closing_line" : "threshold";
 }
+
+/**
+ * Runtime configuration, cached.
+ *
+ * CLAUDE.md §9 requires both open decisions to be changeable without a deploy,
+ * and they still are: the TTL is five minutes, so a value changed in
+ * `app_config` reaches the board within one, not on the next release.
+ */
+export const getAppConfig = cachedRead("app-config", readAppConfig);

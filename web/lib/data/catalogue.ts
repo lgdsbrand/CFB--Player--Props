@@ -11,6 +11,7 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import type { Conference, Market, PositionGroup } from "@/lib/core/types";
 import { type DbRow, unwrap } from "@/lib/data/query";
+import { cachedRead } from "@/lib/data/cache";
 
 type MarketPositionRow = {
   market_key: string;
@@ -26,7 +27,7 @@ type MarketPositionRow = {
  * type by hand, and two small reads of nine and seventeen rows are not worth
  * the cleverness.
  */
-export async function getMarkets(): Promise<Market[]> {
+async function readMarkets(): Promise<Market[]> {
   const supabase = createServerSupabaseClient();
 
   const [markets, positions] = await Promise.all([
@@ -88,7 +89,7 @@ export function marketsForPosition(
  * deliberately not among them post-realignment, and this returns whatever the
  * table says rather than assuming a fixed six.
  */
-export async function getConferences(
+async function readConferences(
   { displayedOnly = true }: { displayedOnly?: boolean } = {},
 ): Promise<Conference[]> {
   const supabase = createServerSupabaseClient();
@@ -107,3 +108,14 @@ export async function getConferences(
     isDisplayed: row.is_displayed as boolean,
   }));
 }
+
+/**
+ * The market catalogue and the conference list, cached.
+ *
+ * Both are seed data that a migration changes and nothing else does, and both
+ * sit in the board's opening wave alongside the week strip and the config — so
+ * caching them removes a whole wait rather than a query. See `lib/data/cache.ts`
+ * for why that distinction is the only one that matters here.
+ */
+export const getMarkets = cachedRead("markets", readMarkets);
+export const getConferences = cachedRead("conferences", readConferences);

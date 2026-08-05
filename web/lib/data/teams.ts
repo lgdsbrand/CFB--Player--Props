@@ -15,6 +15,7 @@
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { type DbRow, unwrap } from "@/lib/data/query";
+import { cachedRead } from "@/lib/data/cache";
 
 export type TeamInfo = {
   teamId: number;
@@ -36,13 +37,12 @@ type EmbeddedTeam = {
 
 type EmbeddedConference = { name: string; is_displayed: boolean } | null;
 
-export async function getTeamDirectory(
+async function readTeamDirectory(
   season: number,
   teamIds: number[],
-): Promise<Map<number, TeamInfo>> {
-  const directory = new Map<number, TeamInfo>();
+): Promise<TeamInfo[]> {
   const wanted = [...new Set(teamIds)];
-  if (wanted.length === 0) return directory;
+  if (wanted.length === 0) return [];
 
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
@@ -58,11 +58,12 @@ export async function getTeamDirectory(
     "team_seasons (directory)",
   );
 
+  const directory: TeamInfo[] = [];
   for (const row of rows) {
     const team = row.team as EmbeddedTeam;
     const conference = row.conference as EmbeddedConference;
     if (!team) continue;
-    directory.set(row.team_id as number, {
+    directory.push({
       teamId: row.team_id as number,
       school: team.school,
       abbreviation: team.abbreviation,
@@ -74,4 +75,29 @@ export async function getTeamDirectory(
   }
 
   return directory;
+}
+
+/**
+ * The team directory, cached per season and set of ids.
+ *
+ * Conference membership is season-scoped because realignment moves teams, so
+ * the season is part of the key — and the id list is too, since a board
+ * filtered to one conference asks for a different set than an unfiltered one.
+ *
+ * THE CACHE STORES AN ARRAY AND THE MAP IS BUILT AFTERWARDS, which is not a
+ * style choice. `unstable_cache` round-trips its result through JSON, and a Map
+ * does not survive that: it serialises to `{}` and comes back with no entries
+ * and no `get`, so the first cache HIT — not the miss — throws
+ * `e.get is not a function` from inside React's stringify. Nothing type-checks
+ * differently, and the first request of a cold process still passes. Anything
+ * cached here must be plain JSON.
+ */
+const cachedTeams = cachedRead("team-directory", readTeamDirectory);
+
+export async function getTeamDirectory(
+  season: number,
+  teamIds: number[],
+): Promise<Map<number, TeamInfo>> {
+  const teams = await cachedTeams(season, teamIds);
+  return new Map(teams.map((team) => [team.teamId, team]));
 }

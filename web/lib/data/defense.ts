@@ -24,6 +24,7 @@ import type {
   PositionGroup,
 } from "@/lib/core/types";
 import { type DbRow, MAX_ROWS_PER_REQUEST, unwrap } from "@/lib/data/query";
+import { cachedRead } from "@/lib/data/cache";
 
 /**
  * Cumulative raw allowances to each position, through weeks BEFORE `week`.
@@ -148,7 +149,7 @@ export type DefenseRating = {
  * Both are bugs, so the read pins equality exactly as the worker's feature
  * queries do.
  */
-export async function getDefenseRatings(
+async function readDefenseRatings(
   season: number,
   week: number,
   { positionGroup }: { positionGroup?: PositionGroup } = {},
@@ -255,3 +256,12 @@ function toRating(row: DbRow): DefenseRating {
     shrinkageWeight: (row.shrinkage_weight as number | null) ?? null,
   };
 }
+
+/**
+ * Opponent-adjusted defensive ratings at one cutoff, cached.
+ *
+ * Point-in-time by construction: `as_of_week` is part of the key, so a cached
+ * week 8 read can never be served for week 9. Past weeks are immutable once
+ * written and the current week changes only when the ratings job runs.
+ */
+export const getDefenseRatings = cachedRead("defense-ratings", readDefenseRatings);

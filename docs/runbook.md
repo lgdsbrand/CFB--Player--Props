@@ -99,13 +99,14 @@ broken" from "the data is wrong" in about two seconds.
 python -m worker.jobs.audit_data
 ```
 
-The data-integrity canary: **163 checks** over schema objects and constraints,
+The data-integrity canary: **168 checks** over schema objects and constraints,
 RLS posture, the odds math, referential integrity, the anti-lookahead
 guarantees, data completeness, value plausibility, cross-source reconciliation
 between box scores and play attribution, the distribution-family resolution
 layer, Python/SQL agreement on the odds math, the board's display contract, the
-evidence figures the board prints beside every card, and the calibration outputs
-the report is rendered from. Exits non-zero if any check fails.
+evidence figures the board prints beside every card, the opening-weekend
+universe rule re-derived from raw rows, and the calibration outputs the report is
+rendered from. Exits non-zero if any check fails.
 
 Every check states a **pass condition** rather than printing a number for a
 human to eyeball. A report that only shows counts cannot fail, and a check that
@@ -386,6 +387,17 @@ now average in two weeks that no earlier run contained, and the `phase` group
 keys changed (`wk1-2 opening`, `wk3-6 early`, `wk7+ late`). A `transfer` grouping
 was added alongside, because a weeks 1-2 projection is last season's production
 and last season's production does not travel evenly across a transfer.
+
+**NEVER quote opening-weekend calibration from a single-season walk.** The
+correction layer is fitted point-in-time from earlier data in the same walk, and
+its `priors` history bucket only ever fills in weeks 1-2 — which happen once per
+season. A walk over one season has nothing to fit that cell on, so the opening
+weeks come out carrying their raw bias: a 2025-only walk puts them at ECE 0.0396
+with P(over) running 3.4 points low, against 0.0184 for the same weeks in the
+2024-2025 walk. Skill is unaffected (+0.2074, still the season's highest), which
+is exactly why this is easy to miss. The job logs a warning and the report grows
+a caveat when the condition holds; the fix is to include an earlier season. When
+2026 runs, walk 2024-2025-2026, not 2026 alone.
 
 ### `probe_odds`
 

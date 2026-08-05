@@ -1,4 +1,4 @@
-# Phases 6b-6d — the opening weekends, graded, published and labelled
+# Phase 6 — the opening weekends: graded, published, labelled, checked
 
 **The review gate.** Weeks 1 and 2 had never been scored by any walk
 (`MIN_BACKTEST_WEEK` was 3), so "can the board open with the season" had no
@@ -359,10 +359,19 @@ having genuinely succeeded at projecting nobody — was invisible to every check
 the monitor runs.
 
 Week 1 now compares against the same week of the prior season. This is not
-hypothetical: **an empty 2026 week 1 fires a critical alert today**, because 2025
-week 1 holds 4,669 projections and 2026 has no roster to build one from. A first
-season with no predecessor still stays quiet, so the check remains
+hypothetical: **an empty 2026 week 1 fires a critical alert from 8 August**,
+because 2025 week 1 holds 4,669 projections and 2026 has no roster to build one
+from. A first season with no predecessor still stays quiet, so the check remains
 self-calibrating rather than acquiring a hardcoded floor.
+
+*(This paragraph said "today" until Phase 6e checked it. `Slate.in_season` gates
+every freshness check to within `IN_SEASON_WINDOW` — 21 days — of a kickoff,
+which exists so a dormant February does not send a stale-data alert every day
+for seven months. 2026 week 1 kicks off 29 Aug 16:00 UTC, so the check begins
+running on **8 Aug 16:00 UTC** and was skipping, not passing, when 6c claimed
+otherwise. Verified by evaluating `check_data_freshness` against the real
+database at six moments either side of that boundary: silent before, CRITICAL
+`empty-board` after.)*
 
 ## What needed no change
 
@@ -468,3 +477,141 @@ Verified: 98 web tests, 708 pytest, ruff and eslint clean, `check:schema` at 45
 columns, a production build, and the board itself fetched on 2025 weeks 1, 2, 3
 and 8 plus two player pages. **6/6 guard breaks replayed** — including one that
 confirmed a slate whose ratings vanish in November still speaks up.
+
+---
+
+# Phase 6e — checking the phase's own claims
+
+The standing rule at a phase boundary is to run everything and extend
+`audit_data` rather than to re-read the diff. This one checked the claims 6b,
+6c and 6d made, and three of them did not survive as written.
+
+## 1. The alert does not fire today
+
+6c wrote that an empty 2026 week 1 "fires a critical alert today". It does not.
+`Slate.in_season` gates every freshness check to within `IN_SEASON_WINDOW` — 21
+days — of a kickoff, which exists so a dormant February does not send a
+stale-data alert every day for seven months. 2026 week 1 kicks off **29 Aug
+16:00 UTC**, so the check begins running on **8 Aug 16:00 UTC** and was
+*skipping*, not passing, when the claim was made.
+
+Verified by evaluating `check_data_freshness` against the real database at six
+moments either side of that boundary:
+
+| moment | slate | result |
+|---|---|---|
+| today (5 Aug) | `in_season=False` | skipped |
+| 8 Aug 15:59 | `in_season=False` | skipped |
+| **8 Aug 16:01** | `in_season=True` | **CRITICAL `empty-board`** |
+| 25 Aug (kickoff week) | `in_season=True` | CRITICAL `empty-board` |
+
+The mechanism is right and the lead time is ample — three weeks before kickoff,
+against a roster blocker that needs days. Only the sentence was wrong.
+
+## 2. The audit was re-deriving a superseded run
+
+`backtest_predictions` held 340,050 rows from **1 Aug**, before the Phase 6b
+fix and before weeks 1-2 were ever graded — `min(week) = 3`. Every "re-derive
+the deliverable from raw rows" check in the P3 group was therefore validating a
+model that no longer ships, and passing, because those checks compare a run
+against itself.
+
+Re-walked 2025 with `--persist-predictions`: **186,515 predictions, weeks 1-16**.
+The opening stratum now re-derives in SQL, sharing no code with the Python that
+produced the metrics:
+
+| stratum, re-derived | n | Brier skill |
+|---|---|---|
+| `wk1-2 opening` | 22,964 | **+0.2074** |
+| `wk3-6 early` | 48,267 | +0.1855 |
+| `wk7+ late` | 115,284 | +0.1910 |
+
+**Phase 6b's central claim reproduces**: the opening weekends carry the season's
+highest skill, computed from `model_prob_over` and `outcome_over` alone.
+
+## 3. But the CALIBRATION does not reproduce — and that is a real finding
+
+The same run puts the opening stratum at **ECE 0.0396, the worst of the three**,
+against the 0.0184 that made it the best in 6b. P(over) runs **3.4 points low**
+across weeks 1-2 (predicted 0.4062, observed 0.4402) where weeks 3-6 sit at +0.4
+and week 7+ at −1.7.
+
+The cause is structural, not a regression. **The correction layer is fitted
+point-in-time from earlier data in the same walk, and its `priors` history
+bucket only ever fills in the opening weeks — which happen once per season.** A
+walk over one season has nothing to fit that cell on, so weeks 1-2 come out
+carrying the raw bias that 6b reduced at source but did not eliminate.
+
+Nothing about that is visible in the output. The walk succeeds, every number
+prints, and the opening stratum still shows the season's highest skill. So it is
+now stated three ways: a `log.warning` when a single-season walk grades the
+opening weeks, a report caveat that appears only under that condition, and two
+tests pinning both branches.
+
+**Operationally: never quote opening-weekend calibration from a single-season
+walk, and make sure the 2026 pipeline walks 2024-2025-2026 rather than 2026
+alone.**
+
+## 4. An audit check that was green and wrong for two phases
+
+`no stored prediction was graded before the model could see 2 games`
+(`as_of_week >= 2`) encoded the universe rule Phase 6b replaced. It kept
+asserting the old rule through 6b, 6c and 6d without failing once — because the
+only table that could contradict it is written by an optional flag, and no run
+holding weeks 1-2 had ever been persisted. It fired the moment one was, on
+12,031 legitimately graded opening-week rows.
+
+Rewritten to state the current rule. The lesson is recorded in the file: **an
+audit check over optionally-written data can be stale and green at the same
+time.**
+
+## 5. `projectable_weeks` had no test at all
+
+Four lines of SQL, and since 6c removed the week floor, `season_type =
+'regular'` is the **only** thing keeping bowls off the board — where previously
+a mislabelled postseason game at week 1 was excluded twice over. That matters
+because CFBD did once number a December bowl as week 1, and that bug produced
+real lookahead into every earlier week.
+
+Three tests now cover it, and **3/3 guard breaks replay**: re-adding a week
+floor, dropping the `season_type` predicate, and excluding one ordinary week are
+each caught.
+
+*(The first replay run reported 3/3 MISSED. The harness was invoking the system
+Python rather than the venv, so pytest never ran. An all-miss replay is more
+likely a broken harness than three broken tests — check the exit code before
+believing the result.)*
+
+## What the audit covers now
+
+**168 checks, all passing**, including a new `P6 opening weekend` group:
+
+- every published projection clears the universe rule, re-derived in SQL from
+  `player_game_stats` — 21,638 player-weeks, 0 inadmissible, 1,464 of the 2,319
+  opening-week ones standing on priors alone
+- no season the board covers is missing its opening weekend (the fault the
+  phase exists to prevent, as data rather than as a claim)
+- no projection was built with knowledge of its own week — 81,198 rows, 0
+  violations, and every week-1 row at `as_of_week = 1`
+- **a week-1 team rating precedes week 1 rather than following it.** Elo is the
+  one feature a week-1 board takes from the current season, and a snapshot
+  labelled "week 1" that described the state *after* week 1 would be lookahead
+  into the exact games being predicted. Falsifiable rather than trusted: 90 of
+  133 teams that played in week 1 have a different rating at week 2
+- the walk grades the opening weeks the board publishes — `first_week = 1`
+
+## The rest of the sweep
+
+Numbers in this document were re-derived from the database and match exactly:
+81,198 projections across 16 weeks; weeks 1/2/3/8/14 at 4,669 / 4,534 / 3,985 /
+6,466 / 8,125 projections and 1,161 / 1,158 / 1,016 / 1,725 / 2,240 players.
+
+**713 pytest, 98 web tests, ruff and eslint clean, `check:schema` at 45 columns,
+`audit_data` 168/168.** Key hygiene re-checked: no tracked file carries a
+credential-shaped literal, only the placeholder in `.env.example`.
+
+**One thing for the client rather than the code: the database is now 448 MB**,
+up from 402 MB, because this phase persisted a second full set of predictions.
+Supabase's free tier stops at 500 MB. Nothing was deleted to make room — the
+superseded runs are evidence — but the next persisted walk needs either a paid
+tier or a decision about which runs to drop.

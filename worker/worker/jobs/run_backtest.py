@@ -115,6 +115,9 @@ def _stored_caveats(config: dict[str, Any], seasons: list[int]) -> list[str]:
 
 def _caveats(lines_per_projection: float, seasons: list[int]) -> list[str]:
     """Everything a reader needs in order not to over-read the numbers."""
+    opening_uncalibrated = (
+        len(seasons) == 1 and MIN_BACKTEST_WEEK <= LAST_OPENING_WEEK
+    )
     return [
         "<strong>Correlated observations.</strong> Each projection is graded at "
         f"about {lines_per_projection:.1f} lines, and those share one outcome. "
@@ -136,10 +139,12 @@ def _caveats(lines_per_projection: float, seasons: list[int]) -> list[str]:
         "but it is not zero, and anytime-TD calibration here will look slightly "
         "better than it would out of sample.",
 
-        f"<strong>Two seasons ({', '.join(str(s) for s in seasons)}).</strong> "
+        f"<strong>{len(seasons)} season"
+        f"{'' if len(seasons) == 1 else 's'} "
+        f"({', '.join(str(s) for s in seasons)}).</strong> "
         "Cells split by market and position get thin at the extremes; bins under "
         "30 predictions are excluded from the worst-bin column for that reason. "
-        "A third full season is affordable if any cell needs it.",
+        "A further full season is affordable if any cell needs it.",
 
         "<strong>Observed weather, not forecast.</strong> Entering a week you "
         "would have had a forecast; the model reads what actually happened. The "
@@ -161,7 +166,22 @@ def _caveats(lines_per_projection: float, seasons: list[int]) -> list[str]:
         "season's average rather than this one's, and no defensive ratings exist "
         "yet to adjust the matchup with. The overall figure now averages them in; "
         "the phase table is where they can be judged on their own.",
-    ]
+    ] + (
+        [
+            "<strong>The opening weeks in this run are UNCALIBRATED.</strong> "
+            "The correction layer is fitted point-in-time from earlier data in "
+            "the same walk, and the <code>priors</code> history bucket only ever "
+            "fills in the opening weeks — which happen once per season. A walk "
+            "over a single season therefore has nothing to fit that cell on, so "
+            f"weeks 1-{LAST_OPENING_WEEK} here carry their raw bias. Measured: a "
+            "2025-only walk puts the opening stratum at ECE 0.0396, with P(over) "
+            "running 3.4 points low across it, against ECE 0.0184 for the same "
+            "weeks in the 2024-2025 walk. Judge opening-weekend calibration from "
+            "a run with an earlier season in it, never from this one."
+        ]
+        if opening_uncalibrated
+        else []
+    )
 
 
 def _persist(
@@ -488,6 +508,20 @@ def main(argv: list[str] | None = None) -> int:
                 """,
                 (model_run_id, MODEL_VERSION, config["git_sha"], _json(config)),
             )
+
+            if len(seasons) == 1 and MIN_BACKTEST_WEEK <= LAST_OPENING_WEEK:
+                # See `_caveats`. Measured on a 2025-only walk: weeks 1-2 land
+                # at ECE 0.0396 against 0.0184 in the two-season walk, and
+                # under-predict the over by 3.4 points.
+                log.warning(
+                    "Single-season walk: weeks 1-%d will be graded with NO "
+                    "calibration history behind them. The `priors` history "
+                    "bucket only ever fills in the opening weeks, so nothing "
+                    "earlier in this walk can fit it and the opening stratum "
+                    "reverts to its uncorrected bias. Include an earlier season "
+                    "before quoting opening-weekend calibration.",
+                    LAST_OPENING_WEEK,
+                )
 
             log.info("Walking forward across %s...", seasons)
             calibration = None if args.no_variance_calibration else Calibration()

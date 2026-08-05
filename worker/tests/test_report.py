@@ -142,3 +142,37 @@ class TestRender:
         )
         assert "<script>x</script>" not in html
         assert "&lt;script&gt;" in html
+
+
+class TestSingleSeasonCaveat:
+    """The caveat that only appears when the run cannot support its own numbers.
+
+    THE FINDING BEHIND IT (Phase 6e). The correction layer is fitted
+    point-in-time from earlier data in the same walk, and its `priors` history
+    bucket only ever fills in the opening weeks — which happen once per season.
+    So a walk over ONE season has nothing to fit that cell on, and weeks 1-2
+    come out carrying the raw bias Phase 6b removed at source but did not
+    eliminate: a 2025-only walk puts the opening stratum at ECE 0.0396 with
+    P(over) running 3.4 points low, against ECE 0.0184 for the same weeks in the
+    two-season walk.
+
+    Nothing about that is visible in the output. Every number still prints, the
+    walk still succeeds, and the opening stratum still shows the season's
+    highest skill (+0.2074) — it is only the calibration that silently reverts.
+    Hence a caveat keyed on the condition rather than on anybody noticing.
+    """
+
+    def test_a_single_season_walk_says_its_opening_weeks_are_uncalibrated(self):
+        from worker.jobs.run_backtest import _caveats
+
+        text = " ".join(_caveats(3.2, [2025]))
+        assert "UNCALIBRATED" in text
+        assert "priors" in text
+        assert "1 season (2025)" in text
+
+    def test_a_multi_season_walk_carries_no_such_caveat(self):
+        from worker.jobs.run_backtest import _caveats
+
+        text = " ".join(_caveats(3.2, [2024, 2025]))
+        assert "UNCALIBRATED" not in text
+        assert "2 seasons (2024, 2025)" in text

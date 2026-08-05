@@ -1142,9 +1142,27 @@ check(G, "every stored prediction respects the knowledge cutoff (LOOKAHEAD)", ""
     select count(*) as violations from backtest_predictions where as_of_week > week
 """, lambda r: r["violations"] == 0)
 
-check(G, "no stored prediction was graded before the model could see 2 games", """
-    select count(*) as bad from backtest_predictions where as_of_week < 2
-""", lambda r: r["bad"] == 0)
+# THIS CHECK USED TO SAY `as_of_week >= 2` AND WAS WRONG FROM PHASE 6b ONWARD.
+# It encoded the old universe rule — nobody is graded before the model has seen
+# two current-season games — which Phase 6b replaced with a prior season of at
+# least MIN_PRIOR_GAMES_TO_PROJECT in the opening weeks. The code changed, the
+# tests changed, and this kept asserting the old rule for two phases without
+# failing once, because no run holding weeks 1-2 had ever been persisted. It
+# fired the moment one was, on 12,031 legitimately graded opening-week rows.
+#
+# Worth recording rather than quietly editing: an audit check is only exercised
+# by the data that exists, so a check over a table that is written by an
+# optional flag can be stale and green at the same time. The rule it now states
+# is the one `is_projectable` implements, expressed as the cutoff those rows
+# must carry — an opening-week grade at `as_of_week` 1 or 2 is correct, and
+# anything else is not a week the opening rule can admit.
+check(G, "a prediction graded before week 3 is an opening-week one", """
+    select count(*) as early,
+           count(*) filter (where as_of_week <> week) as cutoff_mismatch,
+           count(*) filter (where week > 2) as outside_the_opening_rule
+      from backtest_predictions
+     where as_of_week < 2
+""", lambda r: r["cutoff_mismatch"] == 0 and r["outside_the_opening_rule"] == 0)
 
 # -----------------------------------------------------------------------------
 # Stored metrics — the record that makes two runs comparable
@@ -1719,6 +1737,126 @@ check(G, "prior weight is a share of one", """
            coalesce(round(max(prior_weight)::numeric, 3), 0) as largest
       from projections
 """, lambda r: r["outside"] == 0)
+
+# =============================================================================
+# P6 opening weekend
+# =============================================================================
+# Phase 6 let the board open with the season: weeks 1 and 2 are graded (6b),
+# published (6c) and labelled (6d). The rule deciding who appears lives in
+# `projections.is_projectable` — two current-season games, OR, in the opening
+# weeks only, four games of the prior season.
+#
+# These re-derive that rule IN SQL from `player_game_stats`, sharing no code
+# with the Python that applied it. The point is not to restate the constant: it
+# is that a change to the universe which nobody intended — a feature query
+# losing its `week <` bound, a roster join admitting players with no history —
+# shows up as somebody on the board who should not be there.
+G = "P6 opening weekend"
+
+# The condition is NECESSARY, not sufficient: a usage floor removes players who
+# clear it. So a violation means a projection was published for a player the
+# rule cannot admit, which is the direction that matters.
+check(G, "every published projection clears the universe rule it was admitted by", """
+    with published as (
+      select distinct p.player_id, p.season, p.week from projections p
+    ),
+    evidence as (
+      select b.player_id, b.season, b.week,
+             (select count(*) from player_game_stats s
+               where s.player_id = b.player_id
+                 and s.season    = b.season
+                 and s.week      < b.week
+                 and s.position_group in ('QB','RB','WR','TE')) as games_before,
+             (select count(*) from player_game_stats s
+               where s.player_id = b.player_id
+                 and s.season    = b.season - 1
+                 and s.position_group in ('QB','RB','WR','TE')) as prior_games
+        from published b
+    )
+    select count(*) as player_weeks,
+           count(*) filter (
+             where not (games_before >= 2 or (week <= 2 and prior_games >= 4))
+           ) as inadmissible,
+           count(*) filter (where week <= 2) as opening_player_weeks,
+           count(*) filter (where week <= 2 and games_before = 0) as opening_on_priors_only
+      from evidence
+""", lambda r: r["inadmissible"] == 0)
+
+# THE FAULT THE WHOLE PHASE EXISTS TO PREVENT, as a standing data check rather
+# than as a claim in a document. Before Phase 6c week 1 produced zero rows and
+# `run_projections` exited 0, so nothing anywhere said the board was empty. Any
+# season the board covers at all must cover its opening weekend.
+check(G, "no season the board covers is missing its opening weekend", """
+    with covered as (
+      select season, count(*) filter (where week = 1) as wk1,
+             count(*) filter (where week = 2) as wk2, count(*) as total
+        from projections group by season
+    )
+    select count(*) as seasons,
+           count(*) filter (where wk1 = 0) as missing_week_1,
+           count(*) filter (where wk2 = 0) as missing_week_2,
+           coalesce(min(wk1), 0) as smallest_week_1
+      from covered
+""", lambda r: r["missing_week_1"] == 0 and r["missing_week_2"] == 0)
+
+# AN OPENING-WEEKEND PROJECTION MUST NOT HAVE SEEN THE SEASON IT PROJECTS. The
+# knowledge cutoff is `as_of_week`, and for week 1 it can only legitimately be
+# 1 — features read `week < as_of_week`, so a cutoff of 2 on a week-1 row would
+# mean the projection was built knowing week 1's own results. This is the
+# lookahead surface Phase 6 created, and it is checked on the data rather than
+# on the code that wrote it.
+check(G, "no projection was built with knowledge of its own week or later", """
+    select count(*) as projections,
+           count(*) filter (where as_of_week > week) as saw_the_future,
+           count(*) filter (where week = 1 and as_of_week <> 1) as opening_wrong
+      from projections
+""", lambda r: r["saw_the_future"] == 0 and r["opening_wrong"] == 0)
+
+# THE ONE FEATURE A WEEK-1 BOARD TAKES FROM THIS SEASON IS THE TEAM RATING, and
+# it is the only place an off-by-one in the provider's labelling would be
+# invisible. Every other feature at week 1 reads the prior season by
+# construction; Elo is served per week, and a snapshot labelled "week 1" that
+# actually described the state AFTER week 1 would be lookahead into the exact
+# games being predicted — on a board that, before Phase 6c, was never published.
+#
+# Stated as a falsifiable property rather than as trust in the label: a rating
+# that genuinely precedes week 1 must MOVE once week 1 is played. If the two
+# snapshots agreed for everyone, they would be the same measurement under two
+# names and the week-1 board would be reading its own results.
+check(G, "a week-1 team rating precedes week 1 rather than following it", """
+    with played as (
+      select distinct home_team_id as team_id from games where season = 2025 and week = 1
+      union
+      select away_team_id from games where season = 2025 and week = 1
+    ),
+    snap as (
+      select team_id, as_of_week, rating
+        from team_rating_snapshots
+       where season = 2025 and snapshot_kind = 'point_in_time'
+         and source = 'elo' and as_of_week in (1, 2)
+    )
+    select count(*) as teams,
+           count(*) filter (where a.rating <> b.rating) as moved
+      from snap a
+      join snap b on b.team_id = a.team_id and a.as_of_week = 1 and b.as_of_week = 2
+      join played p on p.team_id = a.team_id
+""", lambda r: r["teams"] > 0 and r["moved"] > r["teams"] / 2)
+
+# THE GRADED POPULATION HAS TO REACH THE PUBLISHED ONE. Phase 6b's whole
+# argument is that weeks 1-2 are worth shipping BECAUSE they were graded; if a
+# later walk quietly reverted to `MIN_BACKTEST_WEEK = 3` the board would be
+# publishing weeks no evidence covers, and every number in the phase document
+# would still be true of a run nobody could reproduce.
+check(G, "the walk grades the opening weeks the board publishes", """
+    with latest as (
+      select backtest_id from backtest_predictions
+       group by 1 order by max(created_at) desc limit 1)
+    select count(*) as predictions,
+           min(p.week) as first_week,
+           count(*) filter (where p.week <= 2) as opening,
+           count(distinct p.season) as seasons
+      from backtest_predictions p join latest l using (backtest_id)
+""", lambda r: r["first_week"] == 1 and r["opening"] > 0)
 
 # =============================================================================
 # Report

@@ -13,8 +13,10 @@
  */
 
 import type { BoardSort } from "@/lib/data/board";
-import type { PositionGroup } from "@/lib/core/types";
-import { POSITION_GROUPS } from "@/lib/core/types";
+// Relative, not aliased: `POSITION_GROUPS` is a VALUE, so it survives type
+// stripping and the test runner has to resolve it for real. Type-only imports
+// above can keep the alias because they are erased before Node sees them.
+import { POSITION_GROUPS, type PositionGroup } from "./types.ts";
 
 export type BoardParams = {
   season?: number;
@@ -135,10 +137,39 @@ export function boardHref(
 }
 
 /**
+ * The board with every filter cleared.
+ *
+ * ONE definition, used by both the Reset button and the empty board's "clear
+ * the filters" link. They used to clear different sets — the empty board left
+ * the sort and hit-rate window alone while Reset took them back to default —
+ * so two controls that read as the same promise did two different things.
+ *
+ * Season and week survive: reset means "show me all of this slate", not "send
+ * me to another week". Everything else is omitted rather than forced, so the
+ * board lands on whatever the configured defaults are — `edgesOnly` included,
+ * which is why it is left out instead of set to false.
+ */
+export function resetBoardHref(current: BoardParams): string {
+  return boardHref(
+    {
+      season: current.season,
+      week: current.week,
+      sort: "edge",
+      edgesOnly: false,
+      hitRateWindow: DEFAULT_HIT_RATE_WINDOW,
+      page: 1,
+    },
+    {},
+  );
+}
+
+/**
  * The same state as hidden form fields, for the GET form the search box uses.
  *
  * A form submits only its own inputs, so without these every other filter would
- * silently reset the moment someone typed a name.
+ * silently reset the moment someone typed a name. Still needed after the move
+ * to instant filters: the form is the pre-hydration fallback, and until the
+ * script lands a submit is a real GET.
  */
 export function hiddenFields(
   current: BoardParams,

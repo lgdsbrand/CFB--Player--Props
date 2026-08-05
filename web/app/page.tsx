@@ -11,6 +11,7 @@ import {
   boardHref,
   CARDS_PER_PAGE,
   parseBoardParams,
+  resetBoardHref,
   type RawParams,
 } from "@/lib/core/board-params";
 import { groupIntoCards, lineCoverage } from "@/lib/core/board-view";
@@ -336,16 +337,7 @@ function EmptyBoard({
   counts: BoardCounts;
   edgeThreshold: number;
 }) {
-  const cleared = boardHref(params, {
-    position: undefined,
-    market: undefined,
-    game: undefined,
-    conference: undefined,
-    search: undefined,
-    minConfidence: undefined,
-    minOpponentRank: undefined,
-    edgesOnly: false,
-  });
+  const cleared = resetBoardHref(params);
 
   const showLeans = (
     <Link

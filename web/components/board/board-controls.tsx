@@ -1,27 +1,24 @@
 import Link from "next/link";
 
-import {
-  boardHref,
-  hiddenFields,
-  type BoardParams,
-} from "@/lib/core/board-params";
-import { formatKickoff } from "@/lib/core/format";
+import { FilterFields } from "@/components/board/filter-fields";
+import { boardHref, type BoardParams } from "@/lib/core/board-params";
 import { POSITION_GROUPS, type Conference, type Market } from "@/lib/core/types";
 import type { SlateGame } from "@/lib/data/slate";
 
 /**
  * The board's controls (CLAUDE.md §7).
  *
- * NO CLIENT JAVASCRIPT. Pill groups are links and the rest is a GET form, so
- * every control writes the same URL parameters and the board stays a
- * server-rendered document. That is not minimalism for its own sake: the filters
- * are database predicates (a week exceeds PostgREST's row cap, so filtering in
- * the browser would be wrong, not just slow), and keeping them in the URL means
- * a filtered board is an address the client can be sent.
+ * EVERY CONTROL APPLIES ON CHANGE. It did not always: the pill groups were
+ * links that navigated at once while the fields below sat behind an Apply
+ * button, so half the controls acted immediately and half waited, with nothing
+ * on screen explaining which was which. One behaviour now, two mechanisms —
+ * pills stay server-rendered links, the fields moved into `FilterFields`, and
+ * both write the same URL parameters.
  *
- * The form needs an explicit Apply because submitting on change would require
- * script. The pill groups — the controls people actually reach for — are single
- * clicks.
+ * FILTER STATE STAYS IN THE URL. The filters are database predicates: a week
+ * exceeds PostgREST's row cap, so filtering in the browser would be wrong and
+ * not merely slow. Keeping them in the URL also means a filtered board is an
+ * address the client can be sent, and it survives a hard refresh.
  */
 export function BoardControls({
   params,
@@ -145,107 +142,7 @@ export function BoardControls({
         </span>
       </div>
 
-      <form
-        method="GET"
-        action="/"
-        className="border-border-subtle flex flex-wrap items-end gap-2 border-t pt-3"
-      >
-        {hiddenFields(params, ["q", "game", "conference", "conf", "rank", "page"]).map(
-          (field) => (
-            <input
-              key={field.name}
-              type="hidden"
-              name={field.name}
-              value={field.value}
-            />
-          ),
-        )}
-
-        <Field label="Search player" className="min-w-44 flex-1">
-          <input
-            type="search"
-            name="q"
-            defaultValue={params.search ?? ""}
-            placeholder="Name…"
-            className="bg-panel-inset border-border-subtle text-ink placeholder:text-dim focus:border-accent-cyan/60 w-full rounded-lg border px-2.5 py-1.5 text-sm outline-none"
-          />
-        </Field>
-
-        <Field label="Game">
-          <Select name="game" defaultValue={params.game?.toString() ?? ""}>
-            <option value="">All games</option>
-            {games.map((game) => (
-              <option key={game.gameId} value={game.gameId}>
-                {game.awayAbbreviation} @ {game.homeAbbreviation} ·{" "}
-                {formatKickoff(game.startDate)}
-              </option>
-            ))}
-          </Select>
-        </Field>
-
-        <Field label="Conference">
-          <Select name="conference" defaultValue={params.conference ?? ""}>
-            <option value="">All displayed</option>
-            {conferences.map((conference) => (
-              <option key={conference.id} value={conference.name}>
-                {conference.abbreviation ?? conference.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-
-        <Field label="Min confidence">
-          <Select name="conf" defaultValue={params.minConfidence?.toString() ?? ""}>
-            <option value="">Any</option>
-            <option value="0.55">55%</option>
-            <option value="0.6">60%</option>
-            <option value="0.65">65%</option>
-            <option value="0.7">70%</option>
-            <option value="0.8">80%</option>
-          </Select>
-        </Field>
-
-        {/*
-          Rank 1 is the BEST defense, so the soft matchups this filter exists
-          to find are the HIGH ranks. Stated as "≥" rather than dressed up as
-          "top N softest": the number in the control is the number on the card,
-          and a filter whose label disagrees with the value beside it is how a
-          reader stops trusting both.
-        */}
-        <Field label="Opp rank ≥">
-          <Select name="rank" defaultValue={params.minOpponentRank?.toString() ?? ""}>
-            <option value="">Any</option>
-            <option value="90">90+ (soft)</option>
-            <option value="110">110+</option>
-            <option value="125">125+ (softest)</option>
-          </Select>
-        </Field>
-
-        <button
-          type="submit"
-          className="cta px-4 py-1.5"
-        >
-          Apply →
-        </button>
-
-        <Link
-          href={boardHref(
-            { ...params, sort: "edge", edgesOnly: false, hitRateWindow: 5, page: 1 },
-            {
-              position: undefined,
-              market: undefined,
-              game: undefined,
-              conference: undefined,
-              search: undefined,
-              minConfidence: undefined,
-              minOpponentRank: undefined,
-            },
-          )}
-          className="text-dim hover:text-muted px-2 py-1.5 text-[0.6875rem] font-semibold uppercase tracking-label"
-        >
-          Reset
-        </Link>
-      </form>
+      <FilterFields params={params} conferences={conferences} games={games} />
     </div>
   );
 }
@@ -292,39 +189,3 @@ function PillLink({
   );
 }
 
-function Field({
-  label,
-  className = "",
-  children,
-}: {
-  label: string;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className={"flex flex-col gap-1 " + className}>
-      <span className="label-caption">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function Select({
-  name,
-  defaultValue,
-  children,
-}: {
-  name: string;
-  defaultValue: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <select
-      name={name}
-      defaultValue={defaultValue}
-      className="bg-panel-inset border-border-subtle text-ink focus:border-accent-cyan/60 rounded-lg border px-2.5 py-1.5 text-sm outline-none"
-    >
-      {children}
-    </select>
-  );
-}

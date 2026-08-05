@@ -86,14 +86,23 @@ dashboard once the project in §2 exists.
 
 Each step is quick; the waiting is all in step 0.
 
-0. **Client creates the four accounts and invites us.** Everything else is
-   minutes; this is days.
-1. **Push the repo to the client's GitHub org.** Nothing secret in any commit — verified, the only credential-shaped string in tracked files is
-   the placeholder in `.env.example`.
-2. **Create the Supabase production project.** Choose the region first and write
-   it down; step 3 must match it.
-3. **Create the Vercel project from the repo, and pin its function region to
-   Supabase's.** This is worth more than every code optimisation in the project
+0. **Client creates the four accounts and invites us.** ✅ **Done 2026-08-05.**
+1. **Push the repo to the client's GitHub org.** ✅ **Done 2026-08-05** —
+   `github.com/lgdsbrand/CFB--Player--Props`, 74 commits on `main`. Nothing
+   secret in any commit: the full history was scanned and the only
+   credential-shaped strings are the placeholder in `.env.example` and a
+   base64 sha512 integrity hash in `package-lock.json` that happens to contain
+   `eyJ`.
+2. **Create the Supabase production project in `ca-central-1` (Montréal).**
+   Not us-east-1. The client's existing Legends infrastructure is in
+   ca-central-1, the development project already is too — so the migration in
+   step 5 never leaves the region — and Vercel's `yul1` maps to exactly this
+   region, so the pairing in step 3 is same-region rather than merely close.
+3. **Create the Vercel project from the repo.** The function region is pinned
+   in [`vercel.json`](../vercel.json) as `yul1`, so it does not depend on
+   anyone remembering a dashboard setting; Hobby allows any single region, and
+   `iad1` is only the default for projects that never choose. This is worth
+   more than every code optimisation in the project
    combined: from a development machine one database round trip costs ~415 ms
    regardless of payload, and a page makes three to six of them in sequence. In
    the same region that is single-digit milliseconds. Same code, same queries —

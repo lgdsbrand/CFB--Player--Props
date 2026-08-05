@@ -14,6 +14,7 @@
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { type BoardSort, boardSortKeys } from "@/lib/core/board-view";
+import { THIN_EVIDENCE_GAMES } from "@/lib/core/evidence";
 import type { BetSide, BoardRow, PositionGroup } from "@/lib/core/types";
 import { SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
 import { type DbRow, MAX_ROWS_PER_REQUEST, unwrap } from "@/lib/data/query";
@@ -75,7 +76,7 @@ const COLUMNS =
   "has_book_line, has_call, over_price, under_price, sportsbook_key, " +
   "sportsbook_name, projected_median, projected_p10, projected_p90, prior_weight, " +
   "opponent_rank_vs_position, conference_name, conference_is_displayed, " +
-  "display_confidence";
+  "display_confidence, effective_sample";
 
 export type BoardPage = {
   rows: BoardRow[];
@@ -328,6 +329,16 @@ export type BoardCounts = {
    */
   withDevLine: number;
   overThreshold: number;
+  /**
+   * Rows with less than `THIN_EVIDENCE_GAMES` of evidence behind them.
+   *
+   * COUNTED ON THE SAMPLE, NOT ON THE PRIOR SHARE. Counting `prior_weight` high
+   * would have excluded the transfers, who are the thinnest rows on an opening
+   * board — see `lib/core/evidence.ts`.
+   */
+  thin: number;
+  /** Rows whose opponent carries a rating vs this position at this cutoff. */
+  ranked: number;
 };
 
 /**
@@ -364,13 +375,15 @@ export async function getBoardCounts(
       : query;
   };
 
-  const [all, withCall, withBookLine, withDevLine, overThreshold] =
+  const [all, withCall, withBookLine, withDevLine, overThreshold, thin, ranked] =
     await Promise.all([
       base(),
       base().eq("has_call", true),
       base().eq("has_book_line", true),
       base().eq("sportsbook_key", SYNTHETIC_BOOK_KEY),
       base().gte("edge", edgeThreshold),
+      base().lt("effective_sample", THIN_EVIDENCE_GAMES),
+      base().not("opponent_rank_vs_position", "is", null),
     ]);
 
   for (const [result, label] of [
@@ -379,6 +392,8 @@ export async function getBoardCounts(
     [withBookLine, "with book line"],
     [withDevLine, "with development line"],
     [overThreshold, "over threshold"],
+    [thin, "thinly evidenced"],
+    [ranked, "with an opponent rank"],
   ] as const) {
     if (result.error) {
       throw new Error(`Board count failed (${label}): ${result.error.message}`);
@@ -391,6 +406,8 @@ export async function getBoardCounts(
     withBookLine: withBookLine.count ?? 0,
     withDevLine: withDevLine.count ?? 0,
     overThreshold: overThreshold.count ?? 0,
+    thin: thin.count ?? 0,
+    ranked: ranked.count ?? 0,
   };
 }
 
@@ -466,6 +483,7 @@ function toBoardRow(row: Record<string, unknown>): BoardRow {
     projectedP10: (row.projected_p10 as number | null) ?? null,
     projectedP90: (row.projected_p90 as number | null) ?? null,
     priorWeight: (row.prior_weight as number | null) ?? null,
+    effectiveSample: (row.effective_sample as number | null) ?? null,
 
     opponentRankVsPosition:
       (row.opponent_rank_vs_position as number | null) ?? null,

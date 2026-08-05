@@ -99,13 +99,13 @@ broken" from "the data is wrong" in about two seconds.
 python -m worker.jobs.audit_data
 ```
 
-The data-integrity canary: **160 checks** over schema objects and constraints,
+The data-integrity canary: **163 checks** over schema objects and constraints,
 RLS posture, the odds math, referential integrity, the anti-lookahead
 guarantees, data completeness, value plausibility, cross-source reconciliation
 between box scores and play attribution, the distribution-family resolution
-layer, Python/SQL agreement on the odds math, the board's display contract, and
-the calibration outputs the report is rendered from. Exits non-zero if any check
-fails.
+layer, Python/SQL agreement on the odds math, the board's display contract, the
+evidence figures the board prints beside every card, and the calibration outputs
+the report is rendered from. Exits non-zero if any check fails.
 
 Every check states a **pass condition** rather than printing a number for a
 human to eyeball. A report that only shows counts cannot fail, and a check that
@@ -484,6 +484,14 @@ In order of likelihood:
 3. Row limits, not emptiness. PostgREST caps a response at **1,000 rows** and
    says nothing about it; the read layer detects truncation rather than trusting
    the count.
+
+**An opening-weekend board is NOT one of these causes.** Weeks 1 and 2 project
+and publish since Phase 6c, and a week 1 that comes out empty is a real fault
+that `monitor_pipeline` now alerts on by comparing against the prior season's
+same week. If the board is thin rather than empty in the opening weeks, read the
+note above the cards: it states how many rows rest on fewer than four effective
+games and whether any defense carries a rating yet, both counted from the week on
+screen.
 
 ### An alert channel is not delivering
 

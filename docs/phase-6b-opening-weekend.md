@@ -1,4 +1,4 @@
-# Phases 6b-6c — the opening weekends, graded and published
+# Phases 6b-6d — the opening weekends, graded, published and labelled
 
 **The review gate.** Weeks 1 and 2 had never been scored by any walk
 (`MIN_BACKTEST_WEEK` was 3), so "can the board open with the season" had no
@@ -372,3 +372,99 @@ up weeks 1 and 2 with no code change. Migration 0018's header claim that "the
 first projectable week of a season is week 3" is now false and is corrected by
 migration 0027 on the view's own comment, where a reader inspecting the schema
 will meet it.
+
+---
+
+# Phase 6d — saying so on the board
+
+Phase 6c ended by naming the two stored quantities the UI should surface:
+`prior_weight` (0.416 at week 1 against 0.194 at week 8) and `effective_sample`
+(3.83 against 6.61). Building it revealed that **only one of them is safe to
+show, and it is not the one the phase brief led with.**
+
+## The prior share inverts, and it inverts hardest where it matters
+
+`prior_weight` does not split last season against this season. It splits a
+player's **own** prior season against a generic **position baseline**. A player
+who changed team takes `CHANGED_TEAM_PRIOR_MULTIPLIER`, so on 2025 week 1:
+
+| | prior weight | what carries the rest | effective sample |
+|---|---|---|---|
+| returning starter | 0.50 | position baseline | 6.0 |
+| transfer | **0.25** | position baseline | **3.0** |
+
+Neither has played a game. Both are projected entirely from last season. But the
+transfer scores *lower* on "share carried by last season" — because three
+quarters of his projection is replacement-level baseline rather than anything
+anyone watched him do. On a card that reads as *better* grounded. It is the
+opposite.
+
+**The failure was caught by a test, not by review.** The first assertion written
+for `evidenceFor` was that an opening-weekend transfer and an opening-weekend
+returning starter are both "priors-led", since neither has played. It failed at
+0.25 < 0.40, and the failure was not a threshold to adjust — it was the quantity
+being unfit for the purpose. The slate note being written at the time counted
+rows by exactly that threshold and reported:
+
+> 1,979 of 3,068 projections rest mostly on last season
+
+when the true figure is **all 3,068**. The 1,089 it silently omitted were the
+transfers: the least-evidenced third of the board, excluded from the count of
+thinly-evidenced rows.
+
+`effective_sample` cannot invert. 3.0 against 6.0, and less is always less. So
+the board counts and prints that, everywhere; the share appears only on the
+player page, next to the sentence that keeps it honest.
+
+## What ships
+
+**A per-card evidence pill.** `3.0 GM`, amber under four effective games,
+muted above, with the full sentence on hover. It renders in **every** week, not
+just the opening ones — the threshold separates players *inside* a week (59% of
+week-1 rows are thin, 24% of week 8, 18% of week 14), so it is a fact about a
+player rather than a warning label on a slate. TJ Lateef shows 2.0 gm in week 8.
+
+**A slate note, driven entirely by the week on screen.** No function in
+`lib/core/evidence.ts` asks what week it is. Counted over 2025's displayed
+conferences, the note fires on exactly weeks 1 and 2:
+
+| | rows | thin | thin % | ranked | note |
+|---|---|---|---|---|---|
+| wk1 | 3,068 | 1,829 | 60% | **0** | **Opening weekend** — full copy |
+| wk2 | 3,041 | 1,831 | 60% | 1,122 | **Thin evidence** + partial ratings |
+| wk3 | 2,543 | 1,268 | 49.9% | 2,008 | silent |
+| wk8 | 3,848 | 918 | 24% | 3,848 | silent |
+| wk14 | 4,868 | 887 | 18% | 4,868 | silent |
+
+Week 1 gets all three claims: the thin count, that **no defense in the league
+carries a rating** so nothing is matchup-adjusted and the opponent-rank filter
+has nothing to select on, and that players with no prior season — about a
+quarter of opening-weekend production — cannot be projected at all and are
+absent. Week 2 gets the first two, correctly weakened: 1,122 rows *are* rated by
+then, so the claim that nothing is adjusted must not be made.
+
+**Week 3 sits at 49.86%, one row from the threshold.** That is left alone rather
+than tuned. If it flips on, the note reports two true counts and nothing else —
+the strong claims are gated on `openingWeekend`, which also requires the ratings
+to be missing, and week 3's are present. The threshold decides tone, not truth.
+
+**The defense panel says the real reason.** Its unrated state used to read "too
+few games behind the week, or a non-FBS opponent". When *no* defense in the
+league is rated it now says so, which is the week-1 truth and not that one.
+
+## Schema and verification
+
+Migration **0028** adds `effective_sample` to `v_board_rows` — written on every
+projection since Phase 4a and read by nobody, because the view never selected
+it. Column comments on both evidence columns record that they are **player-level**
+(identical across a player's markets, which is why the card renders them once in
+its header) and that the share must never be read alone.
+
+Three audit checks now guard what the board renders: both columns present on all
+81,198 projections, `effective_sample` inside the range a game count can occupy
+(1.00 to 13.63 today), and `prior_weight` a share of one. **163/163.**
+
+Verified: 98 web tests, 708 pytest, ruff and eslint clean, `check:schema` at 45
+columns, a production build, and the board itself fetched on 2025 weeks 1, 2, 3
+and 8 plus two player pages. **6/6 guard breaks replayed** — including one that
+confirmed a slate whose ratings vanish in November still speaks up.

@@ -140,6 +140,17 @@ export type PlayerCard = {
   neutralSite: boolean;
   conferenceName: string | null;
 
+  /**
+   * How much the model knows about this player this week.
+   *
+   * PROMOTED TO THE CARD BECAUSE THEY ARE PLAYER-LEVEL FACTS. The feature frame
+   * computes both once per player-week, so every market on a card carries
+   * identical values — rendering them per market would repeat one number five
+   * times and imply it varies. Taken from the first row for that reason.
+   */
+  priorWeight: number | null;
+  effectiveSample: number | null;
+
   /** In the order the read layer returned them — already sorted. */
   markets: BoardRow[];
 
@@ -204,6 +215,8 @@ export function groupIntoCards(rows: BoardRow[]): PlayerCard[] {
       isHome: row.isHome,
       neutralSite: row.neutralSite,
       conferenceName: row.conferenceName,
+      priorWeight: row.priorWeight,
+      effectiveSample: row.effectiveSample,
       markets: [row],
       topEdge: row.edge,
       topConfidence: row.displayConfidence,

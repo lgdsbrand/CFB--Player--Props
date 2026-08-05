@@ -263,6 +263,7 @@ function row(overrides: Partial<BoardRow> = {}): BoardRow {
     projectedP10: 20,
     projectedP90: 90,
     priorWeight: 0.3,
+    effectiveSample: 6.5,
     opponentRankVsPosition: 100,
     conferenceName: "SEC",
     conferenceIsDisplayed: true,
@@ -279,6 +280,18 @@ test("markets group into one card per player-game", () => {
   ]);
   assert.equal(cards.length, 2);
   assert.equal(cards[0].markets.length, 2);
+});
+
+test("the card carries the evidence its rows agree on", () => {
+  // Both are player-level, so every market on a card holds the same pair and
+  // the card takes them from the first row. A card that read them per market
+  // would print one number five times and imply it varies by market.
+  const [card] = groupIntoCards([
+    row({ projectionId: 1, priorWeight: 0.5, effectiveSample: 6 }),
+    row({ projectionId: 2, priorWeight: 0.5, effectiveSample: 6 }),
+  ]);
+  assert.equal(card.priorWeight, 0.5);
+  assert.equal(card.effectiveSample, 6);
 });
 
 test("the same player in two games stays two cards", () => {

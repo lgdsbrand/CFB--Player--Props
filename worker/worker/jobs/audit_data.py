@@ -1679,6 +1679,47 @@ check(G, "a negative projected median stays a rare artifact", """
       from projections
 """, lambda r: r["pct"] < 1.0)
 
+# THE UNCERTAINTY THE BOARD SHOWS HAS TO BE ON EVERY ROW IT SHOWS. Phase 6d
+# renders an evidence pill on every card from `effective_sample`, and the
+# component returns null rather than inventing a number when the column is
+# absent — the right behaviour, and a silent one. A projector that stopped
+# writing the pair would empty the marker off the whole board and nothing would
+# say so. `prior_weight` is checked with it because the player page states the
+# share, and because a run that wrote one and not the other is a partial write
+# worth catching either way.
+check(G, "every projection carries the evidence the board renders", """
+    select count(*) as projections,
+           count(*) filter (where effective_sample is null) as no_sample,
+           count(*) filter (where prior_weight is null) as no_weight
+      from projections
+""", lambda r: r["no_sample"] == 0 and r["no_weight"] == 0)
+
+# EFFECTIVE SAMPLE IS A COUNT OF GAMES AND MUST READ AS ONE. It is
+# `games_played + prior_games_played * prior_weight`, both terms non-negative,
+# so a negative value is arithmetically impossible and would mean the column now
+# holds something else. The board prints it as "3.0 gm" beside a game log a
+# reader can count, so a unit slip is visible to them before it is to us. The
+# upper bound is deliberately loose — a full season plus a discounted prior one
+# reaches 13.63 today — and catches only that kind of slip, not a drift.
+check(G, "effective sample stays inside the range a game count can occupy", """
+    select count(*) as projections,
+           count(*) filter (where effective_sample < 0) as negative,
+           count(*) filter (where effective_sample > 30) as impossible,
+           coalesce(round(max(effective_sample)::numeric, 2), 0) as largest,
+           coalesce(round(min(effective_sample)::numeric, 2), 0) as smallest
+      from projections
+""", lambda r: r["negative"] == 0 and r["impossible"] == 0)
+
+# PRIOR WEIGHT IS A SHARE. The board never divides by it, so a value outside
+# [0, 1] would not raise anywhere — it would just print "137% carried by last
+# season" on the player page.
+check(G, "prior weight is a share of one", """
+    select count(*) as projections,
+           count(*) filter (where prior_weight < 0 or prior_weight > 1) as outside,
+           coalesce(round(max(prior_weight)::numeric, 3), 0) as largest
+      from projections
+""", lambda r: r["outside"] == 0)
+
 # =============================================================================
 # Report
 # =============================================================================

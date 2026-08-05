@@ -127,8 +127,13 @@ export function DefenseDetail({
           </>
         ) : (
           <p className="text-muted text-xs">
-            No adjusted rating at this cutoff — usually too few games behind the
-            week, or a non-FBS opponent.
+            {rankedDefenses === 0
+              ? `No defense in the league carries a rating entering week ${asOfWeek}. ` +
+                "Ratings are built from games played this season, so nothing on " +
+                "this slate is matchup-adjusted — the projection is this " +
+                "player's own form and priors."
+              : "No adjusted rating at this cutoff — usually too few games " +
+                "behind the week, or a non-FBS opponent."}
           </p>
         )}
       </div>

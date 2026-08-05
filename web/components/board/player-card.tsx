@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { EvidencePill } from "@/components/board/evidence-pill";
 import { MarketRow } from "@/components/board/market-row";
 import { TeamChip } from "@/components/board/team-chip";
 import { rankBasis } from "@/lib/core/defense-view";
@@ -92,6 +93,10 @@ export function PlayerCard({
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
+          <EvidencePill
+            priorWeight={card.priorWeight}
+            effectiveSample={card.effectiveSample}
+          />
           {card.opponentRankVsPosition !== null ? (
             <span
               className="pill bg-panel-inset text-muted"

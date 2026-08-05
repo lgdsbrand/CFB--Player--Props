@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { EvidencePill } from "@/components/board/evidence-pill";
 import { LastFive } from "@/components/board/last-five";
 import { ProjectionBar } from "@/components/board/projection-bar";
 import { TeamChip } from "@/components/board/team-chip";
@@ -13,6 +14,7 @@ import { SiteHeader } from "@/components/site-header";
 import type { RawParams } from "@/lib/core/board-params";
 import { defenseStatForMarket, rankBasis } from "@/lib/core/defense-view";
 import { isSupabaseConfigured } from "@/lib/core/env";
+import { evidenceFor } from "@/lib/core/evidence";
 import {
   formatAmericanOdds,
   formatConfidence,
@@ -197,6 +199,10 @@ export default async function PlayerDetail({
           <span className="pill bg-accent-indigo/15 text-accent-cyan">
             {position}
           </span>
+          <EvidencePill
+            priorWeight={activeRow.priorWeight}
+            effectiveSample={activeRow.effectiveSample}
+          />
         </div>
         <div className="text-muted flex flex-wrap items-center gap-1.5 text-xs">
           <TeamChip
@@ -581,15 +587,46 @@ function Projection({
         </>
       )}
 
-      {row.priorWeight !== null ? (
-        <p className="text-dim text-[0.625rem]">
-          {Math.round(row.priorWeight * 100)}% of this projection comes from
-          priors rather than this season. Transfers and NIL mean prior-year
-          production often happened at another school, so that share is
-          deliberately down-weighted and shrinks as the season accumulates.
-        </p>
-      ) : null}
+      <Evidence row={row} />
     </section>
+  );
+}
+
+/**
+ * How much the model knows about this player, stated in full.
+ *
+ * THE BOARD SHOWS ONE OF THESE NUMBERS AND THIS SHOWS BOTH, because this is
+ * where there is room to explain the second. `prior_weight` read alone inverts
+ * in the opening weeks — a transfer's prior is discounted, so he carries a
+ * SMALLER share of it than a returning starter who has played exactly as many
+ * games this season, which is none. The card therefore shows the effective
+ * sample, and the share appears here beside the sentence that keeps it honest.
+ */
+function Evidence({ row }: { row: BoardRow }) {
+  const evidence = evidenceFor(row);
+  if (!evidence) return null;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="label-caption">Evidence</span>
+        <span className="text-muted text-xs tabular-nums">
+          {evidence.games.toFixed(1)} effective games ·{" "}
+          {Math.round(evidence.priorShare * 100)}% carried by last season
+        </span>
+      </div>
+      <p className="text-dim text-[0.625rem]">
+        Effective games are this season&rsquo;s, plus last season&rsquo;s
+        discounted to the weight above. That weight shrinks as the season
+        accumulates, and starts lower for a player who changed team — transfers
+        and NIL mean prior-year production often happened somewhere else, so a
+        small share here can mean the prior was discounted rather than that this
+        season has taken over.
+        {evidence.isThin
+          ? " Under four effective games, the projection is doing more extrapolating than measuring."
+          : ""}
+      </p>
+    </div>
   );
 }
 

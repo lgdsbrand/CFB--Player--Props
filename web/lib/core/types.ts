@@ -101,8 +101,17 @@ export type BoardRow = {
   projectedMedian: number | null;
   projectedP10: number | null;
   projectedP90: number | null;
-  /** Share of the projection carried by priors rather than this season. */
+  /**
+   * Share of the projection carried by priors rather than this season.
+   *
+   * PLAYER-LEVEL: identical on every market a player has this week, because the
+   * feature frame computes it once per player-week. Read it beside
+   * `effectiveSample` and never alone — see `lib/core/evidence.ts` for the
+   * inversion that makes the share unsafe on its own.
+   */
   priorWeight: number | null;
+  /** Games of evidence behind the projection. Player-level, like the above. */
+  effectiveSample: number | null;
 
   /** Rank 1 = the BEST defense vs this position. A HIGH rank is the soft one. */
   opponentRankVsPosition: number | null;

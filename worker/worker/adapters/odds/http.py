@@ -202,18 +202,25 @@ class OddsHttpClient:
                 )
                 time.sleep(delay)
 
-            except urllib.error.URLError as exc:
+            # TimeoutError IS listed alongside URLError deliberately. A read
+            # timeout from `urlopen(timeout=...)` is raised bare — it is not
+            # wrapped in URLError — so it used to escape this handler entirely
+            # and kill the caller on the first slow response. That is merely
+            # annoying for a probe and expensive for `backfill_odds`, which can
+            # be dozens of paid calls into a run when it happens.
+            except (urllib.error.URLError, TimeoutError) as exc:
                 self.call_count += 1
+                reason = getattr(exc, "reason", None) or exc
                 if attempt >= self.max_retries:
                     raise OddsAdapterError(
-                        f"Network error on {safe_url}: {exc.reason}"
+                        f"Network error on {safe_url}: {reason}"
                     ) from exc
                 attempt += 1
                 delay = self._backoff(None, attempt)
                 log.warning(
                     "%s -> %s; retry %d/%d in %.1fs",
                     safe_url,
-                    exc.reason,
+                    reason,
                     attempt,
                     self.max_retries,
                     delay,

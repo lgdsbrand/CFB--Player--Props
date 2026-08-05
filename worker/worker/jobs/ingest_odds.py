@@ -39,6 +39,7 @@ import json
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import psycopg
 
@@ -99,9 +100,24 @@ class IngestReport:
     method_mix: Counter = field(default_factory=Counter)
 
     def render(self) -> str:
+        return "\n".join(
+            [
+                f"  events: {self.events_matched}/{self.events_seen} matched to a "
+                f"game, {self.events_with_props} carried props",
+                self.render_resolution(),
+            ]
+        )
+
+    def render_resolution(self) -> str:
+        """The player/market half, without the event counters.
+
+        Split out for `backfill_odds`, which walks OUR games rather than the
+        provider's event list and so counts matching itself. Printing this
+        report's untouched event counters underneath its own produced a report
+        that said "1/60 games matched" and "events: 0/0 matched" four lines
+        apart — both true of different things, and read as a contradiction.
+        """
         lines = [
-            f"  events: {self.events_matched}/{self.events_seen} matched to a game, "
-            f"{self.events_with_props} carried props",
             f"  quotes: {self.quotes_resolved}/{self.quotes_seen} resolved to a "
             f"player  ->  {self.rows_written} book row(s) written",
         ]
@@ -289,8 +305,23 @@ def ingest_event(
     report: IngestReport,
     *,
     dry_run: bool,
+    captured_at: datetime | None = None,
+    is_closing: bool = False,
 ) -> None:
-    """Resolve and write one event's quotes."""
+    """Resolve and write one event's quotes.
+
+    `captured_at` defaults to None, which lets the column's `now()` default
+    stand — right for a live capture, where the row is true as of this moment.
+    A BACKFILL must pass the snapshot timestamp instead: a 2025 line stamped
+    with today's date would sort as the newest quote on that game and be read
+    as the current market. It also makes the backfill idempotent, since
+    `captured_at` is part of the table's unique key.
+
+    `is_closing` is likewise the backfill's to set — it captures deliberately
+    just before kickoff, which is the definition the column carries. A live
+    in-week run cannot know it is looking at the last line before kickoff, so
+    it never claims to be.
+    """
     players = load_roster(conn, game)
     books = ensure_sportsbooks(conn, quotes) if not dry_run else {}
 
@@ -321,6 +352,7 @@ def ingest_event(
                     game["week"], price.line, price.over_price,
                     price.under_price, adapter_name,
                     json.dumps({"provider_player": quote.player_name}),
+                    captured_at, is_closing,
                 )
             )
 
@@ -335,8 +367,10 @@ def ingest_event(
             """
             insert into player_prop_lines
               (game_id, player_id, market_key, sportsbook_id, season, week,
-               line, over_price, under_price, source_adapter, source_payload)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               line, over_price, under_price, source_adapter, source_payload,
+               captured_at, is_closing)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    coalesce(%s, now()), %s)
             on conflict do nothing
             """,
             rows,

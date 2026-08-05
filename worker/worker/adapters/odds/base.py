@@ -171,3 +171,39 @@ class OddsAdapter(Protocol):
     def quota(self) -> QuotaSnapshot:
         """Most recent usage reading. Empty until a request has been made."""
         ...
+
+
+@runtime_checkable
+class SupportsHistorical(Protocol):
+    """An adapter that can also answer "what was posted at time T".
+
+    SEPARATE FROM `OddsAdapter` ON PURPOSE. Historical odds are a paid extra on
+    The Odds API and may not exist at all on a future provider, so requiring
+    them in the base protocol would make a perfectly usable live-only source
+    fail to satisfy the contract. `backfill_odds` asks for this narrower
+    protocol and refuses with an explanation when the configured adapter cannot
+    serve it — including `NullOddsAdapter`, which deliberately cannot.
+
+    Both methods return RAW payloads. Parsing belongs to the concrete adapter's
+    module so a backfill can be replayed from a captured fixture without a
+    network call.
+    """
+
+    name: str
+
+    def historical_events(self, iso_timestamp: str) -> dict[str, Any]:
+        """The event list as it stood at a past moment."""
+        ...
+
+    def historical_props_raw(
+        self,
+        event_id: str,
+        iso_timestamp: str,
+        market_keys: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """One event's prop payload as it stood at a past moment."""
+        ...
+
+    @property
+    def quota(self) -> QuotaSnapshot:
+        ...

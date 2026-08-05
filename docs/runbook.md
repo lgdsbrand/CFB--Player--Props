@@ -339,7 +339,7 @@ not being `"none"`.
 
 ## Jobs run by hand
 
-Neither of these is scheduled, and neither should be.
+None of these is scheduled, and none should be. Two of them spend money.
 
 ### `run_backtest`
 
@@ -419,6 +419,67 @@ models** and has already run out once mid-month, so use `--free` for dry runs.
 
 Re-run this **within 7 days of kickoff** to resolve live prop coverage, which is
 the one question the probe has not been able to answer yet.
+
+### `backfill_odds`
+
+```bash
+python -m worker.jobs.backfill_odds --season 2025 --weeks 8 --dry-run
+python -m worker.jobs.backfill_odds --season 2025 --weeks 8 --max-credits 1200
+python -m worker.jobs.backfill_odds --season 2025 --weeks 6-8 --max-credits 4000
+```
+
+Buys historical **closing** lines for past weeks and writes them to
+`player_prop_lines` with `is_closing = true`. This is what makes edge gradeable:
+every backtest number so far was measured against a synthetic line — the
+player's own trailing average — which proves the model is **calibrated** but not
+that it is **profitable**. See [odds.md](odds.md).
+
+**The measurement is the purchase.** Billing is per market *returned*, so there
+is no way to count how many games carried props without paying for the ones
+that did. What is bought is kept, so a week paid for once is graded repeatedly.
+
+**Snapshots are per game, not per week.** Each game is asked about at
+`kickoff - --lead-minutes` (default 60). A single timestamp for a whole slate is
+how the original probe ended up querying a game that had kicked two hours
+earlier, getting an empty 200, and recording `historical player props: FAIL` —
+a wrong negative that then shaped Phase 3. Games kicking together share one
+event-list call, which is the only per-snapshot charge.
+
+**Two independent spend limits, both checked against the provider's reported
+cost rather than an estimate:**
+
+- `--max-credits` — this run's ceiling, default 1000 (roughly one week).
+- `--min-remaining` — a floor on the shared pool, default 5000. The client's
+  MLB, tennis and WNBA models draw on the same allowance, which has run out
+  mid-month once already.
+
+Both are evaluated *before* each billable call, and both **reserve the call's
+worst case** (10 credits per market asked for) rather than waiting to be
+crossed. A first version compared only what had already been spent, which let a
+single 60-credit call through a 25-credit ceiling and then reported "reached the
+25-credit ceiling (spent 61)". Hitting either limit stops the run and says so in
+the report; rows already written stand.
+
+**`--dry-run` is cheap but not free.** It resolves games to provider events and
+reports the match rate, and it **never asks for props** — props are where all
+the cost is. It still pays 1 credit per kickoff snapshot for the event list, so
+a week costs roughly as many credits as it has distinct kickoff times. Use it to
+see the slate before committing to a spend.
+
+Measured 2026-08-05: one event list = 1 credit; one game returning 6 markets =
+60 credits, i.e. the documented 10 per market returned. A game books did not
+price costs 0.
+
+**Read the two-way rate per market, never blended.** A one-sided price cannot be
+de-vigged and yields no edge at all. Anytime TD is posted Yes-only by most books
+and will dominate any blended figure — one early sample read 94% one-sided and
+meant nothing. The report breaks it out per market for that reason.
+
+Re-running a week is **idempotent**: `captured_at` holds the snapshot moment and
+is part of the table's unique key.
+
+**Not monitored, by design.** A job that spends the client's money on a schedule
+is a job that empties the pool on a schedule.
 
 ---
 

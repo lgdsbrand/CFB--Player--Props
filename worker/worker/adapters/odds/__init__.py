@@ -18,6 +18,7 @@ from worker.adapters.odds.base import (
     OddsQuotaError,
     PropQuote,
     QuotaSnapshot,
+    SupportsHistorical,
 )
 from worker.adapters.odds.null import ADAPTER_NAME as NULL_ADAPTER_NAME
 from worker.adapters.odds.null import NullOddsAdapter
@@ -34,6 +35,7 @@ __all__ = [
     "OddsQuotaError",
     "PropQuote",
     "QuotaSnapshot",
+    "SupportsHistorical",
     "TheOddsApiAdapter",
     "get_adapter",
 ]

@@ -8,6 +8,10 @@ than as a quietly under-counted coverage report.
 
 from __future__ import annotations
 
+import json
+import time
+import urllib.request
+
 import pytest
 
 from worker.adapters.odds import (
@@ -19,7 +23,12 @@ from worker.adapters.odds import (
     TheOddsApiAdapter,
     get_adapter,
 )
-from worker.adapters.odds.http import QUOTA_ERROR_CODES, _error_code, redact
+from worker.adapters.odds.http import (
+    QUOTA_ERROR_CODES,
+    OddsHttpClient,
+    _error_code,
+    redact,
+)
 from worker.adapters.odds.markets import (
     OUR_KEY_TO_PROVIDER,
     PROVIDER_TO_OUR_KEY,
@@ -299,6 +308,80 @@ class TestErrorClassification:
         assert _error_code("not json at all") is None
         assert _error_code("") is None
         assert _error_code("[1,2,3]") is None
+
+
+class TestTransientFailures:
+    """What the retry loop must survive, and what it must not swallow.
+
+    A READ TIMEOUT USED TO ESCAPE THE LOOP ENTIRELY. `urlopen(timeout=...)`
+    raises `TimeoutError` bare rather than wrapping it in `URLError`, so the
+    handler never saw it and the first slow response killed the caller. Found
+    against the live API during a `backfill_odds` run that had already made
+    seven paid calls — the failure mode is expensive, not just noisy, because
+    credits do not come back.
+    """
+
+    def test_a_read_timeout_is_retried_not_raised(self, monkeypatch):
+        client = OddsHttpClient("test-key", min_interval=0.0)
+        pending = [TimeoutError("The read operation timed out")]
+        calls: list[int] = []
+
+        def urlopen(request, timeout=None):
+            calls.append(1)
+            if pending:
+                raise pending.pop(0)
+            return _FakeResponse({"ok": True})
+
+        monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+        monkeypatch.setattr(time, "sleep", lambda _s: None)
+
+        assert client.get("/sports") == {"ok": True}
+        assert len(calls) == 2  # timed out once, then succeeded
+
+    def test_a_timeout_that_never_clears_becomes_an_adapter_error(
+        self, monkeypatch
+    ):
+        # Retrying forever would turn a dead network into a hung cron job.
+        client = OddsHttpClient("test-key", min_interval=0.0, max_retries=2)
+
+        def urlopen(request, timeout=None):
+            raise TimeoutError("The read operation timed out")
+
+        monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+        monkeypatch.setattr(time, "sleep", lambda _s: None)
+
+        with pytest.raises(OddsAdapterError, match="Network error"):
+            client.get("/sports")
+
+    def test_the_key_is_still_redacted_in_a_timeout_message(self, monkeypatch):
+        client = OddsHttpClient("s3cret-key", min_interval=0.0, max_retries=0)
+
+        def urlopen(request, timeout=None):
+            raise TimeoutError("timed out")
+
+        monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+        monkeypatch.setattr(time, "sleep", lambda _s: None)
+
+        with pytest.raises(OddsAdapterError) as caught:
+            client.get("/sports")
+        assert "s3cret-key" not in str(caught.value)
+
+
+class _FakeResponse:
+    """Minimal stand-in for the urlopen context manager."""
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+        self.headers = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return json.dumps(self._payload).encode("utf-8")
 
 
 class TestAdapterRegistry:

@@ -499,6 +499,38 @@ is part of the table's unique key.
 **Not monitored, by design.** A job that spends the client's money on a schedule
 is a job that empties the pool on a schedule.
 
+### `grade_vs_book`
+
+```bash
+python -m worker.jobs.grade_vs_book --season 2025 --weeks 8
+python -m worker.jobs.grade_vs_book --season 2025 --weeks 6-8 --threshold 0.05
+```
+
+Grades existing `projections` against the real closing lines `backfill_odds`
+bought, settling them on `player_game_stats`. Free — it makes no provider calls.
+
+**This is the only job that tests whether the model is PROFITABLE.**
+[calibration-report.html](calibration-report.html) tests whether it is
+*calibrated*, against synthetic lines (each player's trailing average). Those
+are different claims: a perfectly calibrated model loses money against a price
+better than its own estimate. Every edge % on the board is the second claim.
+
+**Every win rate is reported with its break-even.** At −110 that is 52.4%, so a
+51% win rate is a losing model however well calibrated. A win rate quoted alone
+is the most misleading number this project can produce.
+
+**ROI at the median price is the headline**; the best-price figure assumes
+shopping every book and always getting filled.
+
+It refuses to grade three things, each of which would flatter the result: a
+one-sided price (no de-vig, so no edge — comparing against the vig-inclusive
+number credits the model with beating the book's hold), a missing box-score row
+(scoring an inactive player as 0 makes every one an UNDER hit), and a projection
+whose `as_of_week` is later than the week being graded. Exact ties settle as
+pushes, not losses. `--adapter synthetic` is refused outright.
+
+**A negative result is a finding, not a failed run.** Report it.
+
 ---
 
 ## Recovery

@@ -190,9 +190,15 @@ class TestPriorWeight:
 # =============================================================================
 # Against the real database
 # =============================================================================
-pytestmark_db = pytest.mark.integration
+# Marked per class, not per module. `pytestmark` is the only name pytest looks
+# for, and this file used to assign `pytestmark_db` — which pytest ignores
+# entirely, so `-m "not integration"` still collected every database test below
+# and quietly went to Supabase for them. Renaming it to `pytestmark` would swing
+# the other way and mark the pure tests above as integration too, so each class
+# that takes a database fixture carries the marker itself.
 
 
+@pytest.mark.integration
 class TestNoLookaheadInRealQueries:
     """Re-derive the bound from the source tables, not from features.py's SQL."""
 
@@ -333,6 +339,7 @@ class TestNoLookaheadInRealQueries:
             _assert_no_lookahead(list(rows), populated_week, "off_by_one")
 
 
+@pytest.mark.integration
 class TestFeatureFrame:
     def test_frame_builds_and_carries_the_cutoff(self, populated_week):
         from worker.core.features import build_feature_frame
@@ -476,6 +483,7 @@ class TestFeatureFrame:
         assert "temperature_f" not in without.columns
 
 
+@pytest.mark.integration
 class TestOpeningWeekFrame:
     """Week 1 must produce a frame. Before Phase 6b.2 it produced nothing.
 
@@ -542,6 +550,7 @@ class TestOpeningWeekFrame:
         assert frame["goal_line_opportunities"].max() == 0
 
 
+@pytest.mark.integration
 class TestPriorScoringRecord:
     """The prior season's goal-line record, which is all week 1 has.
 

@@ -51,7 +51,7 @@ MIGRATIONS_DIR = REPO_ROOT / "supabase" / "migrations"
 # than inferred so that scheduling one without revisiting the prose fails: the
 # runbook says "neither of these is scheduled, and neither should be", which
 # stops being true the moment a cron appears.
-RUN_BY_HAND = frozenset({"run_backtest", "probe_odds"})
+RUN_BY_HAND = frozenset({"run_backtest", "probe_odds", "migrate_database"})
 
 
 # -----------------------------------------------------------------------------

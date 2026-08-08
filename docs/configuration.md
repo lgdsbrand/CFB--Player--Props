@@ -185,6 +185,7 @@ Full reasoning per variable is in [.env.example](../.env.example). Copy it to
 | `GEMINI_API_KEY` | optional | worker |
 | `GROK_API_KEY` | optional | worker |
 | `ALERT_WEBHOOK_URL` | optional | worker — only when `alert_adapter` is `"webhook"` |
+| `MIGRATION_TARGET_DB_URL` | deployment only | worker — the destination for `migrate_database`, session pooler like the one above. Set it once, on one machine, then remove it |
 | `ENVIRONMENT` | defaults `development` | worker — gates `--synthetic-lines` |
 | `LOG_LEVEL` | defaults `INFO` | worker |
 

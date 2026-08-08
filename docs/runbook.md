@@ -25,7 +25,7 @@ runbook, so it is tested rather than trusted.
 
 - [The rules that apply to every job](#the-rules-that-apply-to-every-job)
 - [Scheduled jobs](#scheduled-jobs) — canaries, the weekly pipeline, in-week refreshes
-- [Jobs run by hand](#jobs-run-by-hand) — backtest, odds probe
+- [Jobs run by hand](#jobs-run-by-hand) — backtest, odds probe, the migration
 - [Recovery](#recovery) — stuck runs, a failed chain, a wasted projection pass
 - [Applying a migration](#applying-a-migration) — there is no `supabase` CLI on PATH
 - [Ordinary weekly operation](#ordinary-weekly-operation)
@@ -530,6 +530,51 @@ whose `as_of_week` is later than the week being graded. Exact ties settle as
 pushes, not losses. `--adapter synthetic` is refused outright.
 
 **A negative result is a finding, not a failed run.** Report it.
+
+### `migrate_database`
+
+```bash
+python -m worker.jobs.migrate_database                # the plan; writes nothing
+python -m worker.jobs.migrate_database --self-test    # prove the copy path
+python -m worker.jobs.migrate_database --execute      # move the data
+python -m worker.jobs.migrate_database --verify-only  # compare the two ends
+```
+
+Copies the development database into the production one — deployment step 5.
+Source is `SUPABASE_DB_URL`, target is `MIGRATION_TARGET_DB_URL`. Run once, from
+a machine that can reach both.
+
+**This is a migration, not a re-ingest, and the distinction is money.**
+`player_prop_lines` holds 5,752 real closing lines bought for ~3,800 Odds API
+credits, and historical props are sold per date rather than re-derived. A
+`backfill_odds` run against a fresh production database would come up silently
+without them and every profitability number in `grade_vs_book` would go with
+them.
+
+**It truncates each target table before loading it.** That is what makes it
+re-runnable, and it is also why it refuses to run when source and target resolve
+to the same database. A failed run leaves production partially loaded; re-run
+`--execute` and it starts clean.
+
+**The pre-flight is the useful part.** Before writing anything it confirms the
+target's migration ledger is complete, that both ends have identical column
+lists for every planned table, and that no table in `public` is missing from the
+plan. Any of those failing means stop and fix, not proceed carefully.
+
+**Every table is verified by row count and by a checksum over every column,
+generated columns included** — so the target's generated expressions are checked
+rather than assumed. `--verify-only` re-runs just that comparison and is the
+honest answer to "did it all actually arrive".
+
+Two things it does that are invisible and load-bearing. It **resets all 22
+identity sequences** after loading, because COPY writes explicit ids and leaves
+every sequence at 1 — without this the first production insert collides on a
+primary key days later, nowhere near the migration. And it moves
+**`backtest_predictions` for the latest persisted walk only**: all 526k rows
+cost 129 MB on a 500 MB tier, but moving none of them fails three `audit_data`
+checks that resolve through the most recently persisted run.
+
+**Not scheduled, and never should be.** It is a one-time deployment step.
 
 ---
 

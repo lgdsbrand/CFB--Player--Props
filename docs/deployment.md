@@ -1,13 +1,20 @@
 # Deployment — what the client has to provide, and in what order
 
-Nothing is deployed today. There is no git remote, no Vercel project and no
-Render service; the whole system runs from one machine against a development
+The repo is pushed. Nothing else is deployed: no Vercel project, no Render
+service, and the whole system still runs from one machine against a development
 Supabase instance (project `nqpmqbeszomyczhgkkrm`, `ca-central-1`, 449 MB).
 
-**Status 2026-08-05:** the client's GitHub and Supabase invites are accepted.
-They have created an empty GitHub repo, and we are inside their Supabase
-**organisation with no project created yet** — so the region in step 2 is still
-ours to choose, and it should be chosen to match Vercel (step 3).
+**Status 2026-08-06:** the client's GitHub and Supabase invites are accepted and
+the repo is live at `github.com/lgdsbrand/CFB--Player--Props`. He has created the
+Supabase project ("CFB- Player- Props") but **has not sent its database
+password**, so step 2 onward is blocked on him — and **the region he used is
+unverified**. Check it the moment access arrives: `vercel.json` pins `yul1`,
+which pairs only with `ca-central-1`, and recreating an empty project today is
+a two-minute job where migrating a full one later is not.
+
+The migration in step 5 is written, tested and waiting: `migrate_database`
+proved its copy path byte-exact against development on 2026-08-06, so the only
+untested thing left in it is the target.
 
 The guiding principle: **every account is created by the client, in the client's
 name, with us invited as a collaborator.** Not because of trust — because when
@@ -109,7 +116,10 @@ Each step is quick; the waiting is all in step 0.
    the board goes from ~2.5 s to roughly a fifth of a second.
 4. **Apply the migrations** (29 of them) and confirm the ledger. There is no
    `supabase` CLI on our machine, so this runs through the worker's connection;
-   see [runbook.md](runbook.md#applying-a-migration).
+   see [runbook.md](runbook.md#applying-a-migration). Applying without recording
+   is how the ledger drifted once already — both halves or neither. Step 5's
+   pre-flight re-checks this and refuses to move data onto a target whose ledger
+   is short, so a missed migration surfaces here rather than as missing rows.
 5. **MIGRATE the development database — do not re-ingest it.** This step used to
    read "run the backfill". That is now wrong and following it would destroy
    data we cannot get back.
@@ -121,19 +131,46 @@ Each step is quick; the waiting is all in step 0.
    up without them, and every profitability number in
    `grade_vs_book` rests on them.
 
-   Everything else is regenerable and some of it should not move at all:
+   This is now one command rather than a procedure —
+   [`migrate_database`](runbook.md#migrate_database), which carries the
+   keep/skip list, the ordering and the verification:
+
+   ```bash
+   python -m worker.jobs.migrate_database              # the plan; writes nothing
+   python -m worker.jobs.migrate_database --execute    # move it
+   ```
+
+   No `pg_dump` or `psql` on this machine, but psycopg 3 streams binary `COPY`
+   from one connection into the other without the rows ever becoming Python
+   objects. **~357 MB of the source's 452 MB lands on the target**, leaving
+   ~143 MB under the free tier's 500 MB — which is what step 7's date is about.
+   (Both figures grew by ~3 MB on 2026-08-08 when the 2026 rosters were
+   ingested. Run the job with no arguments for the current numbers rather than
+   trusting these.)
 
    | Table | Size | Move it? |
    |---|---|---|
    | `player_prop_lines` | 13 MB | **Yes — irreplaceable.** The `theoddsapi` rows above all. |
    | `plays`, `play_player_stats` | 176 MB | Yes. Regenerable from CFBD but it is hours and thousands of calls. |
    | `player_game_stats`, `players`, `player_team_seasons`, ratings, splits | ~53 MB | Yes. Same reasoning, cheaper. |
-   | `projections`, `picks` | 62 MB | Optional — `run_projections` rebuilds them. |
-   | `backtest_predictions` | 129 MB | **No.** Backtest output, 29% of the database, and production never reads it. |
+   | `projections`, `picks` | 62 MB | Yes. `run_projections` could rebuild them, but moving them means the board is live the moment the site is. |
+   | `backtests`, `backtest_metrics`, `calibration_bins` | 0.6 MB | **Yes, mandatory.** `run_projections` refuses to run without a stored calibration snapshot and reads it from `backtests`. |
+   | `backtest_predictions` | 129 MB | **The latest walk only — 46 MB.** See below. |
+   | `sportsbooks`, `conferences` | 0.1 MB | **Yes, with their ids.** Neither is fully migration-seeded, and both are parents of data we are moving. |
+   | `pipeline_runs` | 0.1 MB | **No.** Development job history; production should start with an honest empty one. |
 
-   No `pg_dump` or `psql` on this machine, but psycopg 3 is installed and
-   supports `COPY` both ways, which is the fast path for a table-to-table copy.
-   449 MB total; ~320 MB once `backtest_predictions` is left behind.
+   **`backtest_predictions` is the one that needed a decision.** The earlier
+   plan skipped all 526,565 rows to get under the cap. That is affordable and
+   wrong: three `audit_data` checks — "at least one backtest kept its raw
+   predictions", "the stored calibration curve reproduces from the raw
+   predictions" and "the walk grades the opening weeks the board publishes" —
+   all resolve through the most recently persisted `backtest_id`, and an empty
+   table makes the first two vacuously false and the third NULL. Step 7 below
+   would then fail on a production database that is actually fine. Moving
+   exactly the latest walk costs 46 MB and keeps them green. It has to be that
+   whole walk: the second check recomputes the reliability diagram from these
+   rows and compares bin counts exactly, so a sample fails just as loudly as an
+   empty table.
 6. **Deploy the worker to Render** from `render.yaml`, which already declares
    every cron and every secret as `sync: false` so nothing is stored in the
    file. A test parses that file to prove every scheduled job has a staleness
@@ -150,10 +187,18 @@ Each step is quick; the waiting is all in step 0.
 
 Worth stating plainly so nobody discovers it in production.
 
-- **2026 rosters do not exist yet.** `/roster?year=2026` returned 0 rows on
-  2026-08-04 against 15,601 for 2025. No roster, no player-team mapping, no
-  board — regardless of how good the model is. This is CFBD's to publish and
-  ours to ingest the day it lands, which is one command.
+- ~~**2026 rosters do not exist yet.**~~ **RESOLVED 2026-08-08.** CFBD published
+  them between the 4th and the 8th: `/roster?year=2026&classification=fbs` now
+  returns **15,171 players across 138 FBS teams**, ingested into development the
+  same day (718 QB / 999 RB / 1,983 WR / 974 TE). They travel to production in
+  the step 5 migration, so nothing further is owed here.
+
+  One trap worth keeping, because it nearly buried the result: `CfbdClient.fetch`
+  caches with **no expiry by default**, so re-probing returned the `0 rows`
+  entry stored on the 4th and looked unchanged. The tell was the CFBD quota
+  counter not moving. Any "has this landed yet" probe must pass `max_age=0` or
+  set `CFBD_CACHE=off`. The cache is right for completed seasons, which cannot
+  change, and exactly wrong for asking whether something new has appeared.
 - **No book has posted an NCAAF player prop yet.** Books post these late; the
   plan's coverage is unconfirmed. Until then the board shows model leans with no
   line beside them, which is the designed behaviour (CLAUDE.md §7), not a

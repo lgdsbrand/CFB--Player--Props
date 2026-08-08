@@ -1348,17 +1348,30 @@ G = "P4 app"
 # latest rating" would silently make every past board better-informed than it
 # was, which is the same class of bug as the bowl-week collision. Recomputed
 # here from the base tables rather than trusted from the view.
+# POSITION IS A PROPERTY OF A PLAYER-SEASON, NOT OF A PLAYER. This check used to
+# join `players.position_group`, which carries no season and therefore holds
+# whatever the most recently ingested roster said. `v_board_rows` resolves
+# position through `player_team_seasons` for the row's own season, so the check
+# was re-deriving its answer from a different source than the view it audits —
+# and passing only because the newest roster happened to be the one the board
+# covered. Ingesting 2026 broke that coincidence: 29 players changed position
+# between 2025 and 2026 (FB->RB, EDGE->DL, CB->DB), their global row was
+# rewritten, and 697 of 81,198 board rows "failed" a check the board was right
+# about. Audit the view against the source the view uses.
 check(G, "the board's opponent rank is pinned to its own week (LOOKAHEAD)", """
     select count(*) as compared,
            count(*) filter (where b.opponent_rank_vs_position
                                   is distinct from d.rank_vs_position) as wrong
       from v_board_rows b
-      join players pl on pl.id = b.player_id
+      join player_team_seasons pts
+             on pts.player_id = b.player_id
+            and pts.team_id   = b.team_id
+            and pts.season    = b.season
       left join defense_position_ratings d
              on d.defense_team_id = b.opponent_team_id
             and d.season          = b.season
             and d.as_of_week      = b.week
-            and d.position_group  = pl.position_group
+            and d.position_group  = pts.position_group
 """, lambda r: r["compared"] > 0 and r["wrong"] == 0)
 
 # A team with no team_seasons row still plays games, still appears in the

@@ -25,6 +25,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
+# The `source_adapter` written on a development line that no book ever quoted.
+# There is no synthetic *adapter* — nothing implements the protocol below and
+# nothing fetches anything; `run_projections --synthetic-lines` writes the rows
+# directly. The label lives here anyway because two jobs need to agree on it:
+# the one that writes those rows and the one that must EVICT them when a real
+# quote arrives for the same player and market. Two string literals that must
+# match, defined in two places, is how that eviction quietly stops working.
+SYNTHETIC_ADAPTER = "synthetic"
+
 
 class OddsAdapterError(RuntimeError):
     """Raised when an odds provider cannot serve what was asked of it."""

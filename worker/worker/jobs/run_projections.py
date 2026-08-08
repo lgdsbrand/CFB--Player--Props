@@ -46,6 +46,7 @@ from typing import Any
 
 import psycopg
 
+from worker.adapters.odds import SYNTHETIC_ADAPTER
 from worker.config import ConfigError, get_settings
 from worker.core.calibration import StoredCalibration
 from worker.core.features import AsOf
@@ -81,7 +82,9 @@ PROBABILITY_EPSILON = 1e-6
 # exactly 0.500, which is the point: see `_write_synthetic_lines`.
 SYNTHETIC_PRICE = -110
 SYNTHETIC_BOOK_KEY = "dev"
-SYNTHETIC_ADAPTER = "synthetic"
+# Imported rather than redeclared: `ingest_odds` evicts rows carrying this label
+# when a real quote arrives for the same player and market, and that eviction
+# silently stops working the moment the two definitions drift apart.
 
 
 def _git_sha() -> str | None:

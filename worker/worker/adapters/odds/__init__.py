@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from worker.adapters.odds.base import (
+    SYNTHETIC_ADAPTER,
     BookPrice,
     OddsAdapter,
     OddsAdapterError,
@@ -26,6 +27,7 @@ from worker.adapters.odds.theoddsapi import ADAPTER_NAME as THEODDSAPI_ADAPTER_N
 from worker.adapters.odds.theoddsapi import TheOddsApiAdapter
 
 __all__ = [
+    "SYNTHETIC_ADAPTER",
     "BookPrice",
     "NullOddsAdapter",
     "OddsAdapter",

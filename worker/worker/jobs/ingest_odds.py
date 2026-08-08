@@ -44,6 +44,7 @@ from datetime import datetime
 import psycopg
 
 from worker.adapters.odds import (
+    SYNTHETIC_ADAPTER,
     OddsAdapterError,
     OddsPlanError,
     OddsQuotaError,
@@ -93,6 +94,10 @@ class IngestReport:
     quotes_seen: int = 0
     quotes_resolved: int = 0
     rows_written: int = 0
+    # Synthetic development rows removed because a real quote arrived for the
+    # same player and market. Counted separately from rows_written because it
+    # is a deletion, and a silent one would be worse than the collision.
+    synthetic_displaced: int = 0
     players_unresolved: Counter = field(default_factory=Counter)
     players_ambiguous: Counter = field(default_factory=Counter)
     quotes_no_price: int = 0
@@ -376,6 +381,37 @@ def ingest_event(
             rows,
         )
     report.rows_written += len(rows)
+
+    # A REAL QUOTE EVICTS THE FAKE ONE IT REPLACES, in the same transaction that
+    # wrote it. Synthetic rows exist only so the OVER/UNDER path could be built
+    # before books posted; once a real price exists for the same player and
+    # market, the fake one is not a second opinion, it is noise the board cannot
+    # distinguish from a market — and its -110/-110 de-vigs to exactly 0.500,
+    # so it reads as a book disagreeing with us at maximum confidence.
+    #
+    # This happened for real: week 8 of 2025 was seeded with synthetic lines on
+    # 2026-08-04, the bought closing lines landed on 2026-08-05, and 556 board
+    # picks spent three days priced off a fake line while a real quote sat
+    # beside it. `audit_data` caught it, but only when somebody ran it. Doing
+    # the eviction here makes the collision impossible rather than detectable.
+    if adapter_name != SYNTHETIC_ADAPTER:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                delete from player_prop_lines
+                 where source_adapter = %s
+                   and (game_id, player_id, market_key) in (
+                         select unnest(%s::bigint[]), unnest(%s::bigint[]),
+                                unnest(%s::text[]))
+                """,
+                (
+                    SYNTHETIC_ADAPTER,
+                    [r[0] for r in rows],
+                    [r[1] for r in rows],
+                    [r[2] for r in rows],
+                ),
+            )
+            report.synthetic_displaced += cur.rowcount
 
 
 def run(

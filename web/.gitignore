@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Screenshot output from scripts/shoot.mjs — images are output, not source.
+screenshots/

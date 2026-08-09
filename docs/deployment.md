@@ -1,20 +1,29 @@
 # Deployment — what the client has to provide, and in what order
 
-The repo is pushed. Nothing else is deployed: no Vercel project, no Render
-service, and the whole system still runs from one machine against a development
-Supabase instance (project `nqpmqbeszomyczhgkkrm`, `ca-central-1`, 449 MB).
+**Status 2026-08-09.** The production database is live and loaded. What remains
+is Vercel and Render.
 
-**Status 2026-08-06:** the client's GitHub and Supabase invites are accepted and
-the repo is live at `github.com/lgdsbrand/CFB--Player--Props`. He has created the
-Supabase project ("CFB- Player- Props") but **has not sent its database
-password**, so step 2 onward is blocked on him — and **the region he used is
-unverified**. Check it the moment access arrives: `vercel.json` pins `yul1`,
-which pairs only with `ca-central-1`, and recreating an empty project today is
-a two-minute job where migrating a full one later is not.
+- **Supabase production is done.** Project `enpoqrnrbzcoyshstwgf`
+  ("CFB- Player- Props"), region **`ca-central-1` — verified**, which is what
+  makes the `yul1` pin in step 3 same-region rather than merely close. The
+  password the client first sent never authenticated; he reset it and the
+  replacement works.
+- **All 29 migrations applied and recorded**, via
+  `npx --yes supabase@latest db push --db-url "<prod>" --yes`. The claim below
+  that there is no `supabase` CLI on this machine is obsolete: Node and npx are
+  here, and the CLI installs on first use, which is strictly better than
+  hand-applied SQL because it maintains the ledger itself.
+- **The data is moved and verified.** 234.5 MB in 276 s; all 27 tables agree on
+  row count *and* on a checksum over every column; 22 identity sequences reset.
+  Production is **333.2 MB** against the 500 MB free-tier cap.
+- **Reads verified from outside** with `npm run check:schema` against
+  production: 15 tables/views plus the RPC, all readable **as the anon role**,
+  which is what proves RLS permits public reads.
+- **Still to do:** the Vercel project (step 3) and the Render worker (step 6).
+  The Odds API pool is separately exhausted until 1 September — see §5.
 
-The migration in step 5 is written, tested and waiting: `migrate_database`
-proved its copy path byte-exact against development on 2026-08-06, so the only
-untested thing left in it is the target.
+The whole system still runs from one machine, so nothing refreshes on a schedule
+until Render is up.
 
 The guiding principle: **every account is created by the client, in the client's
 name, with us invited as a collaborator.** Not because of trust — because when
@@ -101,23 +110,39 @@ Each step is quick; the waiting is all in step 0.
    base64 sha512 integrity hash in `package-lock.json` that happens to contain
    `eyJ`.
 2. **Create the Supabase production project in `ca-central-1` (Montréal).**
+   ✅ **Done** — `enpoqrnrbzcoyshstwgf`, region verified.
    Not us-east-1. The client's existing Legends infrastructure is in
    ca-central-1, the development project already is too — so the migration in
    step 5 never leaves the region — and Vercel's `yul1` maps to exactly this
    region, so the pairing in step 3 is same-region rather than merely close.
-3. **Create the Vercel project from the repo.** The function region is pinned
-   in [`vercel.json`](../vercel.json) as `yul1`, so it does not depend on
-   anyone remembering a dashboard setting; Hobby allows any single region, and
-   `iad1` is only the default for projects that never choose. This is worth
+3. **Create the Vercel project from the repo.** Set **Root Directory to `web`** —
+   there is no `package.json` at the repo root, so nothing builds without it.
+   The function region is pinned in [`web/vercel.json`](../web/vercel.json) as
+   `yul1`, so it does not depend on anyone remembering a dashboard setting;
+   Hobby allows any single region, and `iad1` is only the default for projects
+   that never choose. **The file lives in `web/`, not at the repo root, and that
+   is load-bearing:** Vercel reads `vercel.json` from the configured Root
+   Directory, so a copy at the repo root is ignored — silently, with the
+   deployment succeeding and the functions landing in Washington while the
+   database sits in Montréal. It was at the root until 2026-08-09 and would
+   have done exactly that. This is worth
    more than every code optimisation in the project
    combined: from a development machine one database round trip costs ~415 ms
    regardless of payload, and a page makes three to six of them in sequence. In
    the same region that is single-digit milliseconds. Same code, same queries —
    the board goes from ~2.5 s to roughly a fifth of a second.
-4. **Apply the migrations** (29 of them) and confirm the ledger. There is no
-   `supabase` CLI on our machine, so this runs through the worker's connection;
-   see [runbook.md](runbook.md#applying-a-migration). Applying without recording
-   is how the ledger drifted once already — both halves or neither. Step 5's
+4. **Apply the migrations** (29 of them) and confirm the ledger.
+   ✅ **Done 2026-08-09.** Use the Supabase CLI through npx — Node is on this
+   machine and the CLI installs on first use, so the older instruction to
+   hand-apply SQL through the worker's connection no longer applies:
+
+       npx --yes supabase@latest db push --db-url "<prod DSN>" --yes
+
+   It maintains the ledger itself, which is the whole point: applying without
+   recording is how the ledger drifted once already — both halves or neither.
+   It prints a Docker warning about caching a local catalog; that is unrelated
+   and safe to ignore. See [runbook.md](runbook.md#applying-a-migration) for the
+   manual path if npx is ever unavailable. Step 5's
    pre-flight re-checks this and refuses to move data onto a target whose ledger
    is short, so a missed migration surfaces here rather than as missing rows.
 5. **MIGRATE the development database — do not re-ingest it.** This step used to

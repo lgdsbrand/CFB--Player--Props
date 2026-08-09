@@ -432,6 +432,56 @@ def test_an_empty_source_is_refused(conn):
 
 
 @pytest.mark.integration
+def test_one_database_reached_twice_is_not_mistaken_for_two(conn):
+    """The guard that stands between a swapped DSN and a truncated source.
+
+    Its previous implementation compared `system_identifier`, which on Supabase
+    is cloned from the provisioning image and is identical across unrelated
+    projects — it refused the real migration on 2026-08-09 while development
+    held 28 tables and production none. The replacement had to keep the half
+    that matters, so this opens a SECOND connection to the same database and
+    asserts the probe still calls it one database. Two connections, not one
+    object: `src is dst` is caught by a separate branch and would let a broken
+    probe pass this test.
+
+    The distinct case cannot be tested here — it needs a second database, which
+    CI does not have — so this asserts the direction that loses data.
+    """
+    with psycopg.connect(get_settings().database_url, row_factory=dict_row) as other:
+        distinct, evidence = md.distinct_databases(conn, other)
+    assert not distinct, evidence
+    assert "SAME database" in evidence
+
+
+@pytest.mark.integration
+def test_the_same_connection_twice_is_not_mistaken_for_two(conn):
+    """Advisory locks are re-entrant within a session, so a single connection
+    passed as both ends would take its own lock and look distinct. Caught
+    before the probe runs rather than by it."""
+    distinct, evidence = md.distinct_databases(conn, conn)
+    assert not distinct
+    assert "same connection" in evidence
+
+
+@pytest.mark.integration
+def test_the_probe_leaves_no_lock_behind(conn):
+    """Session-level advisory locks survive both commit and rollback. One that
+    is not handed back would sit there for the life of the connection, and the
+    next probe on that session would read it as a second database."""
+    held = (
+        "select count(*) as n from pg_locks "
+        "where locktype = 'advisory' and pid = pg_backend_pid()"
+    )
+
+    with psycopg.connect(get_settings().database_url, row_factory=dict_row) as other:
+        md.distinct_databases(conn, other)
+        for end in (conn, other):
+            with end.cursor() as cur:
+                cur.execute(held)
+                assert cur.fetchone()["n"] == 0
+
+
+@pytest.mark.integration
 def test_checksums_are_stable_across_two_reads(conn):
     """The verification is only meaningful if the same rows hash the same way
     twice. Timestamp and numeric rendering both depend on session settings,

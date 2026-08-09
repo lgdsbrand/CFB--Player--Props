@@ -556,6 +556,19 @@ re-runnable, and it is also why it refuses to run when source and target resolve
 to the same database. A failed run leaves production partially loaded; re-run
 `--execute` and it starts clean.
 
+**How it decides the two ends are different, and why not the obvious way.** It
+takes an advisory lock on the source and tries to re-take it on the target;
+advisory locks are per-database, so success proves separate databases and it
+writes nothing. It does **not** compare `system_identifier` from
+`pg_control_system()`, which is the textbook test and is wrong on Supabase:
+every project is provisioned from one base image, so unrelated projects report
+the *same* identifier — measured 2026-08-09, development and production both
+reported `7666007964130682852` (and `pg_database.oid` 5) while one held 28
+tables and the other none. That comparison refused the real migration. If the
+probe itself cannot run the job stops rather than guessing, because a
+same-database run has equal row counts on both ends and sails straight through
+the direction check.
+
 **The pre-flight is the useful part.** Before writing anything it confirms the
 target's migration ledger is complete, that both ends have identical column
 lists for every planned table, and that no table in `public` is missing from the

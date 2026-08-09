@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import secrets
 import sys
 import time
 from dataclasses import dataclass, field
@@ -207,15 +208,73 @@ def _identity(conn: psycopg.Connection) -> dict[str, str]:
     return {k: str(v) for k, v in (row or {}).items()}
 
 
-def _same_database(src: psycopg.Connection, dst: psycopg.Connection) -> bool:
-    with src.cursor() as cur:
-        cur.execute("select system_identifier from pg_control_system()")
-        a = cur.fetchone()
-        cur2 = dst.cursor()
-        cur2.execute("select system_identifier from pg_control_system()")
-        b = cur2.fetchone()
-        cur2.close()
-    return bool(a and b and a["system_identifier"] == b["system_identifier"])
+def distinct_databases(
+    src: psycopg.Connection, dst: psycopg.Connection
+) -> tuple[bool, str]:
+    """Prove the two ends are different databases — or refuse, rather than guess.
+
+    NOT `system_identifier`, which is what this compared until 2026-08-09 and
+    what every reference recommends. **Supabase provisions every project from
+    one base image, so `pg_control_system()` reports the same identifier on
+    unrelated projects.** Development `nqpmq…` and production `enpoq…` both
+    report 7666007964130682852, and both report `pg_database.oid` 5, while one
+    holds 28 tables and the other none. On the first real run the textbook
+    identity test refused a correct migration, and it would have gone on
+    refusing it. Neither of those values means anything here.
+
+    Advisory locks are scoped to a database: a lock the source session holds is
+    invisible from any other database and blocking from the same one. Taking it
+    on one end and failing to re-take it on the other is therefore a proof
+    rather than a comparison of values that may have been cloned — and it still
+    writes nothing. The key is random per call so an unrelated process sitting
+    on a fixed key cannot masquerade as the source and make two databases look
+    like one.
+
+    Returns (proved distinct, evidence). A probe that cannot run returns False:
+    the caller must not proceed on an unproven guess, because the equal row
+    counts of a same-database run sail straight through `check_direction`, and
+    this is the only thing standing between that and a truncated source.
+    """
+    if src is dst:
+        return False, "both ends are the same connection object"
+
+    key = secrets.randbits(62) + 1
+    try:
+        with src.cursor() as cur:
+            cur.execute("select pg_advisory_lock(%s)", (key,))
+        try:
+            with dst.cursor() as cur:
+                cur.execute("select pg_try_advisory_lock(%s) as taken", (key,))
+                taken = bool((cur.fetchone() or {}).get("taken"))
+            if taken:
+                with dst.cursor() as cur:
+                    cur.execute("select pg_advisory_unlock(%s)", (key,))
+        finally:
+            # Session-level, so it outlives the rollback below and has to go
+            # back explicitly. A leaked lock would fail the *next* run.
+            with src.cursor() as cur:
+                cur.execute("select pg_advisory_unlock(%s)", (key,))
+    except psycopg.Error as exc:
+        src.rollback()
+        dst.rollback()
+        return False, (
+            f"the advisory-lock probe could not run ({exc.__class__.__name__}: "
+            f"{exc}). It needs a session-mode connection on both ends — the "
+            "6543 transaction pooler hands each statement to a different "
+            "backend and cannot hold one. Nothing has been written."
+        )
+
+    src.rollback()
+    dst.rollback()
+
+    if not taken:
+        return False, (
+            "the target took an advisory lock the source is holding, so both "
+            "DSNs address the SAME database. Truncating the target would "
+            f"truncate the development data this migration exists to preserve. "
+            f"{TARGET_URL_ENV} must be the production database."
+        )
+    return True, "advisory lock held on the source was free on the target"
 
 
 # =============================================================================
@@ -410,8 +469,9 @@ def check_direction(src: psycopg.Connection, dst: psycopg.Connection) -> list[st
     an empty production into it, and 5,752 closing lines that cost ~3,800 Odds
     API credits are gone — with no backup, because the free tier has none.
 
-    `_same_database` cannot catch this; both ends really are distinct databases.
-    The tell is the direction of the data: the source is the populated one.
+    `distinct_databases` cannot catch this; both ends really are distinct
+    databases. The tell is the direction of the data: the source is the
+    populated one.
     """
     problems: list[str] = []
 
@@ -925,12 +985,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             log.info("Target: %s", _identity(dst))
 
-            if _same_database(src, dst):
-                log.error(
-                    "Source and target are the same database. That would truncate "
-                    "the development data this migration exists to preserve."
-                )
+            distinct, evidence = distinct_databases(src, dst)
+            if not distinct:
+                log.error("Refusing to run: %s", evidence)
                 return 2
+            log.debug("Distinct databases: %s.", evidence)
 
             problems = preflight(src, dst)
             if problems:

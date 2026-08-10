@@ -5,6 +5,7 @@ import { EvidencePill } from "@/components/board/evidence-pill";
 import { LastFive } from "@/components/board/last-five";
 import { ProjectionBar } from "@/components/board/projection-bar";
 import { TeamChip } from "@/components/board/team-chip";
+import { NotConfigured } from "@/components/not-configured";
 import { DefenseDetail } from "@/components/player/defense-detail";
 import { GameLogTable } from "@/components/player/game-log-table";
 import { HitRateChart } from "@/components/player/hit-rate-chart";
@@ -75,13 +76,7 @@ export default async function PlayerDetail({
   if (!isSupabaseConfigured()) {
     return (
       <Shell>
-        <div className="panel p-6">
-          <h1 className="section-header mb-2">Not configured</h1>
-          <p className="text-muted text-sm">
-            Set the Supabase environment variables in{" "}
-            <code className="font-mono">web/.env.local</code>, then reload.
-          </p>
-        </div>
+        <NotConfigured />
       </Shell>
     );
   }

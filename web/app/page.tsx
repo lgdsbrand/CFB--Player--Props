@@ -4,6 +4,7 @@ import { BoardControls } from "@/components/board/board-controls";
 import { EvidenceNote } from "@/components/board/evidence-note";
 import { PlayerCard } from "@/components/board/player-card";
 import { WeeklyTargets } from "@/components/board/weekly-targets";
+import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
 import { WeekStrip } from "@/components/week-strip";
 import {
@@ -50,14 +51,7 @@ export default async function Home({
   if (!isSupabaseConfigured()) {
     return (
       <Shell>
-        <div className="panel p-6">
-          <h1 className="section-header mb-2">Not configured</h1>
-          <p className="text-muted text-sm">
-            Set <code className="font-mono">NEXT_PUBLIC_SUPABASE_URL</code> and{" "}
-            <code className="font-mono">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> in{" "}
-            <code className="font-mono">web/.env.local</code>, then reload.
-          </p>
-        </div>
+        <NotConfigured />
       </Shell>
     );
   }

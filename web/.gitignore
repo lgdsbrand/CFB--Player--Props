@@ -42,3 +42,6 @@ next-env.d.ts
 
 # Screenshot output from scripts/shoot.mjs — images are output, not source.
 screenshots/
+
+# Output of scripts/audit-app.mjs, not source.
+audit-results.json

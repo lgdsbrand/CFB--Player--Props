@@ -135,6 +135,24 @@
     color: var(--color-muted);
   }
 
+  /* Horizontal scroller whose edges fade out.
+
+     WHY. A card cut off flat by the viewport edge reads as a rendering fault,
+     not as "there is more this way". The week strip hides 1,771px at 390 and
+     still hides ~900px at 1440, so this is not a narrow-screen nicety. Fading
+     both edges rather than only the right is honest: the strip scrolls the
+     selected week into view, so there is usually content hidden on both
+     sides. */
+  .scroll-fade-x {
+    mask-image: linear-gradient(
+      to right,
+      transparent 0,
+      black 1.25rem,
+      black calc(100% - 1.25rem),
+      transparent 100%
+    );
+  }
+
   /* Bold wide-tracked uppercase section header */
   .section-header {
     font-size: 0.8125rem;

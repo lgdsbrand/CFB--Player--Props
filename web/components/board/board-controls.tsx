@@ -155,8 +155,21 @@ function PillGroup({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-1.5">
-      <span className="label-caption">{label}</span>
+    // `items-start`, not `items-center`. When the pills wrap — MARKET takes
+    // three rows at 390px — centring the caption against the whole group
+    // parks it beside the MIDDLE row, where it reads as labelling that row
+    // rather than the group. Measured 25px adrift before this.
+    //
+    // The caption gets its own box the height of one pill row (`h-5.75` =
+    // 23px = a pill's 15px line box plus its `py-1`) offset by the
+    // container's `p-0.5`, so it
+    // centres on the FIRST row at any wrap depth instead of being nudged by a
+    // number that only happens to work at one width. `scripts/measure.mjs`
+    // reports the drift if the type scale ever moves this.
+    <div className="flex items-start gap-1.5">
+      <span className="label-caption mt-0.5 flex h-5.75 shrink-0 items-center">
+        {label}
+      </span>
       <div className="border-border-subtle bg-panel flex flex-wrap gap-0.5 rounded-full border p-0.5">
         {children}
       </div>

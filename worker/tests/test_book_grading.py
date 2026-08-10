@@ -20,17 +20,23 @@ from __future__ import annotations
 import pytest
 
 from worker.core.book_grading import (
+    MIN_BAND_N,
     BookPriceRow,
     SideLift,
+    WeekResult,
     american_to_decimal,
+    band_replication,
     breakeven_rate,
     by_market,
+    by_week,
     confidence_bands,
     fixed_side,
+    gap_sign_flips,
     grade_bet,
     over_base_rate,
     side_lift,
     summarise,
+    week_results,
 )
 
 # A normal distribution centred at 100 with sd 25. P(over 100) = 0.5 exactly.
@@ -421,3 +427,118 @@ class TestBenchmarks:
         under = fixed_side(bets, "under")
         assert under.n == 3       # the push was staked
         assert under.decided == 2  # and settled nothing
+
+
+# -----------------------------------------------------------------------------
+# Replication across weeks
+# -----------------------------------------------------------------------------
+# The pooled report said the model was overconfident by +7.3 points in the
+# 0.60-0.70 band. Week 7 was +0.6 and week 8 was +15.8: one week, averaged into
+# something that looked like a model property and argued for widening every
+# distribution in the product. These tests are about that failure only.
+
+# P(over) = 0.35 against the NORMAL fixture, so confidence is 0.65 on the UNDER
+# side and every bet built from it lands in the 0.60-0.70 band.
+BAND_65_LINE = 100.0 + 0.3853 * 25.0
+
+
+def band_bets(week: int, n: int, hits: int):
+    """`n` bets at confidence 0.65, `hits` of which the UNDER actually wins."""
+    return [
+        bet(
+            week=week,
+            player_id=1000 * week + i,
+            line=BAND_65_LINE,
+            actual_value=0.0 if i < hits else 200.0,
+        )
+        for i in range(n)
+    ]
+
+
+def week_result(week: int, model: float, blind: float, threshold: float = 0.05):
+    return WeekResult(
+        week=week,
+        threshold=threshold,
+        n=100,
+        over_base=0.43,
+        model_roi=model,
+        blind_under_roi=blind,
+    )
+
+
+class TestWeekGrouping:
+    def test_weeks_come_back_in_order(self):
+        grouped = by_week(band_bets(8, 2, 1) + band_bets(7, 3, 2))
+        assert list(grouped) == [7, 8]
+        assert [len(v) for v in grouped.values()] == [3, 2]
+
+    def test_every_week_is_reported_at_every_threshold(self):
+        results = week_results(band_bets(7, 30, 20) + band_bets(8, 30, 15), (0.0, 0.05))
+        assert {(r.week, r.threshold) for r in results} == {
+            (7, 0.0),
+            (7, 0.05),
+            (8, 0.0),
+            (8, 0.05),
+        }
+
+
+class TestSignFlip:
+    def test_beating_the_blind_side_in_one_week_and_losing_in_another_is_flagged(self):
+        """The finding that pooling hid: +1.5% in week 7, -11.4% in week 8."""
+        results = [week_result(7, 0.118, 0.103), week_result(8, -0.067, 0.047)]
+        assert gap_sign_flips(results, 0.05)
+
+    def test_losing_in_both_weeks_is_not_a_flip(self):
+        # Consistently behind is a verdict, not a disagreement. Flagging it
+        # would cry wolf on the one case worth shouting about.
+        results = [week_result(7, 0.02, 0.10), week_result(8, -0.06, 0.05)]
+        assert not gap_sign_flips(results, 0.05)
+
+    def test_one_week_cannot_disagree_with_itself(self):
+        assert not gap_sign_flips([week_result(7, 0.118, 0.103)], 0.05)
+
+    def test_a_flip_at_another_threshold_is_not_reported_at_this_one(self):
+        """Today's flip exists at 5% and not at 0%; conflating them would make
+        the warning unfalsifiable."""
+        results = [
+            week_result(7, 0.118, 0.103, threshold=0.05),
+            week_result(8, -0.067, 0.047, threshold=0.05),
+            week_result(7, 0.064, 0.103, threshold=0.0),
+            week_result(8, -0.025, 0.000, threshold=0.0),
+        ]
+        assert gap_sign_flips(results, 0.05)
+        assert not gap_sign_flips(results, 0.0)
+
+
+class TestBandReplication:
+    def test_a_band_that_disagrees_between_weeks_says_so(self):
+        """40 bets a week at confidence 0.65: one week lands 65%, the other
+        50%. That is a 15-point spread and the exact shape of the real one."""
+        bets = band_bets(7, 40, 26) + band_bets(8, 40, 20)
+        band = next(b for b in band_replication(bets) if b.lower == 0.6)
+        assert band.errors[7] == pytest.approx(0.0, abs=0.01)
+        assert band.errors[8] == pytest.approx(0.15, abs=0.01)
+        assert band.spread == pytest.approx(0.15, abs=0.01)
+        assert band.disagrees
+        assert not band.thin
+
+    def test_a_band_that_agrees_is_not_flagged(self):
+        bets = band_bets(7, 40, 26) + band_bets(8, 40, 26)
+        band = next(b for b in band_replication(bets) if b.lower == 0.6)
+        assert not band.disagrees
+
+    def test_a_thin_band_never_disagrees_however_wild_the_swing(self):
+        """The 0.80-1.01 band held 7 bets one week and 12 the next and swung 42
+        points. Without this the loudest warning in the report would be its
+        least meaningful row."""
+        n = MIN_BAND_N - 1
+        bets = band_bets(7, n, n) + band_bets(8, n, 0)
+        band = next(b for b in band_replication(bets) if b.lower == 0.6)
+        assert band.thin
+        assert band.spread > 0.5
+        assert not band.disagrees
+
+    def test_one_week_of_data_cannot_disagree(self):
+        band = next(b for b in band_replication(band_bets(7, 40, 20)) if b.lower == 0.6)
+        assert band.spread is None
+        assert not band.disagrees

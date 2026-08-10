@@ -508,3 +508,150 @@ def confidence_bands(
             )
         )
     return bands
+
+
+# =============================================================================
+# Replication across weeks
+# =============================================================================
+# WHY THIS EXISTS, AND WHAT IT COST TO LEARN. On 2026-08-10 the pooled report
+# for 2025 weeks 7+8 showed the model overconfident by +7.3 and +9.6 points in
+# the 0.60-0.70 and 0.70-0.80 bands, which reads as a clear dispersion defect
+# and a clear instruction to widen the distributions. Split by week, week 7 is
+# +0.6 and -0.6 — calibrated — and every bit of that error is week 8. Pooling
+# two weeks manufactured an effect that exists in one of them, and the fix it
+# argued for would have been fitted to a single slate.
+#
+# The same split flips the headline: at edge >= 5% the model beats blind under
+# by +1.5% in week 7 and loses to it by 11.4% in week 8. Pooled, that averages
+# into one unremarkable negative number and the disagreement disappears.
+#
+# So the report shows both, and says so out loud when they disagree. This is
+# the same discipline that killed the earlier "edge is anti-predictive"
+# finding: an effect measured on one slate is a fact about that slate until a
+# second one agrees.
+
+# Below this a band's error is noise, not a measurement. The 0.80-1.01 band
+# held 7 bets in week 7 and 12 in week 8 and swung 42 points between them.
+MIN_BAND_N = 25
+
+# Percentage points of calibration error between weeks that count as
+# disagreement. Not a new invention: "within ~5 points" was already the
+# pre-registered bar this project used to judge whether a band-level
+# calibration finding had replicated.
+BAND_DISAGREEMENT_PTS = 0.05
+
+
+def by_week(bets: Sequence[BookBet]) -> dict[int, list[BookBet]]:
+    """Bets grouped by week, in week order."""
+    grouped: dict[int, list[BookBet]] = {}
+    for bet in bets:
+        grouped.setdefault(bet.week, []).append(bet)
+    return dict(sorted(grouped.items()))
+
+
+@dataclass
+class WeekResult:
+    """One week's headline, next to the blind side it has to beat."""
+
+    week: int
+    threshold: float
+    n: int
+    over_base: float | None
+    model_roi: float | None
+    blind_under_roi: float | None
+
+    @property
+    def gap(self) -> float | None:
+        if self.model_roi is None or self.blind_under_roi is None:
+            return None
+        return self.model_roi - self.blind_under_roi
+
+
+def week_results(
+    bets: Sequence[BookBet], thresholds: Sequence[float]
+) -> list[WeekResult]:
+    out: list[WeekResult] = []
+    for week, rows in by_week(bets).items():
+        for threshold in thresholds:
+            model = summarise(rows, threshold)
+            blind = fixed_side(rows, "under", threshold)
+            out.append(
+                WeekResult(
+                    week=week,
+                    threshold=threshold,
+                    n=model.n,
+                    over_base=over_base_rate(rows),
+                    model_roi=model.roi_median,
+                    blind_under_roi=blind.roi_median,
+                )
+            )
+    return out
+
+
+def gap_sign_flips(results: Sequence[WeekResult], threshold: float) -> bool:
+    """Does the model beat blind under in one week and lose to it in another?
+
+    The single most important thing pooling hides, because it is the difference
+    between "the model adds something" and "two slates disagree".
+    """
+    gaps = [
+        r.gap
+        for r in results
+        if r.threshold == threshold and r.gap is not None
+    ]
+    if len(gaps) < 2:
+        return False
+    return max(gaps) > 0 > min(gaps)
+
+
+@dataclass
+class BandReplication:
+    """One confidence band's model error, week by week."""
+
+    lower: float
+    upper: float
+    errors: dict[int, float]
+    counts: dict[int, int]
+
+    @property
+    def thin(self) -> bool:
+        """Any week too small for its error to mean anything."""
+        return any(n < MIN_BAND_N for n in self.counts.values())
+
+    @property
+    def spread(self) -> float | None:
+        if len(self.errors) < 2:
+            return None
+        return max(self.errors.values()) - min(self.errors.values())
+
+    @property
+    def disagrees(self) -> bool:
+        """A real disagreement, not one manufactured by a handful of bets."""
+        if self.thin or self.spread is None:
+            return False
+        return self.spread >= BAND_DISAGREEMENT_PTS
+
+
+def band_replication(
+    bets: Sequence[BookBet], edges: Sequence[float] = (0.5, 0.6, 0.7, 0.8, 1.01)
+) -> list[BandReplication]:
+    """Per-band model error for every week, so a one-week effect is visible."""
+    weeks = by_week(bets)
+    out: list[BandReplication] = []
+    for lower, upper in zip(edges, edges[1:], strict=False):
+        errors: dict[int, float] = {}
+        counts: dict[int, int] = {}
+        for week, rows in weeks.items():
+            band = next(
+                (b for b in confidence_bands(rows, edges) if b.lower == lower),
+                None,
+            )
+            if band is None:
+                continue
+            errors[week] = band.model_error
+            counts[week] = band.n
+        if errors:
+            out.append(
+                BandReplication(lower=lower, upper=upper, errors=errors, counts=counts)
+            )
+    return out

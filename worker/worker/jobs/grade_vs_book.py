@@ -35,15 +35,18 @@ from worker.config import ConfigError, get_settings
 from worker.core.book_grading import (
     BookBet,
     BookPriceRow,
+    band_replication,
     by_market,
     confidence_bands,
     edge_thresholds,
     fixed_side,
+    gap_sign_flips,
     grade_bet,
     median_edge,
     over_base_rate,
     side_lift,
     summarise,
+    week_results,
 )
 from worker.db import fetch_all, pipeline_run
 from worker.logging_setup import configure_logging, get_logger
@@ -151,6 +154,80 @@ def to_bets(rows: list[dict[str, Any]], season: int, week: int) -> list[BookBet]
     return bets
 
 
+def render_replication(
+    bets: list[BookBet], thresholds: tuple[float, ...]
+) -> list[str]:
+    """Every headline again, one week at a time, and a shout when they differ.
+
+    Nothing here is a new statistic. It is the same ROI, the same blind-under
+    benchmark and the same reliability bands the sections above print, refused
+    permission to pool. See `core/book_grading.py` for what pooling cost on
+    2026-08-10: a dispersion "defect" that lived entirely in week 8, and a
+    model-beats-blind-under result that changes sign between the two weeks.
+    """
+    if len({b.week for b in bets}) < 2:
+        return []
+
+    shown = sorted({thresholds[0], 0.05})
+    results = week_results(bets, shown)
+
+    lines = [
+        "",
+        "  DOES IT REPLICATE? — pooling weeks can manufacture an effect "
+        "neither week has",
+        f"    {'week':>4} {'n':>6} {'over%':>7} {'at edge':>8} "
+        f"{'MODEL':>8} {'blind under':>12} {'model - blind':>14}",
+    ]
+    for r in results:
+        base = f"{r.over_base:.1%}" if r.over_base is not None else "—"
+        model = f"{r.model_roi:+.1%}" if r.model_roi is not None else "—"
+        blind = f"{r.blind_under_roi:+.1%}" if r.blind_under_roi is not None else "—"
+        gap = f"{r.gap:+.1%}" if r.gap is not None else "—"
+        lines.append(
+            f"    {r.week:>4} {r.n:>6,} {base:>7} {r.threshold:>7.0%} "
+            f"{model:>8} {blind:>12} {gap:>14}"
+        )
+
+    for threshold in shown:
+        if not gap_sign_flips(results, threshold):
+            continue
+        detail = ", ".join(
+            f"wk{r.week} {r.gap:+.1%}"
+            for r in results
+            if r.threshold == threshold and r.gap is not None
+        )
+        lines.append(
+            f"    ! at edge >= {threshold:.0%} the model beats blind under in "
+            f"one week and loses in another ({detail}). The sign flips, so the "
+            "pooled figure is an average of two different answers."
+        )
+
+    bands = band_replication(bets)
+    if bands:
+        weeks = sorted({w for b in bands for w in b.errors})
+        header = "".join(f"{'wk' + str(w):>9}" for w in weeks)
+        lines.append("")
+        lines.append(f"    model error by band and week{'':<3}{header}")
+        for band in bands:
+            cells = "".join(
+                f"{band.errors[w]:>+8.1%} " if w in band.errors else f"{'—':>9}"
+                for w in weeks
+            )
+            note = ""
+            if band.thin:
+                ns = "/".join(str(band.counts[w]) for w in weeks if w in band.counts)
+                note = f"  (thin: n={ns}, ignore)"
+            elif band.disagrees:
+                note = f"  ! spread {band.spread:.1%} — does NOT replicate"
+            lines.append(f"    {band.lower:.2f}-{band.upper:.2f}{'':<17}{cells}{note}")
+
+    lines.append(
+        "    An effect present in one week and absent in another is a fact "
+        "about that week. Fitting to it fits the slate, not the model."
+    )
+    return lines
+
+
 def render(bets: list[BookBet], thresholds: tuple[float, ...]) -> str:
     """The report. Every win rate carries its break-even, deliberately."""
     if not bets:
@@ -247,6 +324,8 @@ def render(bets: list[BookBet], thresholds: tuple[float, ...]) -> str:
         "    A POSITIVE model error is overconfidence: it claimed more than it "
         "delivered. Compare it against the book's error on the same rows."
     )
+
+    lines.extend(render_replication(bets, thresholds))
 
     lines.append("")
     lines.append("  READ THIS BEFORE QUOTING ANY OF IT")

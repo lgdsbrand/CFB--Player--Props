@@ -160,6 +160,18 @@ export default async function Home({
       offenseOnBoard(teamDirectory.get(teamId), resolved.conference),
   });
 
+  // The game selector must only offer games the board can populate, for the
+  // same reason the targets panel must. A slate carries plenty of G5-vs-G5
+  // games with nobody in a displayed conference: measured on 2025 week 8, five
+  // of the first eight games in this dropdown returned an empty board. EITHER
+  // side qualifying is enough, since a game with one displayed team still shows
+  // that team's players.
+  const selectableGames = games.filter(
+    (game) =>
+      offenseOnBoard(teamDirectory.get(game.homeTeamId), resolved.conference) ||
+      offenseOnBoard(teamDirectory.get(game.awayTeamId), resolved.conference),
+  );
+
   const marketsByKey = new Map(markets.map((market) => [market.key, market]));
   const coverage = lineCoverage(counts);
   // Counted over the whole week rather than the filtered page, like the line
@@ -196,7 +208,7 @@ export default async function Home({
         params={resolved}
         markets={markets}
         conferences={conferences}
-        games={games}
+        games={selectableGames}
         hitRateWindows={config.hitRateWindows}
         resultCount={cardKeys.keys.length}
       />

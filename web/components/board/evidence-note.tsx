@@ -36,9 +36,13 @@ export function EvidenceNote({ slate }: { slate: SlateEvidence }) {
       {slate.mostlyThin ? (
         <>
           {formatCount(slate.thin)} of {formatCount(slate.rows)} projections
-          here rest on fewer than {THIN_EVIDENCE_GAMES} effective games — this
-          season&rsquo;s, plus last season&rsquo;s discounted to the weight the
-          model still gives them.{" "}
+          here rest on fewer than {THIN_EVIDENCE_GAMES}{" "}
+          {/* Explicit: the plain source space after the expression above was
+              being dropped in the build and the board read "4effective games"
+              on every opening-weekend slate. Verified in the served HTML, not
+              just on a screenshot. */}
+          effective games — this season&rsquo;s, plus last season&rsquo;s
+          discounted to the weight the model still gives them.{" "}
         </>
       ) : null}
       {slate.matchup === "none" ? (

@@ -89,7 +89,10 @@ export function WeeklyTargets({
       <p className="text-dim max-w-prose text-[0.625rem]">
         Rank is national and opponent-adjusted — 1 is the best of all rated
         defenses, not just those playing. The per-game figure is the adjusted
-        one the rank was built from, so it will not match a raw stat line.
+        one the rank was built from, so it will not match a raw stat line. Only
+        matchups whose offense the board covers are listed, so a softer defense
+        elsewhere can be missing here: every row has to lead to players you can
+        actually open.
       </p>
     </section>
   );

@@ -15,6 +15,7 @@ import {
   resetBoardHref,
   type RawParams,
 } from "@/lib/core/board-params";
+import { offenseOnBoard } from "@/lib/core/board-scope";
 import { groupIntoCards, lineCoverage } from "@/lib/core/board-view";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { slateEvidence } from "@/lib/core/evidence";
@@ -150,11 +151,13 @@ export default async function Home({
   // The conference filter applies to the OFFENSE, matching the board: someone
   // narrowed to the SEC wants SEC players to look at, and the soft defense is a
   // fact about whoever they are playing.
+  // Always narrowed, never open. With no conference filter the fallback is the
+  // displayed conferences rather than every FBS offense, because that is what
+  // the board itself falls back to — see `lib/core/board-scope.ts` for the 17
+  // dead links that came of the two disagreeing.
   const targets = buildWeeklyTargets(games, ratings, {
-    includeOffense: resolved.conference
-      ? (teamId) =>
-          teamDirectory.get(teamId)?.conferenceName === resolved.conference
-      : undefined,
+    includeOffense: (teamId) =>
+      offenseOnBoard(teamDirectory.get(teamId), resolved.conference),
   });
 
   const marketsByKey = new Map(markets.map((market) => [market.key, market]));

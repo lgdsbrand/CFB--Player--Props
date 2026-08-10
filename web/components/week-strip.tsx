@@ -33,6 +33,15 @@ import type { SlateWeek } from "@/lib/core/types";
  *
  * It sets `scrollLeft` on the nav directly rather than calling
  * `scrollIntoView`, which can also scroll ancestors and would yank the page.
+ *
+ * ONE SEASON AT A TIME, chosen by the pills above the strip. Every projected
+ * week used to render in a single scroller, which put the live week in a
+ * minority: at the 2026 opening it was 1 card of 17, and by mid-season it would
+ * be one of roughly 24 with the archive crowding the thing a reader came for.
+ * Prior seasons are kept rather than dropped — they are the visible evidence
+ * the model has a record behind it — but they no longer compete with the slate
+ * being played. The pills only appear when there is more than one season, so a
+ * single-season deployment (the NFL build's first year) shows no dead control.
  */
 export function WeekStrip({
   weeks,
@@ -55,48 +64,85 @@ export function WeekStrip({
 
   if (weeks.length === 0) return null;
 
+  // Newest first: the season a reader wants is the one being played.
+  const seasons = [...new Set(weeks.map((entry) => entry.season))].sort(
+    (a, b) => b - a,
+  );
+  const shownSeason = active?.season ?? seasons[0];
+  const shown = weeks.filter((entry) => entry.season === shownSeason);
+
   return (
-    <nav
-      ref={nav}
-      aria-label="Select week"
-      className="border-border-subtle scroll-fade-x flex gap-2 overflow-x-auto border-b pb-3"
-    >
-      {weeks.map((week) => {
-        const isActive =
-          active?.season === week.season && active?.week === week.week;
-        return (
-          <Link
-            key={`${week.season}-${week.week}`}
-            ref={isActive ? current : undefined}
-            href={`/?season=${week.season}&week=${week.week}`}
-            aria-current={isActive ? "page" : undefined}
-            className={
-              "flex min-w-30 shrink-0 flex-col gap-0.5 rounded-xl border px-3 py-2 transition-colors " +
-              (isActive
-                ? "border-accent-cyan/40 bg-accent-cyan/10"
-                : "border-border-subtle bg-panel hover:border-border-strong")
-            }
-          >
-            <span
+    <div className="flex flex-col gap-2">
+      {seasons.length > 1 ? (
+        <nav aria-label="Select season" className="flex gap-1.5">
+          {seasons.map((season) => {
+            // Land on that season's newest week, matching where the board
+            // opens by default rather than dropping a reader on week 1 of a
+            // finished season.
+            const landing = weeks.findLast((entry) => entry.season === season);
+            if (!landing) return null;
+            const isActive = season === shownSeason;
+            return (
+              <Link
+                key={season}
+                href={`/?season=${season}&week=${landing.week}`}
+                aria-current={isActive ? "true" : undefined}
+                className={
+                  "rounded-full border px-2.5 py-1 text-[0.6875rem] font-bold tabular-nums transition-colors " +
+                  (isActive
+                    ? "border-accent-cyan/40 bg-accent-cyan/10 text-accent-cyan"
+                    : "border-border-subtle bg-panel text-muted hover:border-border-strong")
+                }
+              >
+                {season}
+              </Link>
+            );
+          })}
+        </nav>
+      ) : null}
+
+      <nav
+        ref={nav}
+        aria-label="Select week"
+        className="border-border-subtle scroll-fade-x flex gap-2 overflow-x-auto border-b pb-3"
+      >
+        {shown.map((week) => {
+          const isActive =
+            active?.season === week.season && active?.week === week.week;
+          return (
+            <Link
+              key={`${week.season}-${week.week}`}
+              ref={isActive ? current : undefined}
+              href={`/?season=${week.season}&week=${week.week}`}
+              aria-current={isActive ? "page" : undefined}
               className={
-                "text-[0.625rem] font-semibold uppercase tracking-label " +
-                (isActive ? "text-accent-cyan" : "text-dim")
+                "flex min-w-30 shrink-0 flex-col gap-0.5 rounded-xl border px-3 py-2 transition-colors " +
+                (isActive
+                  ? "border-accent-cyan/40 bg-accent-cyan/10"
+                  : "border-border-subtle bg-panel hover:border-border-strong")
               }
             >
-              {week.season} · Week {week.week}
-            </span>
-            {/* nowrap: the date range is the card's identity, and letting it
-                break to two lines makes cards different heights down the
-                strip. The card is `shrink-0`, so it widens instead. */}
-            <span className="text-ink whitespace-nowrap text-sm font-bold">
-              {formatDateRange(week.firstKickoff, week.lastKickoff)}
-            </span>
-            <span className="text-muted text-[0.6875rem]">
-              {week.games} games
-            </span>
-          </Link>
-        );
-      })}
-    </nav>
+              <span
+                className={
+                  "text-[0.625rem] font-semibold uppercase tracking-label " +
+                  (isActive ? "text-accent-cyan" : "text-dim")
+                }
+              >
+                {week.season} · Week {week.week}
+              </span>
+              {/* nowrap: the date range is the card's identity, and letting it
+                  break to two lines makes cards different heights down the
+                  strip. The card is `shrink-0`, so it widens instead. */}
+              <span className="text-ink whitespace-nowrap text-sm font-bold">
+                {formatDateRange(week.firstKickoff, week.lastKickoff)}
+              </span>
+              <span className="text-muted text-[0.6875rem]">
+                {week.games} games
+              </span>
+            </Link>
+          );
+        })}
+      </nav>
+    </div>
   );
 }

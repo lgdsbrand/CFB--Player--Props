@@ -1,7 +1,6 @@
 import Link from "next/link";
 
 import { BoardControls } from "@/components/board/board-controls";
-import { EvidenceNote } from "@/components/board/evidence-note";
 import { PlayerCard } from "@/components/board/player-card";
 import { WeeklyTargets } from "@/components/board/weekly-targets";
 import { NotConfigured } from "@/components/not-configured";
@@ -18,7 +17,6 @@ import {
 import { offenseOnBoard } from "@/lib/core/board-scope";
 import { groupIntoCards, lineCoverage } from "@/lib/core/board-view";
 import { isSupabaseConfigured } from "@/lib/core/env";
-import { slateEvidence } from "@/lib/core/evidence";
 import { formatCount } from "@/lib/core/format";
 import { buildWeeklyTargets } from "@/lib/core/targets";
 import {
@@ -174,11 +172,6 @@ export default async function Home({
 
   const marketsByKey = new Map(markets.map((market) => [market.key, market]));
   const coverage = lineCoverage(counts);
-  // Counted over the whole week rather than the filtered page, like the line
-  // coverage above it: both describe the slate a reader is looking at, and a
-  // note whose numbers moved every time a position tab changed would read as a
-  // property of the filter instead of a property of the week.
-  const slate = slateEvidence(counts);
 
   return (
     <Shell>
@@ -259,8 +252,6 @@ export default async function Home({
             : "No book has posted a real NCAAF prop yet."}
         </p>
       ) : null}
-
-      <EvidenceNote slate={slate} />
 
       {cards.length === 0 ? (
         <EmptyBoard

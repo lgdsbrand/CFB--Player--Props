@@ -23,14 +23,22 @@
  * the opposite of the situation.
  *
  * `effectiveSample` cannot invert. That transfer shows 3.0 games against the
- * starter's 6.0, and less is always less. So the sample is what the board
- * shows, on cards and in its slate note alike, and the share appears only
- * where there is room for the sentence that keeps it honest — the player page.
+ * starter's 6.0, and less is always less. So the sample is what the card
+ * shows, and the share appears only where there is room for the sentence that
+ * keeps it honest — the player page.
  *
- * NOTHING HERE IS A CALENDAR TEST. No function asks what week it is. A slate
- * that is running on thin evidence says so because its rows say so, which is
- * the discipline migration 0027 records for `v_slate_weeks` — describe what
- * exists, not what a rule predicts should exist.
+ * NOTHING HERE IS A CALENDAR TEST. No function asks what week it is. A player
+ * running on thin evidence is flagged because his own row says so, not because
+ * of what week it is — describe what exists, not what a rule predicts should
+ * exist.
+ *
+ * THIS IS NOW A PER-PLAYER SIGNAL ONLY. There used to be a slate-level
+ * companion — `slateEvidence` and an `EvidenceNote` banner that said what share
+ * of a whole week was thin — and the client asked for it removed, so it is
+ * gone along with the two count queries that fed it. The per-card marker below
+ * is deliberately NOT part of that removal: it is what still separates a
+ * 9.2-game starter from a 2.0-game backup, on every week and not just the
+ * opening ones.
  */
 
 /**
@@ -49,31 +57,6 @@
  * exactly halved from its ceiling.
  */
 export const THIN_EVIDENCE_GAMES = 4;
-
-/**
- * Share of a slate that must be thin before the board says so.
- *
- * A note that fires for three stragglers trains people to ignore it. Measured
- * across all sixteen weeks of 2025 in the displayed conferences, this selects
- * weeks 1 and 2 (60%, 60%) and nothing later — week 5 is 37%, week 8 24%, week
- * 14 18%.
- *
- * WEEK 3 SITS AT 49.86% AND IS THEREFORE ONE ROW FROM FLIPPING, which is fine
- * and is worth understanding rather than tuning away. If it flips on, the note
- * reports "1,268 of 2,543 rest on fewer than four effective games" and "2,008
- * of 2,543 face a rated defense" — both true, both useful, neither alarming.
- * The claims that would be wrong outside an opening weekend are gated on
- * `openingWeekend`, which needs the ratings to be absent as well, and week 3's
- * are not. The threshold decides tone, not truth.
- *
- * AN EARLIER VERSION OF THIS COUNTED `prior_weight >= 0.4` INSTEAD, and it was
- * wrong in the way the module comment describes: on 2025 week 1 that reported
- * "1,979 of 3,068 projections rest mostly on last season" when all 3,068 do,
- * the missing 1,089 being transfers whose priors were discounted hardest. A
- * count that quietly excludes the least-evidenced third of the board is worse
- * than no count.
- */
-export const THIN_SLATE_SHARE = 0.5;
 
 export type Evidence = {
   /** Effective games behind the projection. */
@@ -148,69 +131,4 @@ export function evidenceTitle(evidence: Evidence): string {
       ? "Thin — the projection is doing more extrapolating than measuring."
       : "Enough to measure from rather than extrapolate.")
   );
-}
-
-/** What one week's rows say about the evidence behind the whole board. */
-export type SlateEvidence = {
-  rows: number;
-  /** Rows below `THIN_EVIDENCE_GAMES` of evidence. */
-  thin: number;
-  /** 0..1. Zero when the slate is empty, never NaN. */
-  thinShare: number;
-  /** `thinShare` past `THIN_SLATE_SHARE` — decided here, not in a component. */
-  mostlyThin: boolean;
-  ranked: number;
-  /**
-   * Whether an opponent adjustment was available for these rows.
-   *
-   * "none" is the opening-weekend state and is a fact about the DATA, not a
-   * degraded rendering: defense ratings are built from games played this
-   * season, so entering week 1 no defense in the league has one. Measured on
-   * 2025: 0 of 3,068 week-1 rows carry a rank, 1,122 of 3,041 in week 2, and
-   * 3,848 of 3,848 by week 8.
-   */
-  matchup: "none" | "partial" | "full";
-  /**
-   * The season has not yet produced evidence about anybody: most rows are thin
-   * AND no defense is rated.
-   *
-   * BOTH CONDITIONS, because either alone describes something else. Ratings can
-   * be missing in November if the job has not run — a real fault, and one this
-   * note should still report, but not one where "players with no prior season
-   * cannot be projected" is the useful thing to say. Thinness alone runs
-   * through week 3, where the matchup panels do work. Only the pair means
-   * opening weekend, and only that pair earns the coverage caveat.
-   */
-  openingWeekend: boolean;
-  /** Whether the board should say any of this out loud. */
-  show: boolean;
-};
-
-export function slateEvidence(counts: {
-  rows: number;
-  thin: number;
-  ranked: number;
-}): SlateEvidence {
-  const rows = Math.max(counts.rows, 0);
-  const thin = Math.min(Math.max(counts.thin, 0), rows);
-  const ranked = Math.min(Math.max(counts.ranked, 0), rows);
-  const thinShare = rows === 0 ? 0 : thin / rows;
-
-  const matchup = ranked === 0 ? "none" : ranked < rows ? "partial" : "full";
-  const mostlyThin = thinShare >= THIN_SLATE_SHARE;
-
-  return {
-    rows,
-    thin,
-    thinShare,
-    mostlyThin,
-    ranked,
-    matchup,
-    openingWeekend: rows > 0 && mostlyThin && matchup === "none",
-    // Two independent reasons to speak up, and the second is not redundant: a
-    // slate with no ratings at all is worth reporting even in November, where
-    // it would mean the ratings job has not run rather than that the season has
-    // not started. An empty slate says nothing — there is nothing to qualify.
-    show: rows > 0 && (mostlyThin || matchup === "none"),
-  };
 }

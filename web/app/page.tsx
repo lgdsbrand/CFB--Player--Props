@@ -19,7 +19,7 @@ import { offenseOnBoard } from "@/lib/core/board-scope";
 import { groupIntoCards, lineCoverage } from "@/lib/core/board-view";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { slateEvidence } from "@/lib/core/evidence";
-import { formatCount, formatDateRange } from "@/lib/core/format";
+import { formatCount } from "@/lib/core/format";
 import { buildWeeklyTargets } from "@/lib/core/targets";
 import {
   getBoardCardKeys,
@@ -188,18 +188,23 @@ export default async function Home({
           Player Props Board
         </h1>
         {/*
-          "Awaiting a line" means no line of any kind — not "no book line".
-          A row called against `markets.default_line` has a structural line and
-          a real call, and counting those as waiting understated the unpriced
-          population by an order of magnitude on every slate so far.
+          THE SLATE SUMMARY LINE WAS REMOVED HERE, deliberately, and this note
+          is what stops it being re-added by someone reading the page top to
+          bottom and finding the heading bare.
+
+          It read "2026 Week 1 · Aug 29 – Sep 7 · 97 games · 2,848 projections,
+          433 with a call, 2,415 still awaiting a line". The first half is
+          restated card-for-card by the week strip immediately below, and the
+          second half is pipeline bookkeeping: a reader does not act on how many
+          rows are awaiting a line, and on an opening slate the number is large
+          enough to read as a fault rather than as the designed late-line
+          behaviour (CLAUDE.md §7).
+
+          The facts it carried are all still on screen. The week, the dates and
+          the game count are on the strip; the state of the pricing is the
+          development-lines banner and the row count beside the filters, both of
+          which appear only when they have something to say.
         */}
-        <p className="text-muted text-sm">
-          {active.season} Week {active.week} ·{" "}
-          {formatDateRange(active.firstKickoff, active.lastKickoff)} ·{" "}
-          {active.games} games · {formatCount(counts.rows)} projections,{" "}
-          {formatCount(counts.withCall)} with a call,{" "}
-          {formatCount(coverage.awaitingLine)} still awaiting a line
-        </p>
       </div>
 
       <WeekStrip weeks={weeks} active={active} />

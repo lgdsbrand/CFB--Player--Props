@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import { formatDateRange } from "@/lib/core/format";
@@ -42,7 +42,30 @@ import type { SlateWeek } from "@/lib/core/types";
  * the model has a record behind it — but they no longer compete with the slate
  * being played. The pills only appear when there is more than one season, so a
  * single-season deployment (the NFL build's first year) shows no dead control.
+ *
+ * AND WITHIN A SEASON, THE WEEK BEING PLAYED PLUS THE ONE AHEAD. Narrowing the
+ * seasons left the live season's own weeks still competing with each other: by
+ * November the strip is sixteen cards of which fifteen are settled history, and
+ * the scroll-into-view below exists precisely because the card a reader wants
+ * had been pushed off screen by them.
+ *
+ * THE REST STAY ONE TAP AWAY RATHER THAN BEING DROPPED. Past weeks are how
+ * anyone checks whether the model was right last Saturday, which is the most
+ * reasonable question a reader can ask of a props board — a strip that made
+ * them unreachable would answer a layout complaint by removing the evidence.
+ * So the archive collapses behind a count instead, and expanding restores the
+ * previous behaviour exactly, scroll-into-view included.
  */
+
+/**
+ * Weeks shown before the archive collapses: the active week and the next.
+ *
+ * NOT A WINDOW CENTRED ON THE ACTIVE WEEK. Centring would spend one of two
+ * slots on a week already played, and the request this implements was for the
+ * week being played and the one coming. Looking backwards is what the expander
+ * is for, and it is a deliberate act rather than the default view.
+ */
+const WEEKS_SHOWN_COLLAPSED = 2;
 export function WeekStrip({
   weeks,
   active,
@@ -52,7 +75,12 @@ export function WeekStrip({
 }) {
   const nav = useRef<HTMLElement>(null);
   const current = useRef<HTMLAnchorElement>(null);
+  const [expanded, setExpanded] = useState(false);
 
+  // `expanded` is in the dependency list because the collapsed strip renders
+  // two cards and needs no scrolling, while the strip revealed by the expander
+  // does — and it is revealed at scrollLeft 0, which is the state this effect
+  // exists to correct.
   useEffect(() => {
     const strip = nav.current;
     const card = current.current;
@@ -60,7 +88,7 @@ export function WeekStrip({
     const s = strip.getBoundingClientRect();
     const c = card.getBoundingClientRect();
     strip.scrollLeft += c.left - s.left - (s.width - c.width) / 2;
-  }, [active?.season, active?.week]);
+  }, [active?.season, active?.week, expanded]);
 
   if (weeks.length === 0) return null;
 
@@ -69,7 +97,23 @@ export function WeekStrip({
     (a, b) => b - a,
   );
   const shownSeason = active?.season ?? seasons[0];
-  const shown = weeks.filter((entry) => entry.season === shownSeason);
+  const inSeason = weeks.filter((entry) => entry.season === shownSeason);
+
+  // Slice forward FROM the active week. `findIndex` returning -1 for a season
+  // with no active week (the reader switched seasons and landed on its newest)
+  // would slice from the end and show nothing, so it falls back to the start.
+  const activeIndex = Math.max(
+    inSeason.findIndex(
+      (entry) => entry.season === active?.season && entry.week === active?.week,
+    ),
+    0,
+  );
+  const collapsed = inSeason.slice(
+    activeIndex,
+    activeIndex + WEEKS_SHOWN_COLLAPSED,
+  );
+  const hidden = inSeason.length - collapsed.length;
+  const shown = expanded ? inSeason : collapsed;
 
   return (
     <div className="flex flex-col gap-2">
@@ -142,6 +186,28 @@ export function WeekStrip({
             </Link>
           );
         })}
+
+        {/*
+          Inside the scroller, after the cards, so it sits where the strip used
+          to continue rather than floating above it as a separate control. It
+          is the last thing in reading order for the same reason.
+
+          A BUTTON, NOT A LINK. Expanding shows more of the same season and
+          changes nothing about which week the board is rendering, so it carries
+          no URL state — unlike every other control in this component. Rendering
+          it as a link would put a week in the address bar that the reader had
+          not chosen.
+        */}
+        {hidden > 0 ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((open) => !open)}
+            aria-expanded={expanded}
+            className="border-border-subtle bg-panel text-muted hover:border-border-strong hover:text-ink flex shrink-0 items-center rounded-xl border px-3 py-2 text-[0.6875rem] font-bold uppercase tracking-label transition-colors"
+          >
+            {expanded ? "Show fewer" : `+ ${hidden} more`}
+          </button>
+        ) : null}
       </nav>
     </div>
   );

@@ -39,29 +39,15 @@ async function readSlateWeeks(): Promise<SlateWeek[]> {
 }
 
 /**
- * The week the board opens on.
+ * Which week the board opens on now lives in `lib/core/slate-view.ts`.
  *
- * The latest week with output, not "the week containing today". Today is
- * 2026-08-01 and the newest data is 2025 week 12: during the off-season, and
- * any time the pipeline is behind, "now" points at nothing. Opening on an empty
- * board to be literally correct about the date would be a worse product than
- * opening on the most recent real slate.
+ * It moved because it is a product decision about kickoff times with no
+ * database in it, and because the version that lived here — "the latest week
+ * with output" — shipped a bug that only appeared once the model started
+ * projecting FORWARD. Re-exported so call sites keep importing it beside the
+ * read that feeds it.
  */
-export function defaultWeek(weeks: SlateWeek[]): SlateWeek | null {
-  return weeks.length > 0 ? weeks[weeks.length - 1] : null;
-}
-
-export function findWeek(
-  weeks: SlateWeek[],
-  season: number | undefined,
-  week: number | undefined,
-): SlateWeek | null {
-  if (season === undefined || week === undefined) return defaultWeek(weeks);
-  return (
-    weeks.find((entry) => entry.season === season && entry.week === week) ??
-    defaultWeek(weeks)
-  );
-}
+export { defaultWeek, findWeek } from "@/lib/core/slate-view";
 
 export type SlateGame = {
   gameId: number;

@@ -74,6 +74,18 @@ export type BoardRow = {
   neutralSite: boolean;
   isHome: boolean;
 
+  /**
+   * Where the game is played. Display only — nothing in the model reads these.
+   *
+   * All three are nullable because `games.venue_id` is: CFBD does not always
+   * carry a venue, especially for games posted far ahead. Format them with
+   * `formatVenue`, which handles the disambiguating parentheticals 60 of the
+   * 844 venues carry.
+   */
+  venueName: string | null;
+  venueCity: string | null;
+  venueState: string | null;
+
   /** Null until there is a line to call against. */
   line: number | null;
   side: BetSide | null;

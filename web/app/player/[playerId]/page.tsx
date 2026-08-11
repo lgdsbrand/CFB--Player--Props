@@ -22,6 +22,7 @@ import {
   formatEdge,
   formatKickoff,
   formatLine,
+  formatVenue,
 } from "@/lib/core/format";
 import { gradeGames, hitRate, type GradedGame } from "@/lib/core/hit-rate";
 import { parsePlayerParams } from "@/lib/core/player-params";
@@ -182,6 +183,12 @@ export default async function PlayerDetail({
     position,
   );
 
+  const venue = formatVenue({
+    name: activeRow.venueName,
+    city: activeRow.venueCity,
+    state: activeRow.venueState,
+  });
+
   const ranked = ratings.filter((rating) => rating.rankVsPosition !== null);
   const bands = rankBands(ranked.length);
   const byRank = rankSplits(graded, ranksByGame, bands);
@@ -238,6 +245,14 @@ export default async function PlayerDetail({
             <span className="text-dim">· {activeRow.conferenceName}</span>
           ) : null}
         </div>
+
+        {/*
+          The venue reads as its own line here rather than as another chip in
+          the row above, which already carries both teams, the kickoff, the week
+          and the conference. Not truncated: this page has the width the card
+          does not.
+        */}
+        {venue ? <p className="text-dim text-xs">{venue}</p> : null}
       </header>
 
       <MarketTabs rows={ordered} activeKey={activeRow.marketKey} params={resolved} />

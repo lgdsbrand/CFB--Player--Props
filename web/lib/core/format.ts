@@ -130,6 +130,42 @@ export function formatKickoff(iso: string | null): string {
   return WEEKDAY_TIME.format(new Date(iso));
 }
 
+/**
+ * "Alumni Stadium · Chestnut Hill, MA" — where the game is being played.
+ *
+ * THE PARENTHETICAL IS STRIPPED, and that is the whole reason this is a function
+ * rather than a template string at the call site. 60 of the 844 venues on record
+ * disambiguate their name with the location they are in — "Alumni Stadium
+ * (Chestnut Hill, MA)", "Alumni Field (OH)" — because a dozen schools share a
+ * stadium name. Printed beside the city and state we already show, that renders
+ * "Alumni Stadium (Chestnut Hill, MA) · Chestnut Hill, MA".
+ *
+ * ONLY WHEN THE LOCATION IS ACTUALLY SHOWN. With no city on the row the
+ * parenthetical is the only thing distinguishing one Alumni Stadium from
+ * another, so it stays. The suffix is what is redundant, not what is wrong.
+ *
+ * Returns null rather than a placeholder when there is no venue. `games.venue_id`
+ * is nullable and a card should then say nothing, not "—": an em dash under the
+ * team names reads as a stadium whose name failed to load.
+ */
+export function formatVenue(venue: {
+  name: string | null;
+  city: string | null;
+  state: string | null;
+}): string | null {
+  const place = [venue.city, venue.state].filter(Boolean).join(", ");
+
+  if (!venue.name) return place || null;
+
+  // Trailing parenthetical only. A venue legitimately named "Stadium (Old)"
+  // mid-string keeps it, and so does one whose parenthetical is not at the end.
+  const name = place
+    ? venue.name.replace(/\s*\([^()]*\)\s*$/, "").trim() || venue.name
+    : venue.name;
+
+  return place ? `${name} · ${place}` : name;
+}
+
 /** "Oct 28 – Nov 1", collapsing to one date when the span is a single day. */
 export function formatDateRange(
   first: string | null,

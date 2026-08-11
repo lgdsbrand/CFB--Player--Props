@@ -76,7 +76,7 @@ const COLUMNS =
   "has_book_line, has_call, over_price, under_price, sportsbook_key, " +
   "sportsbook_name, projected_median, projected_p10, projected_p90, prior_weight, " +
   "opponent_rank_vs_position, conference_name, conference_is_displayed, " +
-  "display_confidence, effective_sample";
+  "display_confidence, effective_sample, venue_name, venue_city, venue_state";
 
 export type BoardPage = {
   rows: BoardRow[];
@@ -463,6 +463,10 @@ function toBoardRow(row: Record<string, unknown>): BoardRow {
     startDate: (row.start_date as string | null) ?? null,
     neutralSite: row.neutral_site as boolean,
     isHome: row.is_home as boolean,
+
+    venueName: (row.venue_name as string | null) ?? null,
+    venueCity: (row.venue_city as string | null) ?? null,
+    venueState: (row.venue_state as string | null) ?? null,
 
     line: (row.line as number | null) ?? null,
     side: (row.side as BetSide | null) ?? null,

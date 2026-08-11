@@ -141,6 +141,14 @@ export type PlayerCard = {
   conferenceName: string | null;
 
   /**
+   * Where the game is played. GAME-LEVEL, like the kickoff beside it, so the
+   * card header renders it once rather than per market.
+   */
+  venueName: string | null;
+  venueCity: string | null;
+  venueState: string | null;
+
+  /**
    * How much the model knows about this player this week.
    *
    * PROMOTED TO THE CARD BECAUSE THEY ARE PLAYER-LEVEL FACTS. The feature frame
@@ -215,6 +223,9 @@ export function groupIntoCards(rows: BoardRow[]): PlayerCard[] {
       isHome: row.isHome,
       neutralSite: row.neutralSite,
       conferenceName: row.conferenceName,
+      venueName: row.venueName,
+      venueCity: row.venueCity,
+      venueState: row.venueState,
       priorWeight: row.priorWeight,
       effectiveSample: row.effectiveSample,
       markets: [row],

@@ -4,7 +4,7 @@ import { EvidencePill } from "@/components/board/evidence-pill";
 import { MarketRow } from "@/components/board/market-row";
 import { TeamChip } from "@/components/board/team-chip";
 import { rankBasis } from "@/lib/core/defense-view";
-import { formatKickoff } from "@/lib/core/format";
+import { formatKickoff, formatVenue } from "@/lib/core/format";
 import { playerHref } from "@/lib/core/player-params";
 import { gradeFor, gradeToneToken } from "@/lib/core/grade";
 import { gradeGames, hitRate, type HitRateSummary } from "@/lib/core/hit-rate";
@@ -38,6 +38,11 @@ export function PlayerCard({
 }) {
   const grade = gradeFor(card.topConfidence);
   const tone = gradeToneToken(grade);
+  const venue = formatVenue({
+    name: card.venueName,
+    city: card.venueCity,
+    state: card.venueState,
+  });
 
   // CLAUDE.md §7 says the detail view opens "on row click". A stretched link
   // gives the whole card that behaviour while keeping exactly one anchor, so
@@ -90,6 +95,23 @@ export function PlayerCard({
               <span className="text-dim">· neutral</span>
             ) : null}
           </div>
+
+          {/*
+            Venue on its own line, below the matchup rather than appended to it.
+            The row above wraps at card width, and a stadium name averaging 20
+            characters pushed the kickoff onto a second line on most cards —
+            which put the time further from the teams than the venue, inverting
+            what a reader needs first.
+
+            `truncate` with the full string in `title`: the longest venue on
+            record is 55 characters before the city is added, and the card is
+            one of three across at xl.
+          */}
+          {venue ? (
+            <p className="text-dim truncate text-[0.6875rem]" title={venue}>
+              {venue}
+            </p>
+          ) : null}
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">

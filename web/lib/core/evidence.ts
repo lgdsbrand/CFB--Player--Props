@@ -114,9 +114,21 @@ export function evidenceFor(row: {
   };
 }
 
-/** "3.0 gm" — the card's compact form. `.pill` upper-cases it. */
+/**
+ * "3.0 games" — the card's compact form. `.pill` upper-cases it.
+ *
+ * IT USED TO READ "3.0 GM" and the client asked what it meant, which is the
+ * whole argument: this is the card's uncertainty signal, it is the one badge
+ * whose meaning is not guessable from context, and four saved characters bought
+ * nothing. "GAMES" is still short enough to sit beside the RK and GRADE pills.
+ *
+ * The unit is spelled out and the qualifier is not — these are EFFECTIVE games,
+ * not games played, and that distinction needs the sentence in `evidenceTitle`
+ * rather than a longer label. A badge reading "3.0 EFF GAMES" would swap one
+ * unexplained abbreviation for another.
+ */
 export function formatEvidence(evidence: Evidence): string {
-  return `${evidence.games.toFixed(1)} gm`;
+  return `${evidence.games.toFixed(1)} games`;
 }
 
 /**

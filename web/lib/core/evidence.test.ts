@@ -87,7 +87,7 @@ test("a missing sample says nothing rather than zero", () => {
 test("the compact form keeps one decimal so 3.0 and 3.8 are distinguishable", () => {
   const evidence = evidenceFor({ priorWeight: 0.5, effectiveSample: 3.0 });
   assert.ok(evidence);
-  assert.equal(formatEvidence(evidence), "3.0 gm");
+  assert.equal(formatEvidence(evidence), "3.0 games");
 });
 
 test("the title states what the prior share is a share OF", () => {

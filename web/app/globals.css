@@ -153,6 +153,24 @@
     );
   }
 
+  /* Horizontal scroller with no visible scrollbar.
+
+     FOR SHORT SCROLLERS ONLY, where the bar is a larger fraction of the
+     element than the content. The market pill group is 30px tall, so a
+     classic (non-overlay) scrollbar takes roughly half of it and reads as a
+     broken control rather than as an affordance. The week strip's cards are
+     tall enough to carry one and deliberately do not use this.
+
+     THE CONTAINER STILL SCROLLS — this hides the indicator, not the overflow.
+     That is only acceptable because every pill inside is also reachable by
+     keyboard, which scrolls the group on focus without touching the bar. */
+  .no-scrollbar {
+    scrollbar-width: none; /* Firefox */
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none; /* WebKit, and Chromium on Windows where bars are not overlaid */
+  }
+
   /* Bold wide-tracked uppercase section header */
   .section-header {
     font-size: 0.8125rem;

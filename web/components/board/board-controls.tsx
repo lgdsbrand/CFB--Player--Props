@@ -53,11 +53,18 @@ export function BoardControls({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <PillGroup label="Position">
+      {/*
+        POSITION AND MARKET EACH TAKE A ROW rather than sharing one. They shared
+        a wrapping row, which at phone width put MARKET's nine pills onto three
+        lines and pushed everything below the fold; giving each the full width is
+        what lets MARKET scroll in one line instead (see `PillGroup`).
+      */}
+      <div className="flex flex-col gap-2">
+        <PillGroup label="Position" size="md">
           <PillLink
             href={boardHref(params, { position: undefined, market: marketFor(undefined) })}
             active={params.position === undefined}
+            size="md"
           >
             All
           </PillLink>
@@ -66,6 +73,7 @@ export function BoardControls({
               key={position}
               href={boardHref(params, { position, market: marketFor(position) })}
               active={params.position === position}
+              size="md"
             >
               {position}
             </PillLink>
@@ -147,30 +155,63 @@ export function BoardControls({
   );
 }
 
+/**
+ * Two sizes, and the difference is a claim about which control matters.
+ *
+ * POSITION IS THE PRIMARY FILTER and was rendering at the same 10px as every
+ * secondary pill on the board. `md` is 12px with a wider tap target; `sm` stays
+ * the house 10px used by MARKET, SORT and HIT RATE. Nothing else on the board
+ * takes `md`, so the step up reads as hierarchy rather than as a type scale
+ * that drifted.
+ */
+type PillSize = "sm" | "md";
+
+const PILL_TEXT: Record<PillSize, string> = {
+  sm: "px-2.5 py-1 text-[0.625rem]",
+  md: "px-3 py-1.5 text-xs",
+};
+
+/** Caption box height, matched to one pill row so the label centres on it. */
+const CAPTION_HEIGHT: Record<PillSize, string> = {
+  sm: "h-5.75",
+  md: "h-7",
+};
+
 function PillGroup({
   label,
   children,
+  size = "sm",
 }: {
   label: string;
   children: React.ReactNode;
+  size?: PillSize;
 }) {
   return (
-    // `items-start`, not `items-center`. When the pills wrap — MARKET takes
-    // three rows at 390px — centring the caption against the whole group
-    // parks it beside the MIDDLE row, where it reads as labelling that row
-    // rather than the group. Measured 25px adrift before this.
-    //
-    // The caption gets its own box the height of one pill row (`h-5.75` =
-    // 23px = a pill's 15px line box plus its `py-1`) offset by the
-    // container's `p-0.5`, so it
-    // centres on the FIRST row at any wrap depth instead of being nudged by a
-    // number that only happens to work at one width. `scripts/measure.mjs`
-    // reports the drift if the type scale ever moves this.
+    // `items-start`, not `items-center`. The caption gets its own box the height
+    // of one pill row so it centres on that row rather than on the group's full
+    // height. It mattered more when these groups wrapped to three rows and the
+    // caption landed 25px adrift beside the middle one; it still matters,
+    // because the scroller below can be taller than its content's line box.
+    // `scripts/measure.mjs` reports the drift if the type scale ever moves this.
     <div className="flex items-start gap-1.5">
-      <span className="label-caption mt-0.5 flex h-5.75 shrink-0 items-center">
+      <span
+        className={`label-caption mt-0.5 flex shrink-0 items-center ${CAPTION_HEIGHT[size]}`}
+      >
         {label}
       </span>
-      <div className="border-border-subtle bg-panel flex flex-wrap gap-0.5 rounded-full border p-0.5">
+      {/*
+        ONE LINE THAT SCROLLS, NOT A WRAPPING BLOCK. `min-w-0` is what makes it
+        work: a flex child defaults to `min-width: auto` and will not shrink
+        below its content, so without it the row would simply overflow the page
+        and take the body's horizontal scrollbar with it instead of scrolling
+        inside its own border.
+
+        NOT `scroll-fade-x`, which the week strip uses. That mask applies whether
+        or not the content overflows, so POSITION — five pills that fit at every
+        width — would render its first and last pill permanently half-faded,
+        plus the rounded border behind them. The border is the affordance here.
+      */}
+      <div className="border-border-subtle bg-panel no-scrollbar flex min-w-0 flex-nowrap gap-0.5 overflow-x-auto rounded-full border p-0.5">
         {children}
       </div>
     </div>
@@ -181,17 +222,22 @@ function PillLink({
   href,
   active,
   children,
+  size = "sm",
 }: {
   href: string;
   active: boolean;
   children: React.ReactNode;
+  size?: PillSize;
 }) {
   return (
     <Link
       href={href}
       aria-current={active ? "true" : undefined}
       className={
-        "rounded-full px-2.5 py-1 text-[0.625rem] font-bold uppercase tracking-label transition-colors " +
+        // `shrink-0`: inside a nowrap scroller a flex child would otherwise be
+        // compressed to fit, so "PASS YDS" would render squeezed rather than
+        // scrolling out of view.
+        `shrink-0 whitespace-nowrap rounded-full font-bold uppercase tracking-label transition-colors ${PILL_TEXT[size]} ` +
         (active
           ? "bg-accent-cyan/15 text-accent-cyan"
           : "text-muted hover:text-ink")

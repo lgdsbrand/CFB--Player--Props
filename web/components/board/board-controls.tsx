@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { FilterFields } from "@/components/board/filter-fields";
 import { boardHref, type BoardParams } from "@/lib/core/board-params";
+import { formatCount } from "@/lib/core/format";
 import { POSITION_GROUPS, type Conference, type Market } from "@/lib/core/types";
 import type { GameSummary } from "@/lib/core/types";
 
@@ -158,8 +159,13 @@ export function BoardControls({
           Edges only
         </Link>
 
+        {/* PLAYERS, NOT ROWS. This counts card keys — one per player — while a
+            "row" in the read layer is one player-MARKET, of which a player has
+            up to six. Calling them rows put a number here that contradicted the
+            home page's prop counts by a factor of three, with no way for a
+            reader to tell which was wrong. */}
         <span className="text-dim ml-auto text-[0.6875rem]">
-          {resultCount.toLocaleString("en-US")} rows
+          {formatCount(resultCount)} {resultCount === 1 ? "player" : "players"}
         </span>
       </div>
 

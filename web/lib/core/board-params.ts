@@ -46,6 +46,43 @@ export type BoardParams = {
 /** Raw `searchParams` as Next hands them over. */
 export type RawParams = Record<string, string | string[] | undefined>;
 
+/**
+ * Where the board lives.
+ *
+ * It moved off `/` when the home page took that address. Kept as a constant
+ * rather than typed into `boardHref` and a dozen components, because the two
+ * places that build board URLs by hand — the week strip's `basePath` and the
+ * player page's back link — are exactly the ones that would be missed.
+ */
+export const BOARD_PATH = "/props";
+
+/**
+ * Every key the board reads out of the URL.
+ *
+ * Used by `boardParamsPresent` to recognise a board link that arrives at `/`.
+ * Listed once so the two cannot drift: a key added to the parser but not here
+ * would make a shared link silently land on the home page instead.
+ */
+const BOARD_PARAM_KEYS = [
+  "season", "week", "position", "market", "game", "conference", "q", "sort",
+  "edges", "top25", "conf", "rank", "window", "page",
+] as const;
+
+/**
+ * Does this look like a board URL?
+ *
+ * The board used to live at `/`, so links shared before the move — including
+ * any the client saved — carry board filters on the home page's address. This
+ * lets `/` forward them rather than dropping a reader on a landing page and
+ * silently discarding the week and filters they were pointed at.
+ *
+ * A BARE `/` IS NOT A BOARD LINK. That is the home page, and it must not
+ * bounce.
+ */
+export function boardParamsPresent(raw: RawParams): boolean {
+  return BOARD_PARAM_KEYS.some((key) => first(raw[key]) !== undefined);
+}
+
 export const DEFAULT_HIT_RATE_WINDOW = 5;
 
 /** Cards per page. Deliberately modest — see `getGameLogsByPlayer`. */
@@ -144,7 +181,7 @@ export function boardHref(
   if (next.page > 1) set("page", next.page);
 
   const query = search.toString();
-  return query ? `/?${query}` : "/";
+  return query ? `${BOARD_PATH}?${query}` : BOARD_PATH;
 }
 
 /**

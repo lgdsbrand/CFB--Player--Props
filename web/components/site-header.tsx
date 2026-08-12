@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { BOARD_PATH } from "@/lib/core/board-params";
+
 /**
  * The app shell's header.
  *
@@ -10,7 +12,8 @@ import Link from "next/link";
  */
 export function SiteHeader({ activeHref = "/" }: { activeHref?: string }) {
   const links = [
-    { href: "/", label: "Board" },
+    { href: "/", label: "Home" },
+    { href: BOARD_PATH, label: "Props" },
     { href: "/games", label: "Games" },
     { href: "/health", label: "Health" },
   ];

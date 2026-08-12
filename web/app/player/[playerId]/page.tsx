@@ -12,7 +12,7 @@ import { HitRateChart } from "@/components/player/hit-rate-chart";
 import { MarketTabs } from "@/components/player/market-tabs";
 import { SplitGrid } from "@/components/player/split-grid";
 import { SiteHeader } from "@/components/site-header";
-import type { RawParams } from "@/lib/core/board-params";
+import { BOARD_PATH, type RawParams } from "@/lib/core/board-params";
 import { defenseStatForMarket, rankBasis } from "@/lib/core/defense-view";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { evidenceFor } from "@/lib/core/evidence";
@@ -201,7 +201,7 @@ export default async function PlayerDetail({
   return (
     <Shell>
       <Link
-        href={`/?season=${active.season}&week=${active.week}`}
+        href={`${BOARD_PATH}?season=${active.season}&week=${active.week}`}
         className="text-muted hover:text-accent-cyan w-fit text-xs"
       >
         ← Back to the board

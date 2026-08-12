@@ -127,9 +127,13 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
     ),
     JobExpectation(
         name="ingest_odds",
-        max_age_hours=12,
+        max_age_hours=18,
         enabled_key="odds_adapter",
-        note="every 3h — books post late, often Thu/Fri (CLAUDE.md §7)",
+        note="every 6h — books post late, often Thu/Fri (CLAUDE.md §7). Was 3h "
+             "until 2026-08-12; this is the only job spending metered credits "
+             "and the cadence is its budget. 18h tolerates three missed runs, "
+             "which matters more here than elsewhere: a silent stop means the "
+             "board keeps showing model leans and looks entirely healthy.",
     ),
     JobExpectation(
         name="ingest_game_lines",

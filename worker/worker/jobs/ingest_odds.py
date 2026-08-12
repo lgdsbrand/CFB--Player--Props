@@ -86,6 +86,13 @@ class IngestReport:
     events_unmatched: list[str] = field(default_factory=list)
     events_with_props: int = 0
     event_method_mix: Counter = field(default_factory=Counter)
+    # Matched events whose props were NOT fetched because --event-limit was
+    # reached. Counted because the truncation is otherwise invisible and its
+    # shape is nasty: the provider's event list is stably ordered, so the same
+    # tail of the slate goes unpriced on every run rather than a different slice
+    # each time. Nothing downstream can tell "no book posted a line for this
+    # game" from "we stopped asking", and both look like a board of model leans.
+    events_over_limit: int = 0
     # THREE DIFFERENT UNITS, kept apart on purpose. A "quote" is one player's
     # one market for one game; a "row" is that quote at ONE BOOK, so four books
     # on one market make one quote and four rows. An early version printed
@@ -105,13 +112,18 @@ class IngestReport:
     method_mix: Counter = field(default_factory=Counter)
 
     def render(self) -> str:
-        return "\n".join(
-            [
-                f"  events: {self.events_matched}/{self.events_seen} matched to a "
-                f"game, {self.events_with_props} carried props",
-                self.render_resolution(),
-            ]
-        )
+        lines = [
+            f"  events: {self.events_matched}/{self.events_seen} matched to a "
+            f"game, {self.events_with_props} carried props",
+        ]
+        if self.events_over_limit:
+            lines.append(
+                f"  TRUNCATED: {self.events_over_limit} matched event(s) never "
+                "queried — --event-limit was reached. Raise it above the slate "
+                "size; these games will show no line."
+            )
+        lines.append(self.render_resolution())
+        return "\n".join(lines)
 
     def render_resolution(self) -> str:
         """The player/market half, without the event counters.
@@ -465,6 +477,7 @@ def run(
             report.event_method_mix[how] += 1
 
             if event_limit is not None and processed >= event_limit:
+                report.events_over_limit += 1
                 continue
             processed += 1
 
@@ -492,6 +505,19 @@ def run(
 
         if not dry_run:
             conn.commit()
+
+    # Loud, because the alternative is a board that silently stops covering part
+    # of the slate while every counter above still reads as a successful run.
+    if report.events_over_limit:
+        log.warning(
+            "--event-limit %s stopped %d matched event(s) from being queried. "
+            "The provider's event order is stable, so this is the SAME tail of "
+            "the slate on every run: those games carry no book line all week, "
+            "and nothing downstream can tell that apart from a book declining "
+            "to post one. Raise the limit above the slate size — the largest "
+            "week measured is 99 games.",
+            event_limit, report.events_over_limit,
+        )
 
     log.info("Provider quota: %s", adapter.quota.summary())
     return report

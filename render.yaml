@@ -154,18 +154,48 @@ services:
   # ---------------------------------------------------------------------------
   # In-week refreshes
   # ---------------------------------------------------------------------------
-  # Every three hours. College books post props LATE — often Thursday or Friday
+  # Every six hours. College books post props LATE — often Thursday or Friday
   # for Saturday games (CLAUDE.md §7) — so this is a poll for a market that has
   # not appeared yet, not a refresh of one that has. Exits 0 and does nothing
   # while app_config.odds_adapter is "none", which is the current default.
+  #
+  # THIS IS THE ONLY JOB THAT SPENDS METERED CREDITS. Billing is per market
+  # returned, and a capture re-buys the WHOLE slate every time: ~9 markets on
+  # each event that carries props, with no discount for a line that has not
+  # moved since the last poll. So the cadence is the budget.
+  #
+  # It was every three hours until 2026-08-12. That is 8 runs/day, and on the
+  # 20,000-credit plan the probe measured (docs/odds-coverage-probe.md) a full
+  # slate would have consumed the entire MONTHLY allowance in about a week —
+  # from a pool shared with the client's MLB, tennis and WNBA models. Six-hourly
+  # still catches a Thursday posting within a few hours of it appearing, which
+  # is the only latency that matters here.
+  #
+  # DAILY RATHER THAN THURSDAY-TO-SATURDAY, deliberately, even though books post
+  # nothing on a Monday. Two reasons, and the second is the load-bearing one:
+  # events with no props posted cost 0 credits, so the off-day polls are very
+  # nearly free and restricting the days would save almost nothing; and
+  # `tests/test_monitor.py::_cron_period_hours` scores ANY day-of-week-restricted
+  # cron as a 168-hour period, which would force `max_age_hours` above 193 and
+  # leave the one job with a budget unmonitored for eight days. Free credits are
+  # not worth that blind spot.
+  #
+  # `--event-limit` IS A CIRCUIT BREAKER, NOT A BUDGET — leave it above a full
+  # slate. The largest week measured is 99 games (2026 week 1; opening weekends
+  # are inflated by FBS-vs-FCS fixtures), so 120 has headroom and still catches a
+  # runaway. Tightening it below the slate size does NOT save money safely: the
+  # job stops fetching once the limit is reached and skips the REST OF THE
+  # PROVIDER'S EVENT LIST, which is stably ordered, so the same tail of the slate
+  # would go unpriced every run, all week, silently. That is exactly how
+  # app_config.ai_reads_max_per_run came to cover a fifth of the players.
   - type: cron
     name: cfb-props-odds-refresh
     runtime: python
     plan: starter
     rootDir: worker
-    schedule: "0 */3 * * *"
+    schedule: "0 */6 * * *"
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m worker.jobs.ingest_odds
+    startCommand: python -m worker.jobs.ingest_odds --event-limit 120
     envVars:
       - fromGroup: cfb-props-worker
 

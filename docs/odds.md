@@ -171,9 +171,14 @@ Then confirm with a dry run before letting the cron spend anything:
 python -m worker.jobs.ingest_odds --dry-run
 ```
 
-The three-hourly cron picks it up from there. `monitor_pipeline` starts expecting
-the job to succeed within 12 hours the moment the adapter stops reading `"none"`,
+The six-hourly cron picks it up from there. `monitor_pipeline` starts expecting
+the job to succeed within 18 hours the moment the adapter stops reading `"none"`,
 so switching this on also switches on the alerting for it.
 
+**Flipping this config row is what starts the spending** — the cron itself is free
+while the adapter reads `"none"`, because the job exits before constructing an
+adapter or making a single call. So the cadence and `--event-limit` in
+`render.yaml` want to be right *before* this flip, not after it.
+
 See [configuration.md](configuration.md) for the adapter seam and
-[runbook.md](runbook.md#ingest_odds--every-3-hours) for what the job does.
+[runbook.md](runbook.md#ingest_odds--every-6-hours) for what the job does.

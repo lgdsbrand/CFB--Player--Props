@@ -329,7 +329,7 @@ on it.
 
 ### In-week refreshes
 
-#### `ingest_odds` — every 3 hours
+#### `ingest_odds` — every 6 hours
 
 ```bash
 python -m worker.jobs.ingest_odds                     # current slate
@@ -339,9 +339,26 @@ python -m worker.jobs.ingest_odds --event-limit 10    # bound the spend
 ```
 
 Attaches book lines to games already projected, writing `player_prop_lines` and
-`sportsbooks`. Every three hours because college books post props **late**, often
-Thursday or Friday for a Saturday game — this is a poll for a market that has not
-appeared yet, not a refresh of one that has.
+`sportsbooks`. Polled rather than scheduled once because college books post props
+**late**, often Thursday or Friday for a Saturday game — this is a poll for a
+market that has not appeared yet, not a refresh of one that has.
+
+**This is the only job that spends metered credits, and its cadence is its
+budget.** Billing is per market returned and a capture re-buys the whole slate
+every time — ~9 markets on every event carrying props, with no discount for a
+line that has not moved. It ran every 3 hours until 2026-08-12; on the
+20,000-credit plan the probe measured, a full slate at 8 runs/day would have
+consumed the entire monthly allowance in about a week, from a pool shared with
+the client's other models.
+
+The production cron passes `--event-limit 120`, which is a **circuit breaker, not
+a budget** — keep it above the slate size. The largest week measured is 99 games
+(2026 week 1; opening weekends are inflated by FBS-vs-FCS fixtures). Tightening
+it below that does not save money safely: the job stops fetching at the limit and
+skips the rest of the provider's stably-ordered event list, so the same tail of
+the slate goes unpriced every run, all week. The run logs a `TRUNCATED` warning
+and counts the skipped events when this happens, because nothing downstream can
+tell "we stopped asking" from "no book posted a line".
 
 Three things it refuses to do:
 
@@ -360,7 +377,7 @@ Three things it refuses to do:
 **Quota discipline:** billing is per market **returned**, not requested, so
 `--event-limit` is the lever that bounds spend. See [odds.md](odds.md).
 
-**Monitored:** warning, `max_age_hours=12`, gated on `app_config.odds_adapter`
+**Monitored:** warning, `max_age_hours=18`, gated on `app_config.odds_adapter`
 not being `"none"`.
 
 #### `generate_ai_reads` — Wednesday 14:00 UTC
@@ -778,7 +795,7 @@ Nothing here needs a human when it is working. The sequence a normal week runs:
 | Sun 09:00 | reference → stats → ratings → splits | last week's games ingested, splits rebuilt |
 | Tue 09:00 | `run_projections --all-weeks` | the board has this week's rows, most without calls |
 | Wed 14:00 | `generate_ai_reads` | one cached read per player |
-| Thu–Sat, every 3h | `ingest_odds` | calls and edges fill in as books post |
+| daily, every 6h | `ingest_odds` | calls and edges fill in as books post |
 | daily 12:00 / 13:00 | `healthcheck`, `audit_data` | canaries |
 | every 6h | `monitor_pipeline` | says something when the above stops |
 

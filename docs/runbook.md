@@ -228,6 +228,43 @@ python -m worker.jobs.build_splits --seasons 2024
 **Monitored:** all four at `max_age_hours=200`; `ingest_stats` and `build_splits`
 critical.
 
+#### `ingest_game_lines` — daily 10:00 UTC
+
+```bash
+python -m worker.jobs.ingest_game_lines --live              # what the cron runs
+python -m worker.jobs.ingest_game_lines --seasons 2025      # backfill a season
+python -m worker.jobs.ingest_game_lines --seasons 2026 --weeks 1 2 --live
+python -m worker.jobs.ingest_game_lines --dry-run
+```
+
+`game_lines` — the game spread, total and moneylines shown as context on the
+player card. One row per game per provider; `v_game_line_consensus` takes the
+median across providers so the board's number does not depend on which book
+happened to be present.
+
+**This is CFBD and costs ZERO Odds API credits.** Do not confuse it with
+`ingest_odds`, which spends the metered quota on PLAYER props. About 16 calls
+per season against a 30,000/month CFBD allowance.
+
+`--live` re-fetches instead of serving the permanent response cache. Completed
+weeks are immutable and cached forever, but the CURRENT week's spread moves all
+week, so without it the job succeeds while writing last Tuesday's number.
+
+Two conventions worth knowing before touching this:
+
+- **The spread is from the HOME team's perspective** — negative means the home
+  team is favoured. Verified against CFBD's own `formattedSpread` across the
+  whole 2025 week-8 slate, 228 of 228 rows agreeing. `v_board_rows` flips it to
+  the player's own team before display.
+- **CFBD spells DraftKings two ways.** Across 2025, 805 rows said `DraftKings`
+  and 56 said `Draft Kings`, and **56 games carried both** — which made that one
+  book vote twice in the median. `canonical_provider` collapses them; unknown
+  providers pass through unchanged and every raw spelling is logged, so the next
+  alias is visible rather than silently merged.
+
+**Monitored:** `max_age_hours=48`, warning severity — a stale spread degrades
+context on the card, it does not empty the board.
+
 #### `run_projections` — Tuesday 09:00 UTC
 
 ```bash

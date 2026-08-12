@@ -132,6 +132,11 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
         note="every 3h — books post late, often Thu/Fri (CLAUDE.md §7)",
     ),
     JobExpectation(
+        name="ingest_game_lines",
+        max_age_hours=48,
+        note="daily 10:00 UTC — CFBD spreads and totals, costs no odds credits",
+    ),
+    JobExpectation(
         name="generate_ai_reads",
         max_age_hours=200,
         enabled_key="ai_adapter",

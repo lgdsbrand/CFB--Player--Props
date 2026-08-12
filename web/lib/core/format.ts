@@ -166,6 +166,37 @@ export function formatVenue(venue: {
   return place ? `${name} · ${place}` : name;
 }
 
+/**
+ * A point spread with an explicit sign, from the named team's perspective.
+ *
+ * THE SIGN IS ALWAYS SHOWN, including the plus. A spread without one is
+ * ambiguous in the only place it matters: "10.5" beside a team name reads as
+ * a favourite to most people, and for the away side of a game it is exactly
+ * backwards. The database already flips the stored home-side number to the
+ * player's own team (`v_board_rows.team_spread`), so all this has to do is
+ * refuse to hide which way it points.
+ *
+ * ZERO IS "PK", not "+0.0". A pick-em is a real state and a signed zero reads
+ * as a rendering bug.
+ */
+export function formatSpread(spread: number | null): string | null {
+  if (spread === null || !Number.isFinite(spread)) return null;
+  if (spread === 0) return "PK";
+  return `${spread > 0 ? "+" : ""}${spread.toFixed(1)}`;
+}
+
+/** "−10.5 · O/U 48.5", or just one half when only one is priced. */
+export function formatGameLine(
+  spread: number | null,
+  total: number | null,
+): string | null {
+  const parts: string[] = [];
+  const s = formatSpread(spread);
+  if (s) parts.push(s);
+  if (total !== null && Number.isFinite(total)) parts.push(`O/U ${total.toFixed(1)}`);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 /** "Oct 28 – Nov 1", collapsing to one date when the span is a single day. */
 export function formatDateRange(
   first: string | null,

@@ -109,6 +109,8 @@ PLAN: tuple[TableSpec, ...] = (
     TableSpec("team_seasons", "Read by the board for the conference filter."),
     TableSpec("games", "Parent of every per-game table; the week axis lives here."),
     TableSpec("game_weather", "Weather-adjusted projections (CLAUDE.md §7)."),
+    TableSpec("game_lines", "Spread and total shown on the card. Re-ingestable "
+                            "free from CFBD, unlike player_prop_lines below."),
     TableSpec("players", "Parent of every per-player table."),
     TableSpec("player_team_seasons", "Player-to-team mapping; the board joins through it."),
     TableSpec("markets", "Migration-seeded and identical, but moved so the two "

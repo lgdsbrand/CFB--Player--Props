@@ -4,7 +4,7 @@ import { EvidencePill } from "@/components/board/evidence-pill";
 import { MarketRow } from "@/components/board/market-row";
 import { TeamChip } from "@/components/board/team-chip";
 import { rankBasis } from "@/lib/core/defense-view";
-import { formatKickoff, formatVenue } from "@/lib/core/format";
+import { formatGameLine, formatKickoff, formatVenue } from "@/lib/core/format";
 import { playerHref } from "@/lib/core/player-params";
 import { gradeFor, gradeToneToken } from "@/lib/core/grade";
 import { gradeGames, hitRate, type HitRateSummary } from "@/lib/core/hit-rate";
@@ -43,6 +43,7 @@ export function PlayerCard({
     city: card.venueCity,
     state: card.venueState,
   });
+  const gameLine = formatGameLine(card.teamSpread, card.gameTotal);
 
   // CLAUDE.md §7 says the detail view opens "on row click". A stretched link
   // gives the whole card that behaviour while keeping exactly one anchor, so
@@ -110,6 +111,26 @@ export function PlayerCard({
           {venue ? (
             <p className="text-dim truncate text-[0.6875rem]" title={venue}>
               {venue}
+            </p>
+          ) : null}
+
+          {/*
+            The game line, on its own short line rather than appended to the
+            venue. The venue line is `truncate`, so anything added to it is
+            what gets cut first at 390px — and the spread is the half a reader
+            would rather keep.
+
+            Not labelled "SPREAD"/"TOTAL": a signed number beside a team and an
+            "O/U" prefix are already unambiguous to this audience, and two more
+            uppercase captions on a card that already carries four would cost
+            more room than they earn.
+          */}
+          {gameLine ? (
+            <p
+              className="text-dim text-[0.6875rem] tabular-nums"
+              title="Game spread from this player's team, and the game total. Context for the prop, not a model output."
+            >
+              {gameLine}
             </p>
           ) : null}
         </div>

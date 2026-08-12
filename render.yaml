@@ -168,6 +168,27 @@ services:
     envVars:
       - fromGroup: cfb-props-worker
 
+  # Daily 10:00 UTC. Game spreads and totals for the card (CLAUDE.md §7), from
+  # CFBD rather than the metered odds provider — this costs ZERO Odds API
+  # credits and must not be confused with `cfb-props-odds-refresh` above, which
+  # is the one with a budget.
+  #
+  # `--live` because the current week's number moves all week; without it the
+  # permanent response cache would serve last Tuesday's spread while the job
+  # reported success. It re-fetches completed weeks too, which is ~16 wasted
+  # calls a day against a 30,000/month CFBD quota — 2% of it, and cheaper than
+  # a flag that has to work out which week is current.
+  - type: cron
+    name: cfb-props-game-lines
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 10 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.ingest_game_lines --live
+    envVars:
+      - fromGroup: cfb-props-worker
+
   # Wednesday 14:00 UTC: one read per player per week, cached in Supabase and
   # never generated per page view (CLAUDE.md §2, §10). After Tuesday's
   # projections, before the weekend. Exits 0 and does nothing while

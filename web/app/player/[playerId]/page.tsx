@@ -20,6 +20,7 @@ import {
   formatAmericanOdds,
   formatConfidence,
   formatEdge,
+  formatGameLine,
   formatKickoff,
   formatLine,
   formatVenue,
@@ -188,6 +189,7 @@ export default async function PlayerDetail({
     city: activeRow.venueCity,
     state: activeRow.venueState,
   });
+  const gameLine = formatGameLine(activeRow.teamSpread, activeRow.gameTotal);
 
   const ranked = ratings.filter((rating) => rating.rankVsPosition !== null);
   const bands = rankBands(ranked.length);
@@ -252,7 +254,29 @@ export default async function PlayerDetail({
           and the conference. Not truncated: this page has the width the card
           does not.
         */}
-        {venue ? <p className="text-dim text-xs">{venue}</p> : null}
+        {/*
+          Venue and game line share a line here. The card splits them because
+          it truncates; this page has the width, and they are both answers to
+          "what game is this".
+        */}
+        {venue || gameLine ? (
+          <p className="text-dim text-xs">
+            {venue}
+            {venue && gameLine ? " · " : ""}
+            {gameLine ? (
+              <span
+                className="tabular-nums"
+                title={
+                  "Game spread from " +
+                  activeRow.teamSchool +
+                  "'s perspective, and the game total. Context for the prop, not a model output."
+                }
+              >
+                {gameLine}
+              </span>
+            ) : null}
+          </p>
+        ) : null}
       </header>
 
       <MarketTabs rows={ordered} activeKey={activeRow.marketKey} params={resolved} />

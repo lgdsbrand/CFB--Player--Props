@@ -86,6 +86,17 @@ export type BoardRow = {
   venueCity: string | null;
   venueState: string | null;
 
+  /**
+   * The game line, as CONTEXT for the prop. Display only — no model input
+   * reads these (see migration 0030 for why that boundary matters).
+   *
+   * `teamSpread` is already flipped to THIS player's team by the view:
+   * negative means his team is favoured, whichever side of the game he is on.
+   */
+  teamSpread: number | null;
+  gameTotal: number | null;
+  gameLineProviders: number | null;
+
   /** Null until there is a line to call against. */
   line: number | null;
   side: BetSide | null;

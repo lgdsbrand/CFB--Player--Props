@@ -62,6 +62,7 @@ const EXPECTED = {
     "prior_weight", "opponent_rank_vs_position", "conference_name",
     "conference_is_displayed", "display_confidence", "effective_sample",
     "venue_name", "venue_city", "venue_state",
+    "team_spread", "game_total", "game_line_providers",
   ],
   v_player_game_log: [
     "player_id", "game_id", "season", "week", "position_group", "is_home",

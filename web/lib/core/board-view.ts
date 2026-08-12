@@ -148,6 +148,10 @@ export type PlayerCard = {
   venueCity: string | null;
   venueState: string | null;
 
+  /** Game line context. GAME-level, so the card header renders it once. */
+  teamSpread: number | null;
+  gameTotal: number | null;
+
   /**
    * How much the model knows about this player this week.
    *
@@ -226,6 +230,8 @@ export function groupIntoCards(rows: BoardRow[]): PlayerCard[] {
       venueName: row.venueName,
       venueCity: row.venueCity,
       venueState: row.venueState,
+      teamSpread: row.teamSpread,
+      gameTotal: row.gameTotal,
       priorWeight: row.priorWeight,
       effectiveSample: row.effectiveSample,
       markets: [row],

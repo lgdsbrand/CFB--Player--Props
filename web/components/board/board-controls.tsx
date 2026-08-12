@@ -134,6 +134,19 @@ export function BoardControls({
         </PillGroup>
 
         <Link
+          href={boardHref(params, { rankedOnly: !params.rankedOnly })}
+          className={
+            "rounded-full border px-3 py-1 text-[0.625rem] font-bold uppercase tracking-label transition-colors " +
+            (params.rankedOnly
+              ? "border-accent-cyan/50 bg-accent-cyan/15 text-accent-cyan"
+              : "border-border-subtle text-muted hover:text-ink")
+          }
+          title="Only players whose own team is in the AP Top 25 entering this week"
+        >
+          Top 25
+        </Link>
+
+        <Link
           href={boardHref(params, { edgesOnly: !params.edgesOnly })}
           className={
             "rounded-full border px-3 py-1 text-[0.625rem] font-bold uppercase tracking-label transition-colors " +

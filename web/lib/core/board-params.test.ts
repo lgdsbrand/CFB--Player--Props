@@ -36,6 +36,7 @@ const FULLY_FILTERED: BoardParams = {
   search: "John",
   sort: "confidence",
   edgesOnly: true,
+  rankedOnly: true,
   minConfidence: 0.65,
   minOpponentRank: 110,
   hitRateWindow: 10,
@@ -60,6 +61,10 @@ test("reset clears every filter a reader can see", () => {
   assert.equal(params.search, undefined);
   assert.equal(params.minConfidence, undefined);
   assert.equal(params.minOpponentRank, undefined);
+  // TOP 25 IS A FILTER, SO RESET CLEARS IT. Unlike EDGES ONLY below, it has no
+  // configured default to return to — leaving it on would mean a reset board
+  // still hid 90% of the slate while every visible control read "off".
+  assert.equal(params.rankedOnly, false);
   assert.equal(params.sort, "edge");
   assert.equal(params.hitRateWindow, DEFAULT_HIT_RATE_WINDOW);
   assert.equal(params.page, 1);

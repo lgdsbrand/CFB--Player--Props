@@ -215,6 +215,26 @@ supply prior-year features for the season after it.
 Note the standing limitation: **only Elo is genuinely weekly.** SP+, SRS and FPI
 are season-level from CFBD and cannot serve as point-in-time backtest features.
 
+**`ingest_rankings`** — `team_poll_rankings`: the AP, Coaches and CFP polls
+that back the board's Top 25 filter. Two CFBD calls per season, no odds credits.
+
+**Point-in-time with no offset, and that was proven rather than assumed.** CFBD's
+week N poll is the poll published *entering* week N, reflecting games through
+week N-1. Verified against 2025: every ranked team that LOST in week 1 still
+holds its ranking in the week 1 poll and drops in the week 2 poll (Texas #1 to
+#7, Alabama #8 to #21, Kansas State #17 to unranked). So a join on `week` is
+already free of lookahead. Week 1 is the preseason poll.
+
+**FBS polls only.** `/rankings` returns five polls per week and three are for
+other divisions (FCS, D-II, D-III). The adapter keeps an allow-list so an
+unrecognised poll is skipped and logged rather than silently ingested into a
+filter that claims to mean "Top 25 of college football".
+
+```bash
+python -m worker.jobs.ingest_rankings --seasons 2025
+python -m worker.jobs.ingest_rankings --live      # what the cron runs
+```
+
 **`build_splits`** — `defense_position_game_splits` and
 `defense_position_ratings`: the position-split engine and the opponent
 adjustment (CLAUDE.md §5). **Reads only from the database, no API calls**, so it

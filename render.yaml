@@ -131,6 +131,7 @@ services:
       python -m worker.jobs.ingest_reference &&
       python -m worker.jobs.ingest_stats &&
       python -m worker.jobs.ingest_ratings &&
+      python -m worker.jobs.ingest_rankings --live &&
       python -m worker.jobs.build_splits
     envVars:
       - fromGroup: cfb-props-worker

@@ -152,6 +152,9 @@ export type PlayerCard = {
   teamSpread: number | null;
   gameTotal: number | null;
 
+  /** AP Top 25 rank of this player's team entering the week, else null. */
+  teamPollRank: number | null;
+
   /**
    * How much the model knows about this player this week.
    *
@@ -232,6 +235,7 @@ export function groupIntoCards(rows: BoardRow[]): PlayerCard[] {
       venueState: row.venueState,
       teamSpread: row.teamSpread,
       gameTotal: row.gameTotal,
+      teamPollRank: row.teamPollRank,
       priorWeight: row.priorWeight,
       effectiveSample: row.effectiveSample,
       markets: [row],

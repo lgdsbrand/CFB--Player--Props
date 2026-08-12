@@ -253,6 +253,8 @@ function row(overrides: Partial<BoardRow> = {}): BoardRow {
     teamSpread: -7.5,
     gameTotal: 52.5,
     gameLineProviders: 3,
+    teamPollRank: null,
+    opponentPollRank: null,
     line: null,
     side: null,
     confidence: null,

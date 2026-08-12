@@ -97,6 +97,7 @@ export default async function Home({
     positionGroup: resolved.position,
     gameId: resolved.game,
     conferenceName: resolved.conference,
+    rankedOnly: resolved.rankedOnly,
     search: resolved.search,
     edgesOnly: resolved.edgesOnly,
     edgeThreshold: config.edgeThreshold,

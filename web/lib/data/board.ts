@@ -42,6 +42,8 @@ export type BoardFilters = {
    */
   displayedConferencesOnly?: boolean;
   conferenceName?: string;
+  /** Only players whose own team carries an AP Top 25 rank that week. */
+  rankedOnly?: boolean;
 
   /** Only rows whose edge clears the threshold — the EDGES ONLY toggle. */
   edgesOnly?: boolean;
@@ -76,7 +78,7 @@ const COLUMNS =
   "sportsbook_name, projected_median, projected_p10, projected_p90, prior_weight, " +
   "opponent_rank_vs_position, conference_name, conference_is_displayed, " +
   "display_confidence, effective_sample, venue_name, venue_city, venue_state, " +
-  "team_spread, game_total, game_line_providers";
+  "team_spread, game_total, game_line_providers, team_poll_rank, opponent_poll_rank";
 
 export type BoardPage = {
   rows: BoardRow[];
@@ -119,6 +121,14 @@ function buildBoardQuery(select: string, filters: BoardFilters, count?: "exact")
   }
 
   if (filters.withBookLineOnly) query = query.eq("has_book_line", true);
+
+  // `not null` rather than `lte 25`: the column only ever holds 1-25, and a
+  // numeric bound would silently start meaning something else if a poll with a
+  // longer tail (the CFP committee publishes 25, but "others receiving votes"
+  // is a real concept) were ever exposed through this column.
+  if (filters.rankedOnly) {
+    query = query.not("team_poll_rank", "is", null);
+  }
 
   if (filters.edgesOnly) {
     // A null edge means "no edge computable", not "below threshold" — gte on a
@@ -458,6 +468,9 @@ function toBoardRow(row: Record<string, unknown>): BoardRow {
     teamSpread: (row.team_spread as number | null) ?? null,
     gameTotal: (row.game_total as number | null) ?? null,
     gameLineProviders: (row.game_line_providers as number | null) ?? null,
+
+    teamPollRank: (row.team_poll_rank as number | null) ?? null,
+    opponentPollRank: (row.opponent_poll_rank as number | null) ?? null,
 
     line: (row.line as number | null) ?? null,
     side: (row.side as BetSide | null) ?? null,

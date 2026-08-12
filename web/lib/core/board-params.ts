@@ -25,6 +25,15 @@ export type BoardParams = {
   market?: string;
   game?: number;
   conference?: string;
+  /**
+   * Only players whose OWN team is in the AP Top 25 that week.
+   *
+   * Scoped to the player's team, not to the game, matching the conference
+   * filter — someone narrowing to ranked teams wants ranked players to look
+   * at, and "his opponent is ranked" is a different question the board answers
+   * with the opponent-rank control instead.
+   */
+  rankedOnly: boolean;
   search?: string;
   sort: BoardSort;
   edgesOnly: boolean;
@@ -84,6 +93,7 @@ export function parseBoardParams(
     market: first(raw.market),
     game: int(raw.game),
     conference: first(raw.conference),
+    rankedOnly: first(raw.top25) === "1",
     search: first(raw.q),
     sort:
       sort === "confidence" || sort === "opponent_rank" || sort === "edge"
@@ -125,6 +135,7 @@ export function boardHref(
   set("q", next.search);
   if (next.sort !== "edge") set("sort", next.sort);
   if (next.edgesOnly) set("edges", "1");
+  if (next.rankedOnly) set("top25", "1");
   set("conf", next.minConfidence);
   set("rank", next.minOpponentRank);
   if (next.hitRateWindow !== DEFAULT_HIT_RATE_WINDOW) {
@@ -156,6 +167,7 @@ export function resetBoardHref(current: BoardParams): string {
       week: current.week,
       sort: "edge",
       edgesOnly: false,
+      rankedOnly: false,
       hitRateWindow: DEFAULT_HIT_RATE_WINDOW,
       page: 1,
     },

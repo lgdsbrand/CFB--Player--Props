@@ -97,6 +97,14 @@ export type BoardRow = {
   gameTotal: number | null;
   gameLineProviders: number | null;
 
+  /**
+   * AP Top 25 rank entering this week, or null when unranked — which is most
+   * rows, since only 25 teams carry one. Point-in-time: the poll published
+   * before this week was played, never the season's final one.
+   */
+  teamPollRank: number | null;
+  opponentPollRank: number | null;
+
   /** Null until there is a line to call against. */
   line: number | null;
   side: BetSide | null;

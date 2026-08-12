@@ -137,6 +137,11 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
         note="daily 10:00 UTC — CFBD spreads and totals, costs no odds credits",
     ),
     JobExpectation(
+        name="ingest_rankings",
+        max_age_hours=200,
+        note="Sunday 09:00 UTC, chained — polls publish Sunday, one call/season",
+    ),
+    JobExpectation(
         name="generate_ai_reads",
         max_age_hours=200,
         enabled_key="ai_adapter",

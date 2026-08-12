@@ -213,22 +213,47 @@ def database_size_mb() -> float:
     return (row["bytes"] / 1024 / 1024) if row else 0.0
 
 
-def fetch_id_map(table: str, key_column: str, id_column: str = "id") -> dict[Any, int]:
+def fetch_id_map(
+    table: str,
+    key_column: str,
+    id_column: str = "id",
+    *,
+    filters: Mapping[str, Any] | None = None,
+) -> dict[Any, int]:
     """Build {natural_key: surrogate_id} for resolving foreign keys.
 
     CFBD refers to entities by its own ids and by school name; the schema uses
     its own surrogate keys. Ingest resolves between them in Python rather than
     with correlated subqueries per row, which would turn one bulk insert into
     thousands of round trips.
+
+    `filters` narrows the rows the map is built from, and exists for one reason:
+    the natural key is not always globally unique. A `cfbd_id` is — only college
+    rows carry one — but a conference NAME or a team SCHOOL is unique only within
+    a sport, and an unfiltered map over two sports would silently resolve one
+    sport's name to the other sport's surrogate id. The result is a foreign key
+    that is valid, points at the wrong row, and never raises.
     """
+    predicates = [
+        sql.SQL("{key} is not null").format(key=sql.Identifier(key_column))
+    ]
+    params: list[Any] = []
+    for column, value in (filters or {}).items():
+        predicates.append(
+            sql.SQL("{col} = %s").format(col=sql.Identifier(column))
+        )
+        params.append(value)
+
     rows = fetch_all(
-        sql.SQL("select {key}, {id} from {table} where {key} is not null")
+        sql.SQL("select {key}, {id} from {table} where {where}")
         .format(
             key=sql.Identifier(key_column),
             id=sql.Identifier(id_column),
             table=sql.Identifier(table),
+            where=sql.SQL(" and ").join(predicates),
         )
-        .as_string(None)  # type: ignore[arg-type]
+        .as_string(None),  # type: ignore[arg-type]
+        tuple(params) or None,
     )
     return {row[key_column]: row[id_column] for row in rows}
 

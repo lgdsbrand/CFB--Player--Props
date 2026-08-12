@@ -49,6 +49,16 @@ from worker.logging_setup import get_logger
 
 log = get_logger(__name__)
 
+# The sport every row this adapter writes belongs to (migration 0035).
+#
+# Stated explicitly rather than left to the column default. The default exists so
+# that adding the dimension did not require touching every insert in the project;
+# THIS file is the one place where being explicit is the point, because it is the
+# sport-specific adapter (CLAUDE.md §3) and the NFL one will be its mirror image.
+# A reader comparing the two should be able to see the seam without diffing a
+# schema.
+SPORT = "cfb"
+
 # Completed seasons are immutable, so their responses never expire. The caller
 # overrides this for the current season.
 IMMUTABLE = None
@@ -83,8 +93,10 @@ def ingest_conferences(client: CfbdClient, counts: IngestCounts) -> None:
 
     # CFBD returns several names twice — a current conference and a defunct
     # record carrying the same name (e.g. "Ivy" as both today's FCS conference,
-    # id 22, and a long-obsolete FBS classification, id 212). `conferences.name`
-    # is UNIQUE, so one has to win.
+    # id 22, and a long-obsolete FBS classification, id 212). The unique key is
+    # `(sport, name)` and every row here carries the same sport, so one has to
+    # win — and a multi-row upsert hitting the same key twice in one statement is
+    # rejected outright rather than resolved.
     #
     # Tie-break on the LOWEST CFBD id, which is the older registration and picks
     # the surviving conference in every case that matters here. Known
@@ -112,6 +124,7 @@ def ingest_conferences(client: CfbdClient, counts: IngestCounts) -> None:
         {
             "cfbd_id": r.get("id"),
             "name": name,
+            "sport": SPORT,
             "abbreviation": r.get("abbreviation"),
             "short_name": r.get("shortName"),
             "classification": normalize_classification(r.get("classification")),
@@ -120,11 +133,19 @@ def ingest_conferences(client: CfbdClient, counts: IngestCounts) -> None:
     ]
 
     # is_displayed is deliberately absent from update_columns: it is a UI choice
-    # made in the seed migration, not something the API knows about.
+    # made in the seed migration, not something the API knows about. `sport` is
+    # absent for a different reason — it is part of the conflict key, so an
+    # existing row matched here is already this sport's row.
+    #
+    # THE CONFLICT TARGET IS (sport, name), NOT (name). Migration 0035 replaced
+    # the global unique on the name, and `on conflict (name)` names an index
+    # rather than a column list: it would raise "no unique or exclusion
+    # constraint matching the ON CONFLICT specification" on the next Sunday run
+    # and take the whole weekly chain down with it, since this is its first step.
     n = upsert(
         "conferences",
         payload,
-        conflict_columns=["name"],
+        conflict_columns=["sport", "name"],
         update_columns=["cfbd_id", "abbreviation", "short_name", "classification"],
     )
     counts.add("conferences", n)
@@ -182,6 +203,7 @@ def ingest_teams(client: CfbdClient, season: int, counts: IngestCounts) -> None:
             {
                 "cfbd_id": r["id"],
                 "school": r["school"],
+                "sport": SPORT,
                 "mascot": r.get("mascot"),
                 "abbreviation": r.get("abbreviation"),
                 # alternateNames is a list; the schema holds a single alt_name.
@@ -196,7 +218,10 @@ def ingest_teams(client: CfbdClient, season: int, counts: IngestCounts) -> None:
 
     # team_seasons needs surrogate ids, so resolve after teams are written.
     team_ids = fetch_id_map("teams", "cfbd_id")
-    conference_ids = fetch_id_map("conferences", "name")
+    # Scoped by sport: `cfbd_id` above is globally unique, a conference NAME is
+    # only unique within one (migration 0035). Unscoped, this would eventually
+    # map a college conference name onto another sport's row.
+    conference_ids = fetch_id_map("conferences", "name", filters={"sport": SPORT})
 
     season_payload = []
     unknown_conferences: set[str] = set()
@@ -283,6 +308,7 @@ def ingest_games(client: CfbdClient, season: int, counts: IngestCounts) -> None:
                     "cfbd_id": r.get("id"),
                     "season": season,
                     "week": week,
+                    "sport": SPORT,
                     "season_type": row_season_type,
                     "start_date": r.get("startDate"),
                     "start_time_tbd": bool(r.get("startTimeTBD")),
@@ -354,6 +380,7 @@ def ingest_rosters(
         player_payload[athlete_id] = {
             "cfbd_athlete_id": athlete_id,
             "name": name,
+            "sport": SPORT,
             "first_name": first or None,
             "last_name": last or None,
             "position_group": normalizer.normalize(r.get("position")),
@@ -370,7 +397,10 @@ def ingest_rosters(
     counts.add("players", n)
 
     player_ids = fetch_id_map("players", "cfbd_athlete_id")
-    team_ids_by_school = fetch_id_map("teams", "school")
+    # Scoped for the same reason as the conference map above, and here the risk
+    # is more concrete: `teams` has no unique constraint on `school` at all, so
+    # two sports sharing a city name would resolve to whichever row came back.
+    team_ids_by_school = fetch_id_map("teams", "school", filters={"sport": SPORT})
 
     membership: dict[tuple[int, int, int], dict[str, Any]] = {}
     unresolved_teams: set[str] = set()

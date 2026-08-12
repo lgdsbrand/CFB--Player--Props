@@ -43,7 +43,11 @@ function loadEnv() {
 }
 
 /**
- * Every column the read layer selects, per source.
+ * Every column the read layer NAMES, per source — selected or filtered on.
+ *
+ * Filters count. A predicate on a column the anon role cannot see fails exactly
+ * the same way a missing select column does, and `sport` is listed below for
+ * several sources that never render it for that reason.
  *
  * Kept as literal lists rather than imported from the query modules: those are
  * TypeScript and this is a plain script, and duplicating ~40 strings is a
@@ -63,7 +67,7 @@ const EXPECTED = {
     "conference_is_displayed", "display_confidence", "effective_sample",
     "venue_name", "venue_city", "venue_state",
     "team_spread", "game_total", "game_line_providers",
-    "team_poll_rank", "opponent_poll_rank",
+    "team_poll_rank", "opponent_poll_rank", "sport",
   ],
   v_player_game_log: [
     "player_id", "game_id", "season", "week", "position_group", "is_home",
@@ -89,14 +93,14 @@ const EXPECTED = {
   ],
   v_slate_weeks: [
     "season", "week", "games", "projections", "players", "first_kickoff",
-    "last_kickoff",
+    "last_kickoff", "sport",
   ],
   markets: [
     "key", "display_name", "short_label", "emoji", "stat_column", "is_binary",
     "default_line", "unit", "sort_order", "is_active",
   ],
   market_positions: ["market_key", "position_group", "sort_order"],
-  conferences: ["id", "name", "abbreviation", "is_displayed"],
+  conferences: ["id", "name", "abbreviation", "is_displayed", "sport"],
   app_config: ["key", "value"],
   defense_position_ratings: [
     "defense_team_id", "position_group", "as_of_week", "season",
@@ -106,7 +110,7 @@ const EXPECTED = {
   ],
   games: [
     "id", "season", "week", "start_date", "neutral_site", "home_team_id",
-    "away_team_id",
+    "away_team_id", "sport",
   ],
   // Conference membership is season-scoped because realignment moves teams
   // between the seasons this project covers, so the weekly-targets directory

@@ -311,6 +311,45 @@ check(G, "views are queryable against real data", """
            (select count(*) from v_latest_prop_lines) as lines
 """, lambda r: r["game_log"] > 0)
 
+# --- the sport dimension (migration 0035) -------------------------------------
+check(G, "sport enum is exactly ('cfb','nfl')", """
+    select array_agg(e.enumlabel::text order by e.enumsortorder) as labels
+      from pg_type t join pg_enum e on e.enumtypid = t.oid
+     where t.typname = 'sport'
+""", lambda r: r["labels"] == ["cfb", "nfl"])
+
+check(G, "sport column on all four root tables", """
+    select count(*) as n from information_schema.columns
+     where table_schema = 'public' and column_name = 'sport'
+       and table_name in ('conferences', 'teams', 'games', 'players')
+""", lambda r: r["n"] == 4)
+
+# The whole point of 0035. A global unique on the name would reject the AFC the
+# day NFL reference data is ingested, which is the sort of thing that surfaces
+# halfway through a backfill rather than in review.
+check(G, "conference names are unique PER SPORT, not globally", """
+    select count(*) filter (where conname = 'conferences_sport_name_key') as scoped,
+           count(*) filter (where conname = 'conferences_name_key')       as global
+      from pg_constraint where conrelid = 'conferences'::regclass
+""", lambda r: r["scoped"] == 1 and r["global"] == 0)
+
+# These two are what make `default 'cfb'` safe rather than a silent mislabelling
+# waiting for the NFL adapter — an NFL row has no CFBD id, so a row that defaults
+# to the college sport and omits one cannot be inserted at all. Asserting the
+# constraints FIRE rather than merely exist, for the reason in `rejects`.
+rejects(
+    G, "a cfb team with no cfbd_id is rejected",
+    "insert into teams (cfbd_id, school) values (null, '__audit__')",
+    None, "teams_cfb_requires_cfbd_id",
+)
+
+rejects(
+    G, "a cfb game with no cfbd_id is rejected",
+    "insert into games (cfbd_id, season, week, home_team_id, away_team_id) "
+    "values (null, 2026, 1, 1, 2)",
+    None, "games_cfb_requires_cfbd_id",
+)
+
 # =============================================================================
 # PHASE 2 — referential integrity
 # =============================================================================
@@ -337,6 +376,43 @@ check(G, "no orphaned foreign keys anywhere", """
            left join games g on g.id=w.game_id where g.id is null)
       as orphans
 """, lambda r: r["orphans"] == 0)
+
+# --- nothing crosses the sport boundary ---------------------------------------
+# Downstream tables carry no `sport` column by design (migration 0035): they
+# inherit it through their foreign keys, so there is nothing to disagree. These
+# check the four places where two INDEPENDENTLY-labelled root rows meet, which is
+# where a mislabelled ingest would actually show up. Trivially zero while one
+# sport exists; the reason to write them now is that they are the assertions
+# nobody thinks to add after the mixing has already happened, and the symptom —
+# an NFL player on the college board — reads as a UI bug for a long time.
+check(G, "no game joins a team of another sport", """
+    select count(*) as n from games g
+      join teams h on h.id = g.home_team_id
+      join teams a on a.id = g.away_team_id
+     where h.sport <> g.sport or a.sport <> g.sport
+""", lambda r: r["n"] == 0)
+
+check(G, "no team is in another sport's conference", """
+    select count(*) as n from team_seasons ts
+      join teams t       on t.id = ts.team_id
+      join conferences c on c.id = ts.conference_id
+     where c.sport <> t.sport
+""", lambda r: r["n"] == 0)
+
+check(G, "no player is rostered by another sport's team", """
+    select count(*) as n from player_team_seasons pts
+      join players p on p.id = pts.player_id
+      join teams t   on t.id = pts.team_id
+     where p.sport <> t.sport
+""", lambda r: r["n"] == 0)
+
+check(G, "no projection crosses sports", """
+    select count(*) as n from projections pr
+      join games g   on g.id  = pr.game_id
+      join players p on p.id  = pr.player_id
+      join teams t   on t.id  = pr.team_id
+     where p.sport <> g.sport or t.sport <> g.sport
+""", lambda r: r["n"] == 0)
 
 check(G, "denormalized season matches games.season everywhere", """
     select

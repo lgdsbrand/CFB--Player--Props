@@ -14,6 +14,7 @@
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { type BoardSort, boardSortKeys } from "@/lib/core/board-view";
+import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { BetSide, BoardRow, PositionGroup } from "@/lib/core/types";
 import { SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
 import { type DbRow, MAX_ROWS_PER_REQUEST, unwrap } from "@/lib/data/query";
@@ -28,6 +29,13 @@ export type { BoardSort };
 export type BoardFilters = {
   season: number;
   week: number;
+
+  /**
+   * Defaults to `DEFAULT_SPORT`. Every caller omits it today — there is one
+   * sport in the database and no toggle — but the predicate is applied
+   * regardless, because the failure it prevents is silent. See `core/sport.ts`.
+   */
+  sport?: Sport;
 
   marketKey?: string;
   positionGroup?: PositionGroup;
@@ -100,6 +108,7 @@ function buildBoardQuery(select: string, filters: BoardFilters, count?: "exact")
   let query = supabase
     .from("v_board_rows")
     .select(select, count ? { count } : undefined)
+    .eq("sport", filters.sport ?? DEFAULT_SPORT)
     .eq("season", filters.season)
     .eq("week", filters.week);
 

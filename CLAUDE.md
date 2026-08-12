@@ -71,6 +71,21 @@ Structure the code so a second sport (NFL) can reuse most of it later. Two layer
 Do not build a shared package or workspace. Just keep the boundary disciplined so
 the core can be copied into the NFL repo cleanly.
 
+> **Amended 2026-08-11 — the seam is now a runtime dimension, not a repo split.**
+> The client chose **one app with a sport toggle** over two separate products.
+> The two-layer discipline above is unchanged and still the point; what changed
+> is where the boundary is enforced. NFL rows will live in *these* tables,
+> separated by a `sport` column on `conferences`, `teams`, `games` and `players`
+> (migration 0035), and every read that could mix the two filters on it
+> (`web/lib/core/sport.ts`). Downstream tables inherit sport through their
+> foreign keys and deliberately carry no copy of it.
+>
+> Splitting back apart later stays cheap and is the direction that works: the
+> sports share no rows, so a split is a filtered copy, whereas merging two live
+> databases would mean re-keying every primary key. One repo and one database can
+> also serve two URLs as two Vercel projects, so "toggle" and "separate sites"
+> are not opposed.
+
 ---
 
 ## 4. Data layer (CollegeFootballData)

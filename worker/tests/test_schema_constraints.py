@@ -47,10 +47,21 @@ def conn():
         pytest.skip("SUPABASE_DB_URL not set — integration tests need a database")
 
     with psycopg.connect(url, row_factory=dict_row) as connection:
-        try:
+        # THE OUTER TRANSACTION IS OPENED EXPLICITLY, and that is load-bearing.
+        #
+        # `conn.transaction()` inside a test is only a SAVEPOINT when a
+        # transaction is already open; with none open it begins a real one and
+        # COMMITS it on the way out. Every test here used to reach `base` first,
+        # whose inserts opened the transaction implicitly, so the distinction
+        # never showed. A test that touches the database without `base` — the
+        # sport tests at the bottom of this file are the first — committed its
+        # rows into whichever database SUPABASE_DB_URL pointed at, passed in
+        # isolation, and then failed on the NEXT run against its own leftovers.
+        #
+        # `force_rollback` makes the file's promise ("no row survives") true for
+        # any test, not just the ones that happen to use the fixture below it.
+        with connection.transaction(force_rollback=True):
             yield connection
-        finally:
-            connection.rollback()
 
 
 @pytest.fixture
@@ -507,6 +518,109 @@ class TestBoardBehaviour:
             (projection,),
         ).fetchone()["n"]
         assert count == 1
+
+
+# =============================================================================
+# CLAUDE.md §3 — the sport dimension (migration 0035)
+# =============================================================================
+# The client chose one app with a toggle, so NFL rows will share these tables.
+# What is tested here is that the schema can actually HOLD a second sport, which
+# is the claim the migration makes and the only one worth proving early: by the
+# time NFL data exists, a schema that cannot take it is a data migration on a
+# live season rather than a DDL change.
+class TestSportDimension:
+    def test_an_nfl_team_needs_no_cfbd_id(self, conn):
+        """The reason `cfbd_id` stopped being NOT NULL.
+
+        CFBD has never heard of the Bengals. Before 0035 an NFL team could only
+        be inserted by inventing a CFBD id for it, which would then collide with
+        a real college team's the moment CFBD issued that id.
+        """
+        with conn.transaction():
+            row = conn.execute(
+                "insert into teams (school, sport) values ('Test NFL', 'nfl') "
+                "returning sport, cfbd_id"
+            ).fetchone()
+        assert row["sport"] == "nfl"
+        assert row["cfbd_id"] is None
+
+    def test_a_cfb_team_still_cannot_omit_its_cfbd_id(self, conn):
+        """And this is what makes `default 'cfb'` safe rather than a trap.
+
+        An NFL row that forgets to set `sport` defaults to the college one, has
+        no CFBD id, and is rejected here — instead of quietly appearing on the
+        college board. The default is a convenience; this constraint is what
+        stops it becoming a silent mislabelling.
+        """
+        with pytest.raises(pg_errors.CheckViolation) as excinfo:
+            with conn.transaction():
+                conn.execute(
+                    "insert into teams (school) values ('Test Unlabelled')"
+                )
+        assert excinfo.value.diag.constraint_name == "teams_cfb_requires_cfbd_id"
+
+    def test_a_cfb_game_still_cannot_omit_its_cfbd_id(self, conn, base):
+        with pytest.raises(pg_errors.CheckViolation) as excinfo:
+            with conn.transaction():
+                conn.execute(
+                    "insert into games (season, week, home_team_id, away_team_id) "
+                    "values (2026, 1, %s, %s)",
+                    (base["offense"], base["defense"]),
+                )
+        assert excinfo.value.diag.constraint_name == "games_cfb_requires_cfbd_id"
+
+    def test_two_sports_may_share_a_conference_name(self, conn):
+        with conn.transaction():
+            conn.execute(
+                "insert into conferences (name, sport) values ('Test Conf', 'cfb')"
+            )
+            conn.execute(
+                "insert into conferences (name, sport) values ('Test Conf', 'nfl')"
+            )
+            n = conn.execute(
+                "select count(*) as n from conferences where name = 'Test Conf'"
+            ).fetchone()["n"]
+        assert n == 2
+
+    def test_one_sport_may_not(self, conn):
+        with pytest.raises(pg_errors.UniqueViolation) as excinfo:
+            with conn.transaction():
+                conn.execute(
+                    "insert into conferences (name, sport) values ('Test Conf', 'cfb')"
+                )
+                conn.execute(
+                    "insert into conferences (name, sport) values ('Test Conf', 'cfb')"
+                )
+        assert excinfo.value.diag.constraint_name == "conferences_sport_name_key"
+
+    def test_the_conference_upsert_target_resolves(self, conn):
+        """A REGRESSION TEST FOR A BREAK 0035 INTRODUCED, not for the schema.
+
+        `ON CONFLICT (...)` names an INDEX, not a column list. Migration 0035
+        replaced the global unique on `conferences.name`, so the reference
+        adapter's `on conflict (name)` stopped matching anything and would have
+        raised on the next Sunday run — taking the whole weekly chain down with
+        it, since conferences are its first step. Nothing in the type system or
+        the unit tests could see that; it lives in the gap between a migration
+        and a string in an unrelated file.
+
+        The statement below is the one `upsert()` builds for the adapter's
+        declared conflict columns. If the constraint is ever reshaped again, this
+        fails in a second rather than at 09:00 UTC on a Sunday.
+        """
+        with conn.transaction():
+            conn.execute(
+                "insert into conferences (name, sport) values ('Test Conf', 'cfb') "
+                "on conflict (sport, name) do update set abbreviation = excluded.abbreviation"
+            )
+
+    def test_the_board_carries_the_sport_it_belongs_to(self, conn, base):
+        projection = make_projection(conn, base)
+        row = conn.execute(
+            "select sport from v_board_rows where projection_id = %s",
+            (projection,),
+        ).fetchone()
+        assert row["sport"] == "cfb"
 
 
 # =============================================================================

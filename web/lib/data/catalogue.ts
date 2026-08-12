@@ -9,6 +9,7 @@
  */
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { DEFAULT_SPORT } from "@/lib/core/sport";
 import type { Conference, Market, PositionGroup } from "@/lib/core/types";
 import { type DbRow, unwrap } from "@/lib/data/query";
 import { cachedRead } from "@/lib/data/cache";
@@ -88,6 +89,11 @@ export function marketsForPosition(
  * missing (CLAUDE.md §4). The seed marks five as displayed; the Pac-12 is
  * deliberately not among them post-realignment, and this returns whatever the
  * table says rather than assuming a fixed six.
+ *
+ * Scoped by sport (migration 0035) because conference names are only unique
+ * within one: the AFC and the SEC in the same filter would be a nonsense
+ * control, and a name shared across two sports would collapse two rows into one
+ * option.
  */
 async function readConferences(
   { displayedOnly = true }: { displayedOnly?: boolean } = {},
@@ -97,6 +103,7 @@ async function readConferences(
   let query = supabase
     .from("conferences")
     .select("id, name, abbreviation, is_displayed")
+    .eq("sport", DEFAULT_SPORT)
     .order("name");
 
   if (displayedOnly) query = query.eq("is_displayed", true);

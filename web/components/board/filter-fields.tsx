@@ -11,7 +11,7 @@ import {
 } from "@/lib/core/board-params";
 import { formatKickoff } from "@/lib/core/format";
 import type { Conference } from "@/lib/core/types";
-import type { SlateGame } from "@/lib/data/slate";
+import type { GameSummary } from "@/lib/core/types";
 
 /**
  * The board's field filters — search, game, conference, confidence, opponent
@@ -82,7 +82,7 @@ export function FilterFields({
 }: {
   params: BoardParams;
   conferences: Conference[];
-  games: SlateGame[];
+  games: GameSummary[];
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();

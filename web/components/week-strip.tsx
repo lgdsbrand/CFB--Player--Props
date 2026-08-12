@@ -69,9 +69,16 @@ const WEEKS_SHOWN_COLLAPSED = 2;
 export function WeekStrip({
   weeks,
   active,
+  basePath = "/",
 }: {
   weeks: SlateWeek[];
   active: SlateWeek | null;
+  /**
+   * Where a week card links. The strip appears above the board and above the
+   * games index, and each must keep the reader on the page they are already on
+   * — changing the week should not also change what they are looking at.
+   */
+  basePath?: string;
 }) {
   const nav = useRef<HTMLElement>(null);
   const current = useRef<HTMLAnchorElement>(null);
@@ -129,7 +136,7 @@ export function WeekStrip({
             return (
               <Link
                 key={season}
-                href={`/?season=${season}&week=${landing.week}`}
+                href={`${basePath}?season=${season}&week=${landing.week}`}
                 aria-current={isActive ? "true" : undefined}
                 className={
                   "rounded-full border px-2.5 py-1 text-[0.6875rem] font-bold tabular-nums transition-colors " +
@@ -157,7 +164,7 @@ export function WeekStrip({
             <Link
               key={`${week.season}-${week.week}`}
               ref={isActive ? current : undefined}
-              href={`/?season=${week.season}&week=${week.week}`}
+              href={`${basePath}?season=${week.season}&week=${week.week}`}
               aria-current={isActive ? "page" : undefined}
               className={
                 "flex min-w-30 shrink-0 flex-col gap-0.5 rounded-xl border px-3 py-2 transition-colors " +

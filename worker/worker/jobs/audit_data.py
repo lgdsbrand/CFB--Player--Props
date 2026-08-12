@@ -1492,6 +1492,57 @@ check(G, "v_slate_weeks counts agree with the tables they summarise", """
       from v_slate_weeks v
 """, lambda r: r["weeks"] > 0 and r["wrong"] == 0)
 
+# --- Analyze Games (migration 0037) -------------------------------------------
+# The index's counts and the board's rows come from two different queries over
+# the same projections. If they drift, a game card promises 51 props and the
+# board behind it shows a different number, which reads as a broken filter.
+check(G, "v_slate_games agrees with the board about how many props a game has", """
+    select count(*) as mismatched
+      from v_slate_games g
+     where g.projections <> (
+       select count(*) from v_board_rows b where b.game_id = g.game_id
+     )
+""", lambda r: r["mismatched"] == 0)
+
+# `calls` counts PROJECTIONS THAT HAVE A PICK, not picks: a projection carries
+# one pick per sportsbook, so the naive count would inflate the moment a second
+# book is ingested and would stop matching what a reader can count on screen.
+check(G, "v_slate_games counts called projections, not picks", """
+    select count(*) as mismatched
+      from v_slate_games g
+     where g.calls <> (
+       select count(*) from v_board_rows b
+        where b.game_id = g.game_id and b.has_call
+     )
+""", lambda r: r["mismatched"] == 0)
+
+check(G, "every game on the slate reaches v_slate_games exactly once", """
+    select (select count(*) from games)          as games,
+           (select count(*) from v_slate_games)  as rows
+""", lambda r: r["games"] == r["rows"])
+
+# The consensus line must be a line a book actually posted. percentile_cont
+# interpolated between two books straddling a half-point tick and produced
+# spreads like -36.8, which exists at no sportsbook — see migration 0038.
+check(G, "the consensus spread and total sit on a real market tick", """
+    select count(*) filter (where (spread * 2) <> round((spread * 2)::numeric))
+             as off_tick_spread,
+           count(*) filter (
+             where (over_under * 2) <> round((over_under * 2)::numeric)
+           ) as off_tick_total
+      from v_game_line_consensus
+""", lambda r: r["off_tick_spread"] == 0 and r["off_tick_total"] == 0)
+
+check(G, "the consensus spread is one a provider actually posted", """
+    select count(*) as invented
+      from v_game_line_consensus c
+     where c.spread is not null
+       and not exists (
+         select 1 from game_lines g
+          where g.game_id = c.game_id and g.spread::double precision = c.spread
+       )
+""", lambda r: r["invented"] == 0)
+
 # The board's position tabs are fixed; the data behind them is not. A position
 # with no projections renders an empty tab that looks like a filter bug.
 check(G, "every position tab has rows in the latest slate week", """

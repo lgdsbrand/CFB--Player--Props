@@ -3,7 +3,7 @@ import Link from "next/link";
 import { FilterFields } from "@/components/board/filter-fields";
 import { boardHref, type BoardParams } from "@/lib/core/board-params";
 import { POSITION_GROUPS, type Conference, type Market } from "@/lib/core/types";
-import type { SlateGame } from "@/lib/data/slate";
+import type { GameSummary } from "@/lib/core/types";
 
 /**
  * The board's controls (CLAUDE.md §7).
@@ -31,7 +31,7 @@ export function BoardControls({
   params: BoardParams;
   markets: Market[];
   conferences: Conference[];
-  games: SlateGame[];
+  games: GameSummary[];
   hitRateWindows: number[];
   resultCount: number;
 }) {

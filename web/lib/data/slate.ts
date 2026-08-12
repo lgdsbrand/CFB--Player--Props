@@ -56,68 +56,15 @@ async function readSlateWeeks(): Promise<SlateWeek[]> {
  */
 export { defaultWeek, findWeek } from "@/lib/core/slate-view";
 
-export type SlateGame = {
-  gameId: number;
-  startDate: string | null;
-  neutralSite: boolean;
-  homeTeamId: number;
-  awayTeamId: number;
-  homeAbbreviation: string | null;
-  awayAbbreviation: string | null;
-  homeSchool: string;
-  awaySchool: string;
-};
-
-type EmbeddedTeam = { abbreviation: string | null; school: string } | null;
-
 /**
- * Games in one week, for the game selector.
+ * The week's games moved to `lib/data/games.ts`.
  *
- * Read from `games` with the two teams embedded — about sixty rows. Deriving
- * the list from the board instead would mean pulling every projection in the
- * week (6,000+, past PostgREST's row cap) to recover sixty distinct game ids.
- *
- * The cost is that a game with no board rows still appears in the selector, and
- * picking it shows an empty board. That is the honest outcome: the game IS on
- * the slate, and "no player here clears the usage threshold" is a real answer
- * rather than a missing option.
+ * They read `v_slate_games` now (migration 0037), which the Analyze Games view
+ * also reads — so the board's game selector and the games index cannot disagree
+ * about which games a week holds. Re-exported here because every caller wants
+ * the games beside the weeks.
  */
-export async function getSlateGames(
-  season: number,
-  week: number,
-): Promise<SlateGame[]> {
-  const supabase = createServerSupabaseClient();
-  const rows = unwrap<DbRow[]>(
-    await supabase
-      .from("games")
-      .select(
-        "id, start_date, neutral_site, home_team_id, away_team_id, " +
-          "home:teams!home_team_id(abbreviation, school), " +
-          "away:teams!away_team_id(abbreviation, school)",
-      )
-      .eq("sport", DEFAULT_SPORT)
-      .eq("season", season)
-      .eq("week", week)
-      .order("start_date"),
-    "games (slate)",
-  );
-
-  return rows.map((row) => {
-    const home = row.home as EmbeddedTeam;
-    const away = row.away as EmbeddedTeam;
-    return {
-      gameId: row.id as number,
-      startDate: row.start_date as string | null,
-      neutralSite: row.neutral_site as boolean,
-      homeTeamId: row.home_team_id as number,
-      awayTeamId: row.away_team_id as number,
-      homeAbbreviation: home?.abbreviation ?? null,
-      awayAbbreviation: away?.abbreviation ?? null,
-      homeSchool: home?.school ?? "",
-      awaySchool: away?.school ?? "",
-    };
-  });
-}
+export { getSlateGames } from "@/lib/data/games";
 
 /**
  * The weeks with model output, cached.

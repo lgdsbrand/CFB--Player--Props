@@ -11,6 +11,7 @@ import Link from "next/link";
 export function SiteHeader({ activeHref = "/" }: { activeHref?: string }) {
   const links = [
     { href: "/", label: "Board" },
+    { href: "/games", label: "Games" },
     { href: "/health", label: "Health" },
   ];
 

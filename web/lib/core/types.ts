@@ -280,6 +280,56 @@ export type DefenseSplitRow = {
   recYardsAllowedPg: number | null;
 };
 
+/**
+ * One game on the slate — the unit of the Analyze Games view.
+ *
+ * Also what the board's game selector reads, so the two cannot disagree about
+ * which games a week contains. Everything here is a schedule fact, a number a
+ * book published, or a count of model output that already exists; nothing
+ * predicts an outcome (CLAUDE.md §10).
+ */
+export type GameSummary = {
+  gameId: number;
+  season: number;
+  week: number;
+  startDate: string | null;
+  startTimeTbd: boolean;
+  neutralSite: boolean;
+  completed: boolean;
+  homePoints: number | null;
+  awayPoints: number | null;
+
+  homeTeamId: number;
+  homeSchool: string;
+  homeAbbreviation: string | null;
+  homeColor: string | null;
+  homeAltColor: string | null;
+
+  awayTeamId: number;
+  awaySchool: string;
+  awayAbbreviation: string | null;
+  awayColor: string | null;
+  awayAltColor: string | null;
+
+  venueName: string | null;
+  venueCity: string | null;
+  venueState: string | null;
+
+  /** HOME perspective: negative means the home team is favoured. */
+  homeSpread: number | null;
+  gameTotal: number | null;
+  gameLineProviders: number | null;
+
+  homePollRank: number | null;
+  awayPollRank: number | null;
+
+  /** Projections on this game across BOTH teams and all conferences. */
+  projections: number;
+  players: number;
+  /** Projections carrying a pick — not the number of picks. */
+  calls: number;
+};
+
 /** A week that has model output, for the week selector. */
 export type SlateWeek = {
   season: number;

@@ -95,6 +95,15 @@ const EXPECTED = {
     "season", "week", "games", "projections", "players", "first_kickoff",
     "last_kickoff", "sport",
   ],
+  v_slate_games: [
+    "game_id", "sport", "season", "week", "start_date", "start_time_tbd",
+    "neutral_site", "completed", "home_points", "away_points",
+    "home_team_id", "home_school", "home_abbreviation", "home_color",
+    "home_alt_color", "away_team_id", "away_school", "away_abbreviation",
+    "away_color", "away_alt_color", "venue_name", "venue_city", "venue_state",
+    "home_spread", "game_total", "game_line_providers", "home_poll_rank",
+    "away_poll_rank", "projections", "players", "calls",
+  ],
   markets: [
     "key", "display_name", "short_label", "emoji", "stat_column", "is_binary",
     "default_line", "unit", "sort_order", "is_active",

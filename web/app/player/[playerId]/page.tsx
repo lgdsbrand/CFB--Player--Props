@@ -9,6 +9,7 @@ import { NotConfigured } from "@/components/not-configured";
 import { DefenseDetail } from "@/components/player/defense-detail";
 import { GameLogTable } from "@/components/player/game-log-table";
 import { HitRateChart } from "@/components/player/hit-rate-chart";
+import { LadderPanel } from "@/components/player/ladder-panel";
 import { MarketTabs } from "@/components/player/market-tabs";
 import { SplitGrid } from "@/components/player/split-grid";
 import { SiteHeader } from "@/components/site-header";
@@ -430,6 +431,17 @@ export default async function PlayerDetail({
           />
 
           <Projection row={activeRow} market={activeMarket} />
+
+          {/* Below the range, for the same reason the range is below the call:
+              both are the distribution being interrogated, not the claim. A
+              binary market has no ladder — anytime TD is one probability, and a
+              ladder of it would be that number repeated. */}
+          <LadderPanel
+            ladder={activeRow.ladder}
+            line={activeRow.line}
+            median={activeRow.projectedMedian}
+            unit={activeMarket?.unit ?? null}
+          />
         </div>
       </div>
     </Shell>

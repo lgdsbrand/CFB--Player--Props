@@ -14,6 +14,7 @@
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { type BoardSort, boardSortKeys } from "@/lib/core/board-view";
+import { parseLadder } from "@/lib/core/ladder-view";
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { BetSide, BoardRow, PositionGroup } from "@/lib/core/types";
 import { SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
@@ -87,6 +88,16 @@ const COLUMNS =
   "opponent_rank_vs_position, conference_name, conference_is_displayed, " +
   "display_confidence, effective_sample, venue_name, venue_city, venue_state, " +
   "team_spread, game_total, game_line_providers, team_poll_rank, opponent_poll_rank";
+
+/**
+ * The player-detail column list: everything above, plus the ladder.
+ *
+ * SEPARATE FROM `COLUMNS` ON PURPOSE. A ladder is 5 to 7 jsonb objects per row
+ * and the board renders none of them, so putting it in the shared list would put
+ * thousands of rung objects on the wire for every page of a board that shows a
+ * card per row and a ladder on none. One player's rows are at most nine.
+ */
+const PLAYER_COLUMNS = `${COLUMNS}, ladder`;
 
 export type BoardPage = {
   rows: BoardRow[];
@@ -427,7 +438,7 @@ export async function getPlayerBoardRows(
   const rows = unwrap<DbRow[]>(
     await supabase
       .from("v_board_rows")
-      .select(COLUMNS)
+      .select(PLAYER_COLUMNS)
       .eq("player_id", playerId)
       .eq("season", season)
       .eq("week", week)
@@ -499,6 +510,11 @@ function toBoardRow(row: Record<string, unknown>): BoardRow {
     projectedMedian: (row.projected_median as number | null) ?? null,
     projectedP10: (row.projected_p10 as number | null) ?? null,
     projectedP90: (row.projected_p90 as number | null) ?? null,
+    // Absent from the board's column list, so `row.ladder` is undefined there
+    // rather than null. Parsed rather than cast: the column is jsonb with only an
+    // outer array constraint, so element shape is a worker guarantee, not a
+    // database one.
+    ladder: row.ladder === undefined ? null : parseLadder(row.ladder),
     priorWeight: (row.prior_weight as number | null) ?? null,
     effectiveSample: (row.effective_sample as number | null) ?? null,
 

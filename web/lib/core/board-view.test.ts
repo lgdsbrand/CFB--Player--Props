@@ -270,6 +270,9 @@ function row(overrides: Partial<BoardRow> = {}): BoardRow {
     projectedMedian: 50,
     projectedP10: 20,
     projectedP90: 90,
+    // Null, as it is on every board row: the ladder is selected only by the
+    // player-detail query. Grouping never reads it.
+    ladder: null,
     priorWeight: 0.3,
     effectiveSample: 6.5,
     opponentRankVsPosition: 100,

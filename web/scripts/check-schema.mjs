@@ -68,6 +68,11 @@ const EXPECTED = {
     "venue_name", "venue_city", "venue_state",
     "team_spread", "game_total", "game_line_providers",
     "team_poll_rank", "opponent_poll_rank", "sport",
+    // Selected only by the player-detail query, never the board page — but named
+    // here all the same. This guard exists to catch a column that vanished
+    // underneath hand-written types, and a column read on one route only is
+    // MORE at risk of that, not less: nothing on the board would break first.
+    "ladder",
   ],
   v_player_game_log: [
     "player_id", "game_id", "season", "week", "position_group", "is_home",

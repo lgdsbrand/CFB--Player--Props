@@ -42,6 +42,19 @@ export type HitRateBasis = "threshold" | "closing_line";
  * discriminates. Treating a null `edge` as zero would report "no disagreement
  * with the market" for a row that has no market at all.
  */
+/**
+ * One rung of the alternate-line ladder: a line, and the model's probability of
+ * clearing it.
+ *
+ * NO BOOK PRICE, deliberately. Books post one line, so a rung has no market to
+ * be compared against, and an edge quoted against a line nobody offered would be
+ * inventing a market. The edge belongs to the pick, on the posted line.
+ */
+export type LadderRung = {
+  line: number;
+  probOver: number;
+};
+
 export type BoardRow = {
   projectionId: number;
   pickId: number | null;
@@ -149,6 +162,17 @@ export type BoardRow = {
 
   conferenceName: string | null;
   conferenceIsDisplayed: boolean | null;
+
+  /**
+   * Alternate-line rungs, ascending by line. SECONDARY DETAIL, like the range.
+   *
+   * Only populated by the PLAYER-DETAIL query — the board page does not select
+   * the column, because it is 5 to 7 objects per row and the board renders none
+   * of them. So `null` here means "not asked for" as often as it means "this
+   * market has no ladder", and the panel treats both the same way: it does not
+   * render. Read it through `lib/core/ladder-view.ts`.
+   */
+  ladder: LadderRung[] | null;
 
   /**
    * THE HEADLINE NUMBER, as the card states it. `modelProbOver` for a binary

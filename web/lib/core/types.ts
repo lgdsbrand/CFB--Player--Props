@@ -366,6 +366,38 @@ export type SlateWeek = {
 };
 
 /**
+ * Conditions for one game, from `v_game_conditions`.
+ *
+ * Every field but the venue may be null, and that is the normal state rather
+ * than a fault: Open-Meteo forecasts about 15 days out, so a game further away
+ * than that has no reading yet and gains one as kickoff approaches.
+ */
+export type GameConditions = {
+  gameId: number;
+  venueName: string | null;
+  venueIsDome: boolean;
+  /** Separates "no forecast yet" from "none was ever recorded". */
+  completed: boolean;
+
+  /** `"cfbd"` is an observation of a played game; `"open_meteo"` a forecast. */
+  source: string | null;
+  /** Do not infer this from `source` — see migration 0042. */
+  isForecast: boolean | null;
+  /** The hour the reading DESCRIBES, not when it was fetched. */
+  observedAt: string | null;
+
+  temperatureF: number | null;
+  dewPointF: number | null;
+  humidity: number | null;
+  precipitationIn: number | null;
+  snowfallIn: number | null;
+  windSpeedMph: number | null;
+  windDirectionDeg: number | null;
+  pressureMb: number | null;
+  condition: string | null;
+};
+
+/**
  * Runtime configuration from `app_config`.
  *
  * Read rather than hardcoded because CLAUDE.md §9 leaves two of these open with

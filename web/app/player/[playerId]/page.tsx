@@ -12,6 +12,7 @@ import { HitRateChart } from "@/components/player/hit-rate-chart";
 import { LadderPanel } from "@/components/player/ladder-panel";
 import { MarketTabs } from "@/components/player/market-tabs";
 import { SplitGrid } from "@/components/player/split-grid";
+import { WeatherPanel } from "@/components/player/weather-panel";
 import { SiteHeader } from "@/components/site-header";
 import { BOARD_PATH, type RawParams } from "@/lib/core/board-params";
 import { defenseStatForMarket, rankBasis } from "@/lib/core/defense-view";
@@ -48,6 +49,7 @@ import {
 import { getPlayerQuotes, SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
 import { getPlayerGameLog, getPlayerIdentity } from "@/lib/data/players";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
+import { getGameConditions } from "@/lib/data/weather";
 
 /**
  * Player detail (CLAUDE.md §7).
@@ -154,22 +156,27 @@ export default async function PlayerDetail({
     activeRow.positionGroup ?? (await getPlayerIdentity(playerId))?.positionGroup;
   if (!position) notFound();
 
-  const [gameLog, quotes, aiRead, ratings, defenseGames] = await Promise.all([
-    getPlayerGameLog(playerId, {
-      season: active.season,
-      before: active.week,
-      limit: 30,
-    }),
-    getPlayerQuotes(playerId, active.season, active.week),
-    getAiRead(playerId, active.season, active.week),
-    getDefenseRatings(active.season, active.week, { positionGroup: position }),
-    getDefenseGameLog(
-      activeRow.opponentTeamId,
-      active.season,
-      position,
-      { before: active.week },
-    ),
-  ]);
+  const [gameLog, quotes, aiRead, ratings, defenseGames, conditions] =
+    await Promise.all([
+      getPlayerGameLog(playerId, {
+        season: active.season,
+        before: active.week,
+        limit: 30,
+      }),
+      getPlayerQuotes(playerId, active.season, active.week),
+      getAiRead(playerId, active.season, active.week),
+      getDefenseRatings(active.season, active.week, { positionGroup: position }),
+      getDefenseGameLog(
+        activeRow.opponentTeamId,
+        active.season,
+        position,
+        { before: active.week },
+      ),
+      // Joins this wave rather than forming its own: a wave costs one round
+      // trip whatever its width, so the conditions read is effectively free
+      // here and would cost a full ~415ms as a sixth wait.
+      getGameConditions(activeRow.gameId),
+    ]);
 
   // Binary markets grade on the OVER whatever the call was, so a green bar
   // means the player scored — see `market-row.tsx` for the full reasoning.
@@ -400,6 +407,8 @@ export default async function PlayerDetail({
             }
             asOfWeek={active.week}
           />
+
+          <WeatherPanel conditions={conditions} />
 
           <section className="panel flex flex-col gap-3 p-4">
             <h2 className="section-header flex items-center gap-2">

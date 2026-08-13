@@ -232,6 +232,30 @@ services:
     envVars:
       - fromGroup: cfb-props-worker
 
+  # Daily 11:00 UTC, an hour after the game lines. Open-Meteo's forecast
+  # endpoint is unauthenticated and free, and this makes roughly one call per
+  # venue per day of the slate — about 99 on a full opening weekend. There is no
+  # budget to protect here, so the cadence is chosen for freshness alone.
+  #
+  # DAILY IS THE POINT, NOT A COMPROMISE. The forecast horizon is ~16 days, so
+  # a game enters range mid-week and its forecast then sharpens every day up to
+  # kickoff. A weekly run would publish one early, wrong reading and leave it up.
+  #
+  # This does NOT replace the weather CFBD supplies through ingest_ratings.
+  # That one serves observed conditions and returns nothing for an unplayed
+  # game; this one forecasts. v_game_conditions prefers the observation once it
+  # exists.
+  - type: cron
+    name: cfb-props-weather
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 11 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.ingest_weather --current
+    envVars:
+      - fromGroup: cfb-props-worker
+
   # Wednesday 14:00 UTC: one read per player per week, cached in Supabase and
   # never generated per page view (CLAUDE.md §2, §10). After Tuesday's
   # projections, before the weekend. Exits 0 and does nothing while

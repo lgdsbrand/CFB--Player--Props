@@ -146,6 +146,14 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
         note="Sunday 09:00 UTC, chained — polls publish Sunday, one call/season",
     ),
     JobExpectation(
+        name="ingest_weather",
+        max_age_hours=48,
+        note="daily 11:00 UTC — Open-Meteo forecasts, unauthenticated and free. "
+             "A warning rather than a critical: a stale forecast costs the "
+             "panel its detail and the model a small feature, while the board, "
+             "the calls and the confidences all stand without it.",
+    ),
+    JobExpectation(
         name="generate_ai_reads",
         max_age_hours=200,
         enabled_key="ai_adapter",

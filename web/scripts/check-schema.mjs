@@ -100,6 +100,15 @@ const EXPECTED = {
     "season", "week", "games", "projections", "players", "first_kickoff",
     "last_kickoff", "sport",
   ],
+  // Every column here can be null except the first three: the view is driven
+  // from `games`, so a game with no weather row still produces a row. That is
+  // what lets the panel tell a dome apart from a forecast that has not landed.
+  v_game_conditions: [
+    "game_id", "venue_name", "venue_is_dome", "completed", "source",
+    "is_forecast", "observed_at", "temperature_f", "dew_point_f", "humidity",
+    "precipitation_in", "snowfall_in", "wind_speed_mph", "wind_direction_deg",
+    "pressure_mb", "condition",
+  ],
   v_slate_games: [
     "game_id", "sport", "season", "week", "start_date", "start_time_tbd",
     "neutral_site", "completed", "home_points", "away_points",

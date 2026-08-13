@@ -318,6 +318,41 @@ Two conventions worth knowing before touching this:
 **Monitored:** `max_age_hours=48`, warning severity — a stale spread degrades
 context on the card, it does not empty the board.
 
+#### `ingest_weather` — daily 11:00 UTC
+
+```bash
+python -m worker.jobs.ingest_weather --current              # what the cron runs
+python -m worker.jobs.ingest_weather --seasons 2026 --weeks 1 2
+python -m worker.jobs.ingest_weather --current --dry-run
+```
+
+Open-Meteo forecasts for upcoming outdoor games, written to `game_weather` with
+`source = 'open_meteo'` and `is_forecast = true`. Unauthenticated and free, at
+roughly one call per venue per day of the slate — about 99 on a full opening
+weekend. There is no budget to protect, so the cadence is chosen for freshness.
+
+**This does not duplicate the weather `ingest_ratings` writes.** That reads
+CFBD's `/games/weather`, which serves **observed** conditions and returns nothing
+at all for a game that has not been played — measured uncached on 2026-08-13, it
+gave 0 rows for 2026 weeks 1 and 2 against 55 for 2025 week 7. CFBD is the right
+source for history and cannot answer what the weather will be on Saturday.
+`v_game_conditions` prefers the observation once it exists.
+
+Four exclusions, each deliberate: completed games (CFBD's job), domes
+(`venues.is_dome` drives an explicit indoors state instead), venues without
+coordinates, and games beyond Open-Meteo's **~16-day forecast horizon**. That
+last one is normal rather than a fault — a game enters range mid-week and its
+forecast sharpens daily up to kickoff, which is also why this runs daily rather
+than weekly.
+
+One venue failing does not fail the run: a bad coordinate or a provider hiccup
+on one stadium is counted as skipped and the other venues still get their
+forecast.
+
+**Monitored:** `max_age_hours=48`, warning severity — a stale forecast costs the
+panel its detail and the model a small feature, while the board, the calls and
+the confidences all stand without it.
+
 #### `run_projections` — Tuesday 09:00 UTC
 
 ```bash

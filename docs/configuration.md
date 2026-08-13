@@ -205,6 +205,47 @@ because the default dataclass repr would happily print an API key into a log
 line. New secrets must be added to `_SECRET_FIELDS` when they are added to
 `Settings`.
 
+### The database password leaks through libpq, not through Settings
+
+`_SECRET_FIELDS` guards exactly one thing: `repr(Settings)`. It does nothing for
+the leak below, which is worth knowing about because it looks like the same
+problem and is not.
+
+**libpq quotes the connection string back inside its own error message.** So a
+failed connection hands the caller an exception whose text contains the password,
+and every job then logs that exception — which is the correct thing to do with an
+exception. Observed in production on 2026-08-12: a mistyped scheme
+(`postgreSQL://`, not recognised as a URI, so libpq falls through to
+`keyword=value` parsing) produced `missing "=" after "postgreSQL://postgres.<ref>:<password>@..."`
+and `healthcheck` wrote it into Render's log, which is retained and readable by
+anyone with dashboard access.
+
+Three layers now stop it, in the order they act:
+
+1. **`db.open_connection`** — the only place a DSN reaches `psycopg.connect`, for
+   the worker and for `migrate_database` both. Failures are re-raised as
+   `DatabaseConnectionError` carrying a redacted message.
+2. **`config.redact_secrets`** — does the stripping. Two passes, because neither
+   covers the other: a pattern pass for a well-formed DSN, and literal removal of
+   `SUPABASE_DB_URL` / `MIGRATION_TARGET_DB_URL` and the passwords inside them,
+   for a *mangled* DSN the pattern cannot parse. Host, port, user and libpq's own
+   explanation all survive, so the error stays diagnosable.
+3. **`logging_setup.RedactingFormatter`** — a last net over every log line the
+   worker emits. A Formatter and not a Filter: a Filter runs before `exc_info` is
+   rendered, so `log.exception` would print a leaked DSN straight past it.
+
+Two implementation details that look like style and are not:
+
+- `open_connection` raises **outside** its `except` block. `raise ... from None`
+  only sets `__suppress_context__`; `__context__` still references the original
+  exception with the password intact, reachable by anything that walks the chain.
+- `pipeline_run` redacts the text it stores in `pipeline_runs.error`, because
+  `monitor_pipeline` reads that column and puts it in an alert body bound for a
+  third-party webhook.
+
+If a connection string is ever seen in a log, **rotate the password** — redacting
+the code does not un-print what already shipped.
+
 ---
 
 ## Where each seam is deployed

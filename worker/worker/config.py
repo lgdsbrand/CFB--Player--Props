@@ -12,6 +12,7 @@ dataclass repr would happily print an API key into a log line.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, fields
 from functools import lru_cache
 from pathlib import Path
@@ -44,6 +45,80 @@ _SECRET_FIELDS = frozenset(
 
 class ConfigError(RuntimeError):
     """Raised when a required environment variable is missing or unusable."""
+
+
+# =============================================================================
+# Redacting a connection string out of text that is about to be logged
+# =============================================================================
+# `_SECRET_FIELDS` above guards exactly one thing: `repr(Settings)`. It does
+# nothing for the leak this section exists for, because that leak never touches
+# Settings.
+#
+# libpq echoes the connection string back INSIDE its own error message, so a
+# connection failure hands every caller an exception whose text contains the
+# password. Observed in production on 2026-08-12: a mistyped scheme
+# (`postgreSQL://`, which libpq does not recognise as a URI, so it falls through
+# to keyword=value parsing) produced
+#
+#     missing "=" after "postgreSQL://postgres.<ref>:<password>@..." in ...
+#
+# and `healthcheck` logged it verbatim into Render's log, which is retained and
+# readable by anyone with dashboard access. The bug is not in healthcheck; any
+# of the 18 jobs would have done the same, because logging an exception is the
+# correct thing to do with one.
+_URI_PASSWORD_RE = re.compile(
+    r"(?i)(?P<prefix>postgres(?:ql)?://[^:@/\s]*:)(?P<password>[^@\s]*)(?P<at>@)"
+)
+_KEYWORD_PASSWORD_RE = re.compile(
+    r"(?i)\bpassword\s*=\s*(?:'[^']*'|\"[^\"]*\"|\S+)"
+)
+
+# Env vars whose whole value is a connection string. Their values are also
+# removed literally, as a second pass, because the patterns above can only match
+# a DSN that is still WELL FORMED — and a malformed DSN is precisely the case
+# that produces the error message in the first place. The two passes cover
+# different failures and neither subsumes the other: the pattern catches a
+# correct DSN in an unexpected place, the literal catches a mangled one.
+_DSN_ENV_VARS = ("SUPABASE_DB_URL", "MIGRATION_TARGET_DB_URL")
+
+# Floor for literal substring removal. A short "password" is too plausibly an
+# ordinary word that also occurs in the surrounding message, and blanket removal
+# would corrupt the very error someone is trying to read. Supabase-generated
+# passwords are far longer than this, so nothing real is skipped.
+_MIN_LITERAL_SECRET_LEN = 12
+
+
+def _literal_dsn_secrets() -> list[str]:
+    """Connection strings and their passwords, read straight from the environment.
+
+    Deliberately not via `get_settings()`: this has to work when config loading
+    itself failed, which is the same neighbourhood of failures that leaks a DSN.
+    Longest first, so a full DSN is consumed before its own password fragment is
+    matched inside what remains.
+    """
+    found: set[str] = set()
+    for name in _DSN_ENV_VARS:
+        value = (os.environ.get(name) or "").strip()
+        if len(value) >= _MIN_LITERAL_SECRET_LEN:
+            found.add(value)
+        match = _URI_PASSWORD_RE.search(value)
+        if match and len(match.group("password")) >= _MIN_LITERAL_SECRET_LEN:
+            found.add(match.group("password"))
+    return sorted(found, key=len, reverse=True)
+
+
+def redact_secrets(text: str) -> str:
+    """Strip database passwords out of a string before it is logged or stored.
+
+    Structural counterpart to `alerts/webhook._safe`, which removes a webhook URL
+    the same way and for the same reason. Kept in this module because this is
+    where the knowledge of what counts as a secret already lives.
+    """
+    redacted = _URI_PASSWORD_RE.sub(r"\g<prefix><redacted>\g<at>", text)
+    redacted = _KEYWORD_PASSWORD_RE.sub("password=<redacted>", redacted)
+    for literal in _literal_dsn_secrets():
+        redacted = redacted.replace(literal, "<redacted>")
+    return redacted
 
 
 def _load_dotenv_if_present() -> None:

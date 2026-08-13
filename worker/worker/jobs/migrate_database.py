@@ -60,9 +60,9 @@ from dataclasses import dataclass, field
 
 import psycopg
 from psycopg import sql
-from psycopg.rows import dict_row
 
 from worker.config import REPO_ROOT, ConfigError, get_settings
+from worker.db import open_connection
 from worker.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -191,7 +191,11 @@ _SESSION_GUCS = (
 
 
 def connect_to(url: str, *, autocommit: bool = False) -> psycopg.Connection:
-    conn = psycopg.connect(url, autocommit=autocommit, row_factory=dict_row)
+    # Same libpq leak `db.connect` guards, and this job is the worse place for
+    # it: it holds BOTH connection strings, so an unredacted failure here can put
+    # the PRODUCTION password in a log. Reuses that chokepoint rather than
+    # repeating it, including its reason for raising outside the handler.
+    conn = open_connection(url, autocommit)
     with conn.cursor() as cur:
         for statement in _SESSION_GUCS:
             cur.execute(statement)

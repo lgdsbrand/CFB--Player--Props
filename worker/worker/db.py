@@ -16,21 +16,52 @@ import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
-from worker.config import get_settings
+from worker.config import get_settings, redact_secrets
 from worker.logging_setup import get_logger
 
 log = get_logger(__name__)
+
+
+class DatabaseConnectionError(RuntimeError):
+    """A connection attempt failed, reported without the password in it."""
+
+
+def open_connection(
+    url: str, autocommit: bool = False
+) -> psycopg.Connection:
+    """Open a connection, or fail with the password stripped out of the message.
+
+    libpq quotes the connection string back inside its own error text, so the
+    exception psycopg raises here carries the password verbatim — see
+    `config.redact_secrets` for the production incident.
+
+    **The raise is deliberately outside the `except` block.** `raise ... from
+    None` looks equivalent and is not: it only sets `__suppress_context__`, while
+    `__context__` still references the original exception, password intact. That
+    is enough for the standard traceback printer, but it leaves the secret
+    reachable by anything that walks the chain itself — a debugger, an error
+    reporter, a future `format_exception(chain=True)`. Raising after the handler
+    has exited means there is no active exception to attach, so the object is
+    genuinely gone rather than merely not printed.
+    """
+    detail: str | None = None
+    try:
+        return psycopg.connect(url, autocommit=autocommit, row_factory=dict_row)
+    except psycopg.Error as exc:
+        detail = redact_secrets(str(exc))
+    raise DatabaseConnectionError(f"Could not connect to the database: {detail}")
 
 
 @contextmanager
 def connect(autocommit: bool = False) -> Iterator[psycopg.Connection]:
     """Open a connection to the project database."""
     settings = get_settings()
-    with psycopg.connect(
-        settings.database_url,
-        autocommit=autocommit,
-        row_factory=dict_row,
-    ) as conn:
+    conn = open_connection(settings.database_url, autocommit)
+
+    # Only the connect call is wrapped. The `with` block below is what commits,
+    # rolls back and closes, and errors raised by the caller's own queries must
+    # keep their real types — audit_data catches CheckViolation by class.
+    with conn:
         yield conn
 
 
@@ -314,7 +345,10 @@ def pipeline_run(job_name: str, metadata: dict[str, Any] | None = None) -> Itera
                            error = %s
                      where id = %s
                     """,
-                    (f"{type(exc).__name__}: {exc}", run_id),
+                    # Redacted because this column does not stay in the database:
+                    # monitor_pipeline reads it and puts it in the alert body,
+                    # which goes out to a third-party webhook.
+                    (redact_secrets(f"{type(exc).__name__}: {exc}"), run_id),
                 )
             log.error("pipeline_run %s failed: %s", run_id, exc)
             raise

@@ -131,9 +131,26 @@ backfill, not a schema change. See [odds.md](odds.md#resolved).
 
 | Key | Current | Seeded | What it controls |
 |---|---|---|---|
-| `backfill_seasons` | `[2024, 2025]` | `[2022, 2023, 2024, 2025]` | Seasons the backfill covers, and therefore the scope of `ingest_reference` / `ingest_stats` when no `--seasons` is given. Narrowed by `20260730101200_backfill_two_seasons.sql`: `play_player_stats` runs ~1M rows per season across all FBS, against a 500 MB free tier. |
+| `backfill_seasons` | `[2024, 2025]` | `[2022, 2023, 2024, 2025]` | Seasons the **historical backfill** covers, and the fallback scope of the ingest jobs when neither `--seasons` nor `--current` is given. Narrowed by `20260730101200_backfill_two_seasons.sql`: `play_player_stats` runs ~1M rows per season across all FBS, against a 500 MB free tier. |
+| `current_season` | `2026` | `2026` | The season the **in-season crons** operate on, used by every job run with `--current`. **Update this each August.** Nothing derives it from the clock on purpose: a date-based guess rolls over during bowl season and would start writing the next season's empty schedule over a live one. |
+| `db_size_cap_mb` | `500` | `500` | Storage ceiling `ingest_stats` checks before starting. 500 is the Supabase free tier, where exceeding the cap makes the project **read-only** and every worker write fails. Raise it to the real limit when the project moves to Pro — a row edit, not a deploy. |
 | `ai_reads_max_per_run` | `400` | same | Hard ceiling on generations in one run of `generate_ai_reads`. A busy week is ~1,700 players and this bills the client's account, so the run stops and reports how many were left. Stopping early is recoverable; a surprise invoice is not. |
 | `ai_reads_min_confidence` | `0.0` | same | Only generate reads for picks at least this confident. `0.0` means every projected player. Raising it is the cheapest way to cut spend — the reads nobody opens are the ones on calls the model is least sure about. |
+
+**Why there are two season keys.** There used to be one, and it silently pointed
+the whole pipeline at the wrong year. `backfill_seasons` answers "what does the
+historical backfill cover"; `current_season` answers "what are the weekly crons
+refreshing". Those agree until a new season starts and then diverge forever.
+
+Measured on production 2026-08-13, sixteen days before kickoff: the daily
+`ingest_game_lines` cron had rewritten 2024 (2,517 rows) and 2025 (2,622 rows)
+at 10:00 that morning, while 2026's 104 rows had not been touched since a manual
+run the day before. Every scheduled job was succeeding, at the wrong season, and
+nothing reported a fault — the 48 unpriced week-1 games would simply have stayed
+unpriced through kickoff.
+
+The in-season crons therefore pass `--current`. If you add a scheduled job that
+reads a season, it needs that flag too.
 
 ### Documentation-only
 

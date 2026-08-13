@@ -170,26 +170,36 @@ real destination and not an off switch.
 #### The Sunday chain — 09:00 UTC
 
 ```bash
-python -m worker.jobs.ingest_reference &&
-python -m worker.jobs.ingest_stats &&
-python -m worker.jobs.ingest_ratings &&
-python -m worker.jobs.build_splits
+python -m worker.jobs.ingest_reference --current &&
+python -m worker.jobs.ingest_stats --current &&
+python -m worker.jobs.ingest_ratings --current &&
+python -m worker.jobs.ingest_rankings --live --current &&
+python -m worker.jobs.build_splits --current
 ```
 
-**Chained with `&&` in one cron, deliberately.** These four are strictly
-ordered — splits are built from stats, which need the games and rosters
-reference data — and Render has no dependency graph between cron services. Four
-separate schedules guessing at each other's runtime would race. The chain stops
-at the first failure and each step still writes its own `pipeline_runs` row, so
-the monitor reports precisely which one broke.
+**Chained with `&&` in one cron, deliberately.** These are strictly ordered —
+splits are built from stats, which need the games and rosters reference data —
+and Render has no dependency graph between cron services. Separate schedules
+guessing at each other's runtime would race. The chain stops at the first failure
+and each step still writes its own `pipeline_runs` row, so the monitor reports
+precisely which one broke.
+
+**`--current` on every step, and it is load-bearing.** Without it each job falls
+through to `app_config.backfill_seasons`, which scopes the *historical backfill*
+and lags a season behind the moment a new one starts. On 2026-08-13 that was
+`[2024, 2025]`, sixteen days before the 2026 kickoff: the chain would have run to
+completion, reported success, and refreshed last season. See
+[configuration.md](configuration.md#ingest-and-cost-control) for the measurement.
 
 **`ingest_reference`** — conferences, teams, venues, games, players. Seasons come
-from `app_config.backfill_seasons` so scope is a row edit, not a deploy. Refuses
+from `app_config.current_season` under `--current`, otherwise
+`app_config.backfill_seasons`, so scope is a row edit, not a deploy. Refuses
 to start if the CFBD account cannot afford the work: a partial backfill leaves
 the database in a state no row count honestly describes.
 
 ```bash
 python -m worker.jobs.ingest_reference --seasons 2024      # override config
+python -m worker.jobs.ingest_reference --current           # the in-season scope
 python -m worker.jobs.ingest_reference --dry-run           # preflight only
 ```
 
@@ -202,9 +212,25 @@ trustworthy. Two preflights guard it — CFBD quota and database headroom.
 
 ```bash
 python -m worker.jobs.ingest_stats --seasons 2024
+python -m worker.jobs.ingest_stats --current                # the in-season scope
 python -m worker.jobs.ingest_stats --seasons 2023 --box-scores-only
 python -m worker.jobs.ingest_stats --skip-headroom-check    # bypass the storage guard
 ```
+
+**The storage guard estimates from what is actually missing.** It measures the
+real cost of a game of play-by-play from the tables themselves (~0.10 MB on
+production, all three tables including indexes) and charges for two things: the
+games played but not yet loaded, and the transient cost of rewriting the rows a
+season already has, because `ingest_plays` clears a season before reinserting it
+and Postgres keeps the old versions until vacuum. The cap is
+`app_config.db_size_cap_mb`.
+
+It used to charge a flat 105 MB per season — the cost of a *finished* season —
+which is wrong twice over for a weekly in-season run and is why the whole Sunday
+chain refused to start on 2026-08-13. **A refusal now writes a `failed`
+`pipeline_runs` row.** It previously wrote nothing at all, so the monitor
+reported `never-succeeded`, which is also what it reports for a job nobody has
+ever run: a hard refusal was indistinguishable from silence.
 
 `--box-scores-only` loads `player_game_stats` and stops — no play-by-play, no
 attribution. That is the right mode for a **prior** season whose only job is to
@@ -234,7 +260,7 @@ filter that claims to mean "Top 25 of college football".
 
 ```bash
 python -m worker.jobs.ingest_rankings --seasons 2025
-python -m worker.jobs.ingest_rankings --live      # what the cron runs
+python -m worker.jobs.ingest_rankings --live --current   # what the cron runs
 ```
 
 **`build_splits`** — `defense_position_game_splits` and
@@ -253,11 +279,16 @@ critical.
 #### `ingest_game_lines` — daily 10:00 UTC
 
 ```bash
-python -m worker.jobs.ingest_game_lines --live              # what the cron runs
+python -m worker.jobs.ingest_game_lines --live --current    # what the cron runs
 python -m worker.jobs.ingest_game_lines --seasons 2025      # backfill a season
 python -m worker.jobs.ingest_game_lines --seasons 2026 --weeks 1 2 --live
 python -m worker.jobs.ingest_game_lines --dry-run
 ```
+
+**`--current` matters most here**, because this is the job that ran daily
+against the wrong season for as long as the cron existed. Without it the
+fallback is `backfill_seasons`, and a `game_lines` row for a settled season is
+indistinguishable in the logs from one for the season about to be played.
 
 `game_lines` — the game spread, total and moneylines shown as context on the
 player card. One row per game per provider; `v_game_line_consensus` takes the

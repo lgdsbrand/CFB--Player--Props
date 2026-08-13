@@ -26,7 +26,7 @@ from worker.adapters.cfbd.quota import (
     warn_on_missing_features,
 )
 from worker.config import ConfigError, get_settings
-from worker.db import count_rows, get_config_value, pipeline_run, set_rows_written
+from worker.db import count_rows, pipeline_run, resolve_seasons, set_rows_written
 from worker.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -46,23 +46,17 @@ REPORTED_TABLES = (
 )
 
 
-def resolve_seasons(explicit: list[int] | None) -> list[int]:
-    if explicit:
-        return sorted(explicit)
-
-    configured = get_config_value("backfill_seasons")
-    if not configured:
-        raise ConfigError(
-            "app_config.backfill_seasons is empty and no --seasons given."
-        )
-    return sorted(int(s) for s in configured)
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--seasons", type=int, nargs="+",
         help="Override app_config.backfill_seasons.",
+    )
+    parser.add_argument(
+        "--current", action="store_true",
+        help="Work on app_config.current_season only. What the weekly in-season "
+             "cron passes; without it the job falls through to backfill_seasons, "
+             "which scopes the historical backfill and lags a season behind.",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -80,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(settings.log_level)
 
     try:
-        seasons = resolve_seasons(args.seasons)
+        seasons = resolve_seasons(args.seasons, current=args.current)
     except ConfigError as exc:
         log.error("%s", exc)
         return 2

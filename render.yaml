@@ -120,6 +120,12 @@ services:
   # Four separate schedules guessing at each other's runtime would race. The
   # chain stops at the first failure, and each step still writes its own
   # pipeline_runs row, so the monitor reports precisely which one broke.
+  #
+  # `--current` ON EVERY STEP, AND IT IS LOAD-BEARING. Without it each job falls
+  # through to `app_config.backfill_seasons`, which scopes the HISTORICAL
+  # backfill and was `[2024, 2025]` sixteen days before the 2026 kickoff. The
+  # chain would run to completion, report success, and refresh last season.
+  # See 20260813140000_in_season_scope.sql for how that was found.
   - type: cron
     name: cfb-props-ingest-week
     runtime: python
@@ -128,11 +134,11 @@ services:
     schedule: "0 9 * * 0"
     buildCommand: pip install -r requirements.txt
     startCommand: >-
-      python -m worker.jobs.ingest_reference &&
-      python -m worker.jobs.ingest_stats &&
-      python -m worker.jobs.ingest_ratings &&
-      python -m worker.jobs.ingest_rankings --live &&
-      python -m worker.jobs.build_splits
+      python -m worker.jobs.ingest_reference --current &&
+      python -m worker.jobs.ingest_stats --current &&
+      python -m worker.jobs.ingest_ratings --current &&
+      python -m worker.jobs.ingest_rankings --live --current &&
+      python -m worker.jobs.build_splits --current
     envVars:
       - fromGroup: cfb-props-worker
 
@@ -209,6 +215,12 @@ services:
   # reported success. It re-fetches completed weeks too, which is ~16 wasted
   # calls a day against a 30,000/month CFBD quota — 2% of it, and cheaper than
   # a flag that has to work out which week is current.
+  #
+  # `--current` because without it this job was demonstrably refreshing the
+  # WRONG SEASON. Measured on production 2026-08-13: this cron rewrote 2024 and
+  # 2025 at 10:00 that morning and had never fetched a single 2026 line, so the
+  # 48 unpriced week-1 games would have stayed unpriced through kickoff while
+  # the job reported success every day. See 20260813140000_in_season_scope.sql.
   - type: cron
     name: cfb-props-game-lines
     runtime: python
@@ -216,7 +228,7 @@ services:
     rootDir: worker
     schedule: "0 10 * * *"
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m worker.jobs.ingest_game_lines --live
+    startCommand: python -m worker.jobs.ingest_game_lines --live --current
     envVars:
       - fromGroup: cfb-props-worker
 

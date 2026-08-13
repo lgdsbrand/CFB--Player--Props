@@ -16,7 +16,7 @@ import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
-from worker.config import get_settings, redact_secrets
+from worker.config import ConfigError, get_settings, redact_secrets
 from worker.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -307,6 +307,78 @@ def get_config_value(key: str) -> Any:
     """
     row = fetch_one("select value from app_config where key = %s", (key,))
     return row["value"] if row else None
+
+
+def resolve_seasons(explicit: Sequence[int] | None, *, current: bool = False) -> list[int]:
+    """Which seasons a job should work on.
+
+    Three sources, in precedence order: an explicit `--seasons`, then
+    `--current` (one season, `app_config.current_season`), then
+    `app_config.backfill_seasons`.
+
+    THE `current` BRANCH IS NOT A CONVENIENCE. Every scheduled job used to fall
+    through to `backfill_seasons`, which scopes the historical backfill and so
+    lags a season behind once a new one starts. On 2026-08-13 that meant the
+    daily lines cron was refreshing 2024 and 2025 every morning and had never
+    fetched 2026 — succeeding, loudly, at the wrong season. The in-season crons
+    pass `--current` so the two scopes cannot drift again.
+    """
+    if explicit:
+        return sorted(explicit)
+
+    if current:
+        season = get_config_value("current_season")
+        if season is None:
+            raise ConfigError(
+                "app_config.current_season is unset and --current was given. "
+                "It is set by migration and updated each August; see "
+                "20260813140000_in_season_scope.sql."
+            )
+        return [int(season)]
+
+    configured = get_config_value("backfill_seasons")
+    if not configured:
+        raise ConfigError("app_config.backfill_seasons is empty and no --seasons given.")
+    return sorted(int(s) for s in configured)
+
+
+def record_failed_run(
+    job_name: str, error: str, metadata: dict[str, Any] | None = None
+) -> None:
+    """Write a single `failed` row for a job that gave up before it started work.
+
+    `pipeline_run` only covers the span it wraps, so a job that refuses during
+    its preflights — bad config, no quota, no disk — left NO row at all. The
+    monitor reads absence as `never-succeeded`, which is what it also reports
+    for a cron that has never been scheduled, so a hard refusal was
+    indistinguishable from a job nobody had run yet.
+
+    That is not hypothetical: `ingest_stats` refused on its storage guard for
+    two days while the monitor reported it as never-succeeded, and the Sunday
+    chain it heads stopped dead behind it. The refusal was correct; being unable
+    to tell it apart from silence was the bug.
+
+    Best-effort by design. Exit code 2 is a configuration failure, which
+    includes the case where the database URL itself is wrong — so this must
+    never be the reason a job crashes instead of reporting its own diagnosis.
+    """
+    try:
+        with connect(autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                insert into pipeline_runs
+                       (id, job_name, status, finished_at, error, metadata)
+                values (%s, %s, 'failed', now(), %s, %s::jsonb)
+                """,
+                (
+                    uuid.uuid4(),
+                    job_name,
+                    redact_secrets(error),
+                    psycopg.types.json.Json(metadata or {}),
+                ),
+            )
+    except Exception as exc:  # noqa: BLE001 — diagnosis must not mask diagnosis
+        log.warning("Could not record the failed run for %s: %s", job_name, exc)
 
 
 @contextmanager

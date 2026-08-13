@@ -19,6 +19,14 @@ export type PlayerParams = {
   week?: number;
   /** Which market's line the chart, splits and log are graded against. */
   market?: string;
+  /**
+   * Which game, for the players who have two in one week.
+   *
+   * CFBD's week 1 spans nine or ten days every season, so a team can play twice
+   * inside it — see `player-games.ts`. Everything on the page describes one
+   * game, so which one has to be addressable rather than implicit.
+   */
+  game?: number;
 };
 
 export function parsePlayerParams(
@@ -41,6 +49,7 @@ export function parsePlayerParams(
     season: int(raw.season),
     week: int(raw.week),
     market: single(raw.market),
+    game: int(raw.game),
   };
 }
 
@@ -53,6 +62,7 @@ export function playerHref(
   if (next.season !== undefined) search.set("season", String(next.season));
   if (next.week !== undefined) search.set("week", String(next.week));
   if (next.market) search.set("market", next.market);
+  if (next.game !== undefined) search.set("game", String(next.game));
 
   const query = search.toString();
   return `/player/${next.playerId}${query ? `?${query}` : ""}`;

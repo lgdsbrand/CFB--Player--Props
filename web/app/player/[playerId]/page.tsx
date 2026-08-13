@@ -8,6 +8,7 @@ import { TeamChip } from "@/components/board/team-chip";
 import { NotConfigured } from "@/components/not-configured";
 import { DefenseDetail } from "@/components/player/defense-detail";
 import { GameLogTable } from "@/components/player/game-log-table";
+import { GameTabs } from "@/components/player/game-tabs";
 import { HitRateChart } from "@/components/player/hit-rate-chart";
 import { LadderPanel } from "@/components/player/ladder-panel";
 import { MarketTabs } from "@/components/player/market-tabs";
@@ -28,6 +29,11 @@ import {
   formatVenue,
 } from "@/lib/core/format";
 import { gradeGames, hitRate, type GradedGame } from "@/lib/core/hit-rate";
+import {
+  orderedGames,
+  resolveGameId,
+  rowsForGame,
+} from "@/lib/core/player-games";
 import { parsePlayerParams } from "@/lib/core/player-params";
 import {
   rankBands,
@@ -115,16 +121,6 @@ export default async function PlayerDetail({
     );
   }
 
-  // Filters follow the RESOLVED week, not the requested one: an unknown week
-  // falls back to the latest, and links built from the request would then point
-  // at a week the page is not showing.
-  const resolved = {
-    playerId,
-    season: active.season,
-    week: active.week,
-    market: requested.market,
-  };
-
   const rows = await getPlayerBoardRows(playerId, active.season, active.week);
   if (rows.length === 0) {
     const name = await nameOr404(playerId);
@@ -140,8 +136,29 @@ export default async function PlayerDetail({
     );
   }
 
+  // EVERYTHING BELOW DESCRIBES ONE GAME, so the game is resolved before the
+  // market is. A handful of teams play twice inside CFBD's nine-or-ten-day week
+  // 1 — see `player-games.ts` — and this page used to read every row for the
+  // week, which rendered each market twice and then described whichever game
+  // sorted first in the header, the defense panel and the conditions.
+  const games = orderedGames(rows);
+  const activeGameId = resolveGameId(games, requested.game);
+  const gameRows = rowsForGame(rows, activeGameId);
+
+  // Filters follow the RESOLVED week and game, not the requested ones: an
+  // unknown week falls back to the latest and an unknown game to the next one,
+  // and links built from the request would then point somewhere the page is not
+  // showing.
+  const resolved = {
+    playerId,
+    season: active.season,
+    week: active.week,
+    market: requested.market,
+    game: games.length > 1 ? (activeGameId ?? undefined) : undefined,
+  };
+
   const marketsByKey = new Map(markets.map((market) => [market.key, market]));
-  const ordered = orderMarkets(rows, marketsByKey);
+  const ordered = orderMarkets(gameRows, marketsByKey);
   const activeRow =
     ordered.find((row) => row.marketKey === requested.market) ?? ordered[0];
   const activeMarket = marketsByKey.get(activeRow.marketKey);
@@ -286,6 +303,8 @@ export default async function PlayerDetail({
           </p>
         ) : null}
       </header>
+
+      <GameTabs games={games} activeGameId={activeGameId} params={resolved} />
 
       <MarketTabs rows={ordered} activeKey={activeRow.marketKey} params={resolved} />
 

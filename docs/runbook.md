@@ -324,6 +324,22 @@ posts −110/−110 quotes at each player's trailing average under a book named
 restatement of the model's own confidence rather than a disagreement with a
 market. It refuses to run outside `ENVIRONMENT=development`.
 
+**It also writes `projections.ladder`** — the alternate-line rungs (migration
+0039), computed from the same calibrated distribution the stored quantiles
+describe. Nothing extra to run; a normal weekly run fills it.
+
+```bash
+python -m worker.jobs.run_projections --backfill-ladders   # rows predating 0039
+python -m worker.jobs.run_projections --backfill-ladders --dry-run
+```
+
+`--backfill-ladders` exists because the column arrived after 81,198 projections
+already had. It fills `ladder` **and nothing else** — no new `model_run`, no new
+projection or pick ids — so it can be run against a live board without changing
+what anyone is reading, which a re-projection could not. It is idempotent: only
+null ladders are selected, so an interrupted run resumes by being run again. It
+ignores every other flag and exits.
+
 **Monitored:** critical, `max_age_hours=200`. Without this the board has nothing
 on it.
 

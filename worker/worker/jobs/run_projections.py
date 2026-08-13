@@ -50,6 +50,7 @@ from worker.adapters.odds import SYNTHETIC_ADAPTER
 from worker.config import ConfigError, get_settings
 from worker.core.calibration import StoredCalibration
 from worker.core.features import AsOf
+from worker.core.ladder import build_ladder, ladder_json
 from worker.core.probability import side_and_confidence
 from worker.core.projections import (
     LAST_OPENING_WEEK,
@@ -483,7 +484,7 @@ def _insert_projections(
     ids: dict[tuple[int, int, str], int] = {}
     placeholder = (
         "(" + ",".join(["%s"] * 9) + ",%s::distribution_family,%s::jsonb,"
-        + ",".join(["%s"] * 8) + ")"
+        + ",".join(["%s"] * 8) + ",%s::jsonb)"
     )
 
     with conn.cursor() as cur:
@@ -513,13 +514,15 @@ def _insert_projections(
                         quantiles.get("p90"),
                         row.prior_weight,
                         row.effective_sample,
+                        json.dumps(row.ladder) if row.ladder else None,
                     ]
                 )
             cur.execute(
                 "insert into projections "
                 "(model_run_id, player_id, game_id, team_id, opponent_team_id, "
                 " market_key, season, week, as_of_week, distribution, params, "
-                " mean, p10, p25, p50, p75, p90, prior_weight, effective_sample) "
+                " mean, p10, p25, p50, p75, p90, prior_weight, effective_sample, "
+                " ladder) "
                 "values " + ",".join([placeholder] * len(chunk))
                 + " returning id, player_id, game_id, market_key",
                 tuple(params),
@@ -668,6 +671,110 @@ def _pick_values(
 # -----------------------------------------------------------------------------
 # Entrypoint
 # -----------------------------------------------------------------------------
+LADDER_BACKFILL_BATCH = 2000
+
+
+def _backfill_ladders(*, dry_run: bool = False) -> int:
+    """Fill `projections.ladder` on rows written before migration 0039.
+
+    WHY THIS EXISTS RATHER THAN A RE-RUN. Re-projecting would produce a new
+    model_run and a fresh set of projection and pick ids, which changes what the
+    board is reading while it is being read, and would rewrite picks whose lines
+    and edges are already published. The ladder is derived entirely from the
+    stored family and params, so it can be added to the rows that are already
+    there — and deriving it from the stored distribution is not a shortcut, it is
+    the definition: a rung computed from anything else could disagree with the
+    p50 sitting beside it.
+
+    Idempotent. Only rows with a null ladder are touched, so an interrupted run
+    resumes by being run again.
+    """
+    steps = {
+        row["key"]: row["ladder_step"]
+        for row in fetch_all("select key, ladder_step from markets")
+    }
+
+    pending = fetch_one(
+        """
+        select count(*) as n from projections pr
+          join markets m on m.key = pr.market_key
+         where pr.ladder is null and m.ladder_step is not null
+        """
+    )
+    total = int((pending or {}).get("n") or 0)
+    log.info("Ladder backfill: %d row(s) to fill", total)
+    if not total:
+        return 0
+    if dry_run:
+        log.info("--dry-run: computing nothing, writing nothing.")
+        return 0
+
+    filled = 0
+    # Ids, not a counter. An unfillable row keeps a null ladder, so it is selected
+    # again on every pass, and a plain counter would report it once per pass.
+    skipped: set[int] = set()
+    while True:
+        rows = fetch_all(
+            """
+            select pr.id, pr.market_key, pr.distribution::text as distribution,
+                   pr.params, pr.mean, pr.p10, pr.p50, pr.p90
+              from projections pr
+              join markets m on m.key = pr.market_key
+             where pr.ladder is null and m.ladder_step is not null
+             limit %s
+            """,
+            (LADDER_BACKFILL_BATCH,),
+        )
+        if not rows:
+            break
+
+        updates: list[tuple[str, int]] = []
+        for row in rows:
+            centre = row["p50"] if row["p50"] is not None else row["mean"]
+            low = row["p10"] if row["p10"] is not None else centre
+            high = row["p90"] if row["p90"] is not None else centre
+            if low is None or high is None:
+                skipped.add(int(row["id"]))
+                continue
+            rungs = ladder_json(
+                build_ladder(
+                    row["distribution"],
+                    {k: float(v) for k, v in row["params"].items()},
+                    float(steps[row["market_key"]]),
+                    low=float(low),
+                    high=float(high),
+                )
+            )
+            if rungs is None:
+                skipped.add(int(row["id"]))
+                continue
+            updates.append((json.dumps(rungs), int(row["id"])))
+
+        if not updates:
+            # Every remaining row is unfillable. Stop rather than loop forever on
+            # the same page — the query selects on `ladder is null`, so rows we
+            # cannot fill would be returned again indefinitely.
+            log.warning(
+                "Ladder backfill stopping: %d row(s) left that cannot be "
+                "filled (no quantiles and no mean).",
+                len(rows),
+            )
+            break
+
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "update projections set ladder = %s::jsonb where id = %s",
+                    updates,
+                )
+            conn.commit()
+        filled += len(updates)
+        log.info("Ladder backfill: %d/%d", filled, total)
+
+    log.info("Ladder backfill complete: %d filled, %d skipped", filled, len(skipped))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--season", type=int)
@@ -693,6 +800,13 @@ def main(argv: list[str] | None = None) -> int:
              "trailing average so the OVER/UNDER call path can be exercised "
              "before real books post. Edges from these are meaningless.",
     )
+    parser.add_argument(
+        "--backfill-ladders",
+        action="store_true",
+        help="Fill projections.ladder on rows that predate migration 0039 and "
+             "exit. Touches ONLY that column — no new model_run, no new "
+             "projection or pick ids, so the live board is undisturbed.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Project, write nothing.")
     args = parser.parse_args(argv)
 
@@ -704,6 +818,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     configure_logging(settings.log_level)
+
+    if args.backfill_ladders:
+        return _backfill_ladders(dry_run=args.dry_run)
 
     if args.synthetic_lines and settings.environment != "development":
         log.error(

@@ -46,6 +46,7 @@ from typing import Any
 
 from worker.core.calibration import Corrections
 from worker.core.features import AsOf, build_feature_frame
+from worker.core.ladder import build_ladder, ladder_json
 from worker.core.models import (
     Projection,
     position_baselines,
@@ -134,6 +135,7 @@ def market_catalogue() -> list[dict[str, Any]]:
                m.stat_column,
                m.is_binary,
                m.default_line,
+               m.ladder_step,
                resolve_distribution_family(mp.market_key, mp.position_group)::text
                  as distribution_family
           from market_positions mp
@@ -164,6 +166,11 @@ class ProjectedRow:
     projection: Projection
     prior_weight: float | None = None
     effective_sample: float | None = None
+    # Alternate-line rungs, in `projections.ladder`'s storage shape, or None for
+    # a market with no ladder_step. Carried on the row rather than recomputed by
+    # the job because it must come from the CALIBRATED distribution — the one the
+    # stored quantiles describe — and calibration is applied above.
+    ladder: list[dict[str, float]] | None = None
 
 
 def project_slate(
@@ -232,6 +239,7 @@ def project_slate(
 
             projected.append(
                 ProjectedRow(
+                    ladder=_ladder_for(projection, market),
                     player_id=int(row["player_id"]),
                     game_id=int(row["game_id"]),
                     team_id=int(row["team_id"]),
@@ -263,6 +271,40 @@ def project_slate(
         skipped_usage,
     )
     return projected
+
+
+def _ladder_for(
+    projection: Projection, market: dict[str, Any]
+) -> list[dict[str, float]] | None:
+    """Alternate-line rungs for a finished projection, or None.
+
+    Windowed on p10..p90 of this same distribution, so the rungs span where the
+    outcome plausibly lands. A fixed absolute range would be mostly 0% or 100%
+    for any individual player, which is the failure mode that makes most
+    alternate-line displays useless.
+
+    Falls back to the mean when quantiles are absent — a dry run can produce a
+    projection without them, and a missing ladder is worth less than a narrow one.
+    """
+    step = market.get("ladder_step")
+    if step is None:
+        return None
+
+    quantiles = projection.quantiles
+    low = quantiles.get("p10")
+    high = quantiles.get("p90")
+    if low is None or high is None:
+        low = high = projection.mean
+
+    return ladder_json(
+        build_ladder(
+            projection.distribution,
+            projection.params,
+            float(step),
+            low=float(low),
+            high=float(high),
+        )
+    )
 
 
 def project_row(

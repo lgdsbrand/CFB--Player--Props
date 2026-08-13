@@ -1999,6 +1999,137 @@ check(G, "the walk grades the opening weeks the board publishes", """
 """, lambda r: r["first_week"] == 1 and r["opening"] > 0)
 
 # =============================================================================
+# L ladder
+# =============================================================================
+# `projections.ladder` (migration 0039) holds P(over) at a spread of alternate
+# lines. Every check here reads the STORED column rather than recomputing from
+# family and params, which is the whole point: recomputing in Python would prove
+# the Python is self-consistent and would pass just as happily if the jsonb
+# round-trip mangled what the app actually reads.
+G = "L ladder"
+
+# THE INVARIANT WITH TEETH. A probability that RISES as the line rises is
+# arithmetically impossible for any real distribution, so a rising pair means the
+# declared family and its params disagree — and nothing on a card would reveal it,
+# because each individual rung looks like a perfectly ordinary percentage.
+check(G, "no ladder reports a higher chance of clearing a higher line", """
+    with pairs as (
+      select pr.id,
+             (r->>'prob_over')::numeric as p,
+             lag((r->>'prob_over')::numeric) over (
+               partition by pr.id order by (r->>'line')::numeric
+             ) as prev
+        from projections pr, jsonb_array_elements(pr.ladder) as r
+       where pr.ladder is not null
+    )
+    select count(*) as rung_pairs,
+           count(*) filter (where prev is not null and p > prev) as rising
+      from pairs
+""", lambda r: r["rung_pairs"] > 0 and r["rising"] == 0)
+
+# A rung has to be a line a book could actually post, or a reader comparing it to
+# a real price is comparing two different things. Half-integers also remove the
+# push outright: `prob_over` treats a whole-number line as a strict inequality, so
+# an integer rung would quietly exclude the tie from BOTH sides.
+check(G, "every rung is a line a book could post", """
+    select count(*) as rungs,
+           count(*) filter (where ((r->>'line')::numeric * 2) % 2 = 0) as whole_numbers,
+           count(*) filter (where (r->>'line')::numeric < 0.5) as below_floor,
+           count(*) filter (
+             where (r->>'prob_over')::numeric not between 0 and 1
+           ) as impossible_probability
+      from projections pr, jsonb_array_elements(pr.ladder) as r
+     where pr.ladder is not null
+""", lambda r: (
+    r["rungs"] > 0
+    and r["whole_numbers"] == 0
+    and r["below_floor"] == 0
+    and r["impossible_probability"] == 0
+))
+
+# COVERAGE, stated so that a market silently losing its ladder shows up. The
+# failure this catches is not an exception: a new market added without a
+# `ladder_step`, or a backfill that stopped halfway, leaves rows whose panel
+# renders empty while every other check on this page passes.
+#
+# anytime_td is deliberately excluded by `ladder_step is not null` rather than by
+# name — a binary market is a single probability, and a ladder of it would be the
+# same number repeated.
+check(G, "every projection whose market has rungs has them stored", """
+    select count(*) as should_have,
+           count(*) filter (where pr.ladder is null) as missing,
+           count(distinct pr.market_key) as markets
+      from projections pr
+      join markets m on m.key = pr.market_key
+     where m.ladder_step is not null
+""", lambda r: r["should_have"] > 0 and r["missing"] == 0)
+
+# And the other direction, which is the one a careless join would break: a market
+# with no step must have no rungs. If anytime_td ever acquired a ladder it would
+# be four copies of the same probability presented as four decisions.
+check(G, "a market with no rung spacing has no rungs", """
+    select count(*) as binary_rows,
+           count(pr.ladder) as unexpectedly_laddered
+      from projections pr
+      join markets m on m.key = pr.market_key
+     where m.ladder_step is null
+""", lambda r: r["unexpectedly_laddered"] == 0)
+
+# The ladder must AGREE with the quantiles beside it. Both come from the same
+# stored distribution, so a rung below p50 reporting less than an even chance
+# would mean the two were derived from different objects — which is exactly what
+# would happen if a re-projection rewrote quantiles without rewriting ladders, or
+# if a backfill ran against rows whose params had since been recalibrated.
+check(G, "the rungs agree with the median stored beside them", """
+    with lowest as (
+      select pr.id, pr.p50,
+             min((r->>'line')::numeric) as low_line,
+             (array_agg((r->>'prob_over')::numeric
+                        order by (r->>'line')::numeric))[1] as low_prob
+        from projections pr, jsonb_array_elements(pr.ladder) as r
+       where pr.ladder is not null and pr.p50 is not null
+       group by pr.id, pr.p50
+    )
+    select count(*) as rows_checked,
+           count(*) filter (where low_line < p50 and low_prob < 0.5) as contradictions
+      from lowest
+""", lambda r: r["rows_checked"] > 0 and r["contradictions"] == 0)
+
+# The rung cap is a display constraint, and a ladder that quietly grew past it
+# would overflow the card rather than fail. Stated here because the widening loop
+# in `core/ladder.py` is the only thing enforcing it, and a change to that loop
+# has no other test against real data.
+check(G, "no ladder exceeds the display cap", """
+    select count(*) as ladders,
+           min(jsonb_array_length(ladder)) as min_rungs,
+           max(jsonb_array_length(ladder)) as max_rungs
+      from projections where ladder is not null
+""", lambda r: r["ladders"] > 0 and r["max_rungs"] <= 7 and r["min_rungs"] >= 1)
+
+# A FRACTIONAL STEP IS THE CONFIGURATION THAT WOULD BREAK THE HALF-INTEGER RULE
+# WITHOUT ANY OTHER SYMPTOM. Rungs sit at `k * step + 0.5`, so a step of 2.5 walks
+# 0.5, 3.0, 5.5, 8.0 — whole numbers every other rung, each one carrying a push
+# that `prob_over` resolves as a strict inequality and therefore excludes from
+# both sides. The check above would catch the RESULT once such a market had rows;
+# this catches the cause at the moment somebody configures it.
+rejects(G, "a fractional rung step is rejected", """
+    update markets set ladder_step = 2.5 where key = 'receptions'
+""", None, "markets_ladder_step_matches_binary")
+
+rejects(G, "a non-binary market with no rung step is rejected", """
+    update markets set ladder_step = null where key = 'receptions'
+""", None, "markets_ladder_step_matches_binary")
+
+rejects(G, "laddering a binary market is rejected", """
+    update markets set ladder_step = 1 where key = 'anytime_td'
+""", None, "markets_ladder_step_matches_binary")
+
+rejects(G, "a ladder that is not a json array is rejected", """
+    update projections set ladder = '{"line": 60.5}'::jsonb
+     where id = (select id from projections limit 1)
+""", None, "projections_ladder_is_array")
+
+# =============================================================================
 # Report
 # =============================================================================
 groups: dict[str, list] = {}

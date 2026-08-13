@@ -72,6 +72,14 @@ JSONB blob — not a point estimate. Two consequences:
 - The over/under probability for *any* line can be recomputed later without
   re-projecting. That is what makes the late-line behaviour work: project every
   projected starter on Tuesday, derive picks when books post on Thursday.
+- It is also what makes the **alternate-line ladder** (`projections.ladder`,
+  migration 0039) nearly free: rungs are P(over) at a spread of lines, spaced by
+  `markets.ladder_step` and windowed to the row's own p10–p90. Stored rather than
+  computed on read because three of the seven live families need the regularised
+  incomplete gamma and incomplete beta, which SQL cannot do and which would
+  otherwise become a third implementation of the model maths in the browser.
+  `ladder` is NULL for `anytime_td`, which is a single probability by
+  construction.
 - `picks.confidence` and `picks.edge` are **generated columns**, and
   `picks.side` is bound by a CHECK to agree with `model_prob_over`. The
   displayed call cannot drift from the probability it supposedly came from.
@@ -116,7 +124,7 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 ### Markets and odds
 | Table | Notes |
 |---|---|
-| `markets` | Catalogue. `stat_column` maps a market to the column it grades against |
+| `markets` | Catalogue. `stat_column` maps a market to the column it grades against; `ladder_step` the rung spacing |
 | `market_positions` | Drives the position tabs and stat selector |
 | `sportsbooks` | |
 | `player_prop_lines` | **Append-only** line history; a moved line is a new row |
@@ -125,7 +133,7 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 | Table | Notes |
 |---|---|
 | `model_runs` | Version + git sha + config, for reproducibility |
-| `projections` | Distribution family + params + quantiles |
+| `projections` | Distribution family + params + quantiles + `ladder` rungs |
 | `picks` | The board row. `confidence`/`edge` generated, `side` CHECK-bound |
 | `ai_reads` | Unique on (player, season, week) — the uniqueness **is** the cache |
 | `backtests`, `backtest_predictions`, `calibration_bins` | Phase 3 |

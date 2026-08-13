@@ -99,6 +99,24 @@ export type HitRateSummary = {
  * exact ties are common. The model's own grading treats `value > line` as over,
  * which would quietly file every tie as an under-hit and inflate that side.
  */
+/**
+ * How one value resolves against one line.
+ *
+ * EXPORTED SO THE LINE STEPPER CANNOT DRIFT FROM THIS. The stepper re-grades
+ * the same games against a shifted line in the browser, and a second copy of
+ * `value > line` written there would be free to disagree about the push — which
+ * is the one case the rule exists to get right, and the one nobody would notice
+ * being wrong.
+ */
+export function outcomeFor(value: number, line: number): GameOutcome {
+  return value > line ? "over" : value < line ? "under" : "push";
+}
+
+/** Did the CALLED side win? Null on a push, which is excluded, not lost. */
+export function didHit(outcome: GameOutcome, side: BetSide): boolean | null {
+  return outcome === "push" ? null : outcome === side;
+}
+
 export function gradeGames(
   games: PlayerGameLogRow[],
   statColumn: string,
@@ -110,8 +128,7 @@ export function gradeGames(
       const value = statValue(game, statColumn);
       if (value === null) return null;
 
-      const outcome: GameOutcome =
-        value > line ? "over" : value < line ? "under" : "push";
+      const outcome = outcomeFor(value, line);
 
       return {
         gameId: game.gameId,
@@ -120,7 +137,7 @@ export function gradeGames(
         value,
         line,
         outcome,
-        hit: outcome === "push" ? null : outcome === side,
+        hit: didHit(outcome, side),
         opponentTeamId: game.opponentTeamId,
         opponentAbbreviation: game.opponentAbbreviation,
         isHome: game.isHome,

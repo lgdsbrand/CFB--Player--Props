@@ -309,7 +309,11 @@ export default async function PlayerDetail({
       <MarketTabs rows={ordered} activeKey={activeRow.marketKey} params={resolved} />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <div className="flex flex-col gap-4">
+        {/* `min-w-0` because a grid child defaults to `min-width: auto`, which
+            means "never shrink below your content". The Recharts container and
+            the panel header both then pushed the column past the viewport —
+            measured at 76px of horizontal overflow on a 390px phone. */}
+        <div className="flex min-w-0 flex-col gap-4">
           <section className="panel flex flex-col gap-3 p-4">
             <header className="flex flex-wrap items-baseline justify-between gap-2">
               <h2 className="section-header">
@@ -338,6 +342,7 @@ export default async function PlayerDetail({
                 line={activeRow.line}
                 unit={activeMarket?.unit ?? null}
                 side={gradeSide}
+                step={activeMarket?.ladderStep ?? null}
               />
             )}
 
@@ -412,7 +417,11 @@ export default async function PlayerDetail({
           </section>
         </div>
 
-        <div className="flex flex-col gap-4">
+        {/* `min-w-0` because a grid child defaults to `min-width: auto`, which
+            means "never shrink below your content". The Recharts container and
+            the panel header both then pushed the column past the viewport —
+            measured at 76px of horizontal overflow on a 390px phone. */}
+        <div className="flex min-w-0 flex-col gap-4">
           <DefenseDetail
             opponentSchool={activeRow.opponentSchool}
             opponentAbbreviation={activeRow.opponentAbbreviation}

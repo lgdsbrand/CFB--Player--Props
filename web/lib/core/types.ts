@@ -229,6 +229,14 @@ export type Market = {
   defaultLine: number | null;
   unit: string | null;
   sortOrder: number;
+  /**
+   * The market's alternate-line grid spacing, from `markets.ladder_step`.
+   *
+   * Null on binary markets and only on those — anytime TD is one probability,
+   * so it has neither a ladder nor a line to step. `audit_data` asserts the two
+   * agree (`markets_ladder_step_matches_binary`).
+   */
+  ladderStep: number | null;
   /** Positions this market is offered for, in display order. */
   positions: PositionGroup[];
 };

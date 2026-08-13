@@ -36,7 +36,7 @@ async function readMarkets(): Promise<Market[]> {
       .from("markets")
       .select(
         "key, display_name, short_label, emoji, stat_column, is_binary, " +
-          "default_line, unit, sort_order",
+          "default_line, unit, sort_order, ladder_step",
       )
       .eq("is_active", true)
       .order("sort_order"),
@@ -69,6 +69,13 @@ async function readMarkets(): Promise<Market[]> {
     defaultLine: row.default_line as number | null,
     unit: row.unit as string | null,
     sortOrder: row.sort_order as number,
+    // `numeric` arrives from PostgREST as a string, so this is coerced rather
+    // than cast — a cast would typecheck and then do string arithmetic when the
+    // stepper added it to a line.
+    ladderStep:
+      row.ladder_step === null || row.ladder_step === undefined
+        ? null
+        : Number(row.ladder_step),
     positions: byMarket.get(row.key as string) ?? [],
   }));
 }

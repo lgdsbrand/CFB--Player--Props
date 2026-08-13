@@ -118,9 +118,11 @@ const EXPECTED = {
     "home_spread", "game_total", "game_line_providers", "home_poll_rank",
     "away_poll_rank", "projections", "players", "calls",
   ],
+  // `ladder_step` backs the alternate-line ladder AND the hit-rate chart's
+  // line stepper; null on binary markets and only there.
   markets: [
     "key", "display_name", "short_label", "emoji", "stat_column", "is_binary",
-    "default_line", "unit", "sort_order", "is_active",
+    "default_line", "unit", "sort_order", "is_active", "ladder_step",
   ],
   market_positions: ["market_key", "position_group", "sort_order"],
   conferences: ["id", "name", "abbreviation", "is_displayed", "sport"],

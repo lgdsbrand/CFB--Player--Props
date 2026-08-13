@@ -485,6 +485,24 @@ facts under the same prompt version mean the stored read is still the right read
 A busy week is ~1,700 players with projections and this runs against the client's
 account, so stopping early is recoverable where a surprise invoice is not.
 
+**The cap decides how many; `selection_rank` decides WHICH, and that was a bug
+for as long as the job existed.** Players were ordered by `player_id`, so 400
+reads against 1,206 projected players always went to the 400 lowest ids and the
+same two-thirds were never reached — while the run reported 400 generated and
+exited 0. They are now ordered highest-value first: a real call ahead of a bare
+lean, then edge descending, then confidence, mirroring the board's own default
+sort (`web/lib/core/board-view.ts`).
+
+Measured on 2026 week 1 when this changed: **270 of the 400 reads moved to
+different players.** Under the old order only 210 of 400 went to a player the
+board surfaces as a call at all, at a median confidence of 56.6% and a minimum
+of 0.0%; now all 400 carry a call at a median of 79.2%. The run log names the
+cut point — "the cut fell at call, no book line, confidence 71.4%" — so the
+next person can see what was dropped instead of reading a healthy-looking count.
+
+**601 of 1,206 players carry a call**, so 400 covers 67% of them. Raising the
+cap to ~650 covers every call for roughly 241k input tokens a week.
+
 What it refuses to store: a truncated read, an empty read, or one the provider
 declined. Each is recorded as a failure the next run retries. The unique key
 means a bad row would sit in front of readers for a week, so writing nothing is

@@ -8,6 +8,14 @@ THE CACHE IS THE SCHEMA. `ai_reads` is unique on (player_id, season, week), and
 the application only ever SELECTs from it (CLAUDE.md §2, §10 — per-page-view LLM
 calls are out of scope). This job is the only writer.
 
+WHICH PLAYERS, WHEN THE CAP CANNOT COVER THE SLATE. The cap is ~400 against
+~1,200 projected players, so this job's real decision is not how many reads to
+write but WHICH — and it used to answer that with `sorted(board)`, the player
+id. Stable, arbitrary, and it handed every read to the 400 lowest ids and
+starved the same two-thirds of the slate week after week while reporting a
+healthy 400 generated. Players are now ordered highest-value first, mirroring
+the board's own default sort. See `selection_rank`.
+
 WHAT IT REFUSES TO SPEND. A busy week has ~1,700 players with projections, and
 this runs against the client's account, so:
 
@@ -96,6 +104,10 @@ class ReadReport:
     tokens_out: int = 0
     stopped_at_cap: bool = False
     remaining: int = 0
+    #: What the last player to get a read looked like, so the log says WHERE the
+    #: cap fell rather than only that it fell. Without this the run reports a
+    #: healthy 400 generated and gives no hint that a third of the slate was cut.
+    cutoff: str | None = None
 
     def render(self) -> str:
         lines = [
@@ -113,6 +125,12 @@ class ReadReport:
                 "left. Re-run to continue — cached players are skipped, so a "
                 "second run costs only what it generates."
             )
+            if self.cutoff:
+                lines.append(
+                    f"  The cut fell at {self.cutoff}. Players are ordered "
+                    "highest-value first (call, then edge, then confidence), so "
+                    "what was dropped is everything weaker than that."
+                )
         return "\n".join(lines)
 
 
@@ -257,6 +275,53 @@ def _f(value) -> float | None:
     return None if value is None else float(value)
 
 
+def selection_rank(player_id: int, rows: list[dict]) -> tuple:
+    """Which players get a read first when the cap cannot cover the slate.
+
+    THIS USED TO BE THE PLAYER ID, and that was the bug. `sorted(board)` is
+    stable and arbitrary, so a cap of 400 against ~1,200 projected players sent
+    every read to the 400 lowest ids and starved the same two-thirds of the
+    slate every single week. Nothing reported it, because generating 400 reads
+    is exactly what the job was asked to do.
+
+    The order MIRRORS THE BOARD'S DEFAULT SORT — edge descending, then
+    confidence descending (`web/lib/core/board-view.ts::boardSortKeys`) —
+    because the reads worth paying for are the ones a reader will actually open,
+    and the board opens on edge.
+
+    Players carrying a real CALL come first, ahead of bare leans. A lean is the
+    model's view with no market to disagree with, so its read is the least
+    likely to be opened and the least costly to miss.
+
+    A missing edge sorts last within its group rather than as zero: a row with
+    no book line has not disagreed with anyone, and treating that as a
+    zero-edge tie would rank it above every genuinely negative edge.
+    """
+    has_call = any(r.get("has_call") for r in rows)
+    best_edge = max(
+        (float(r["edge"]) for r in rows if r.get("edge") is not None),
+        default=float("-inf"),
+    )
+    best_confidence = max(
+        (float(r["confidence"]) for r in rows if r.get("confidence") is not None),
+        default=0.0,
+    )
+    # Negated for descending. The id is a stable last term so two players with
+    # identical numbers keep the same order between runs, which is what makes
+    # "re-run to continue" pick up where the last run stopped.
+    return (0 if has_call else 1, -best_edge, -best_confidence, player_id)
+
+
+def _describe_rank(rank: tuple) -> str:
+    """A selection key, in words, for the run log."""
+    is_lean, neg_edge, neg_confidence, _player_id = rank
+    edge = "no book line" if neg_edge == float("inf") else f"edge {-neg_edge:+.1%}"
+    return (
+        f"{'lean' if is_lean else 'call'}, {edge}, "
+        f"confidence {-neg_confidence:.1%}"
+    )
+
+
 def run(*, season: int, week: int, adapter_name: str, dry_run: bool,
         limit: int | None) -> ReadReport:
     report = ReadReport()
@@ -310,7 +375,10 @@ def run(*, season: int, week: int, adapter_name: str, dry_run: bool,
                 for r in cur.fetchall()
             }
 
-        pending = sorted(board)
+        # HIGHEST-VALUE FIRST, not lowest player id — see `selection_rank`.
+        # The cap covers about a third of a busy slate, so this decides which
+        # third, and until now it decided by an accident of id ordering.
+        pending = sorted(board, key=lambda pid: selection_rank(pid, board[pid]))
         for index, player_id in enumerate(pending):
             rows = board[player_id]
             best = max(
@@ -341,6 +409,7 @@ def run(*, season: int, week: int, adapter_name: str, dry_run: bool,
             if report.generated >= cap:
                 report.stopped_at_cap = True
                 report.remaining = len(pending) - index
+                report.cutoff = _describe_rank(selection_rank(player_id, rows))
                 break
 
             prompt = build_prompt(inputs)

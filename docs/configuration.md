@@ -134,8 +134,26 @@ backfill, not a schema change. See [odds.md](odds.md#resolved).
 | `backfill_seasons` | `[2024, 2025]` | `[2022, 2023, 2024, 2025]` | Seasons the **historical backfill** covers, and the fallback scope of the ingest jobs when neither `--seasons` nor `--current` is given. Narrowed by `20260730101200_backfill_two_seasons.sql`: `play_player_stats` runs ~1M rows per season across all FBS, against a 500 MB free tier. |
 | `current_season` | `2026` | `2026` | The season the **in-season crons** operate on, used by every job run with `--current`. **Update this each August.** Nothing derives it from the clock on purpose: a date-based guess rolls over during bowl season and would start writing the next season's empty schedule over a live one. |
 | `db_size_cap_mb` | `500` | `500` | Storage ceiling `ingest_stats` checks before starting. 500 is the Supabase free tier, where exceeding the cap makes the project **read-only** and every worker write fails. Raise it to the real limit when the project moves to Pro — a row edit, not a deploy. |
-| `ai_reads_max_per_run` | `400` | same | Hard ceiling on generations in one run of `generate_ai_reads`. A busy week is ~1,700 players and this bills the client's account, so the run stops and reports how many were left. Stopping early is recoverable; a surprise invoice is not. |
-| `ai_reads_min_confidence` | `0.0` | same | Only generate reads for picks at least this confident. `0.0` means every projected player. Raising it is the cheapest way to cut spend — the reads nobody opens are the ones on calls the model is least sure about. |
+| `ai_reads_max_per_run` | `400` | same | Hard ceiling on generations in one run of `generate_ai_reads`. A busy week is ~1,700 players and this bills the client's account, so the run stops and reports how many were left. Stopping early is recoverable; a surprise invoice is not. **The cap decides how many; `selection_rank` decides which** — see below. |
+| `ai_reads_min_confidence` | `0.0` | same | Only generate reads for picks at least this confident. `0.0` means every projected player, which is the current behaviour. A blunter instrument than the ordering: the cap already stops at the point this floor would cut, so raising it mainly makes the run report a skip instead of a cut. |
+
+**The AI-read cap decides how many; the ORDER decides which, and the order was
+the bug.** `generate_ai_reads` used to sort players by `player_id`, so a cap of
+400 against 1,206 projected players handed every read to the 400 lowest ids and
+starved the same two-thirds every week — while reporting a healthy 400 generated
+and exiting 0.
+
+Measured on 2026 week 1 when it was fixed: of those 400 reads, **only 210 went
+to a player the board surfaces as a call at all**, the median confidence was
+56.6% and the minimum was 0.0%. Ordering by value instead — call first, then
+edge, then confidence, mirroring the board's own default sort — moved **270 of
+the 400** to different players, and now all 400 carry a call at a median
+confidence of 79.2%.
+
+**601 of the 1,206 players carry a call**, so a cap of 400 still covers only 67%
+of them. Raising it to ~650 would cover every call; at the measured ~400 input
+tokens per read that is roughly 241k input tokens for a full week, which is a
+spend decision rather than a technical one.
 
 **Why there are two season keys.** There used to be one, and it silently pointed
 the whole pipeline at the wrong year. `backfill_seasons` answers "what does the

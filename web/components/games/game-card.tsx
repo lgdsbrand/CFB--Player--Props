@@ -3,7 +3,8 @@ import Link from "next/link";
 import { TeamChip } from "@/components/board/team-chip";
 import { favourite, softestMatchup, type PositionMatchup } from "@/lib/core/game-view";
 import { formatCount, formatKickoff, formatVenue } from "@/lib/core/format";
-import type { GameSummary } from "@/lib/core/types";
+import type { GameConditions, GameSummary } from "@/lib/core/types";
+import { conditionsSummary } from "@/lib/core/weather-view";
 
 /**
  * One game on the Analyze Games index.
@@ -21,9 +22,11 @@ import type { GameSummary } from "@/lib/core/types";
 export function GameCard({
   game,
   matchups,
+  conditions = null,
 }: {
   game: GameSummary;
   matchups: PositionMatchup[];
+  conditions?: GameConditions | null;
 }) {
   const line = favourite(game);
   const softest = softestMatchup(matchups);
@@ -32,6 +35,10 @@ export function GameCard({
     city: game.venueCity,
     state: game.venueState,
   });
+  // Null on most cards before the forecast horizon, and that is the design:
+  // sixty repetitions of "no forecast yet" would read as sixty faults. See
+  // `conditionsSummary`.
+  const weather = conditionsSummary(conditions);
 
   return (
     <Link
@@ -39,10 +46,24 @@ export function GameCard({
       className="panel hover:border-border-strong flex flex-col gap-3 p-4 transition-colors"
     >
       <div className="flex items-baseline justify-between gap-2">
-        <span className="label-caption">{formatKickoff(game.startDate)}</span>
-        {game.neutralSite ? (
-          <span className="label-caption text-dim">Neutral</span>
-        ) : null}
+        <span className="label-caption min-w-0 truncate">
+          {formatKickoff(game.startDate)}
+        </span>
+        <span className="flex shrink-0 items-baseline gap-2">
+          {game.neutralSite ? (
+            <span className="label-caption text-dim">Neutral</span>
+          ) : null}
+          {weather ? (
+            <span
+              className={
+                "text-[0.6875rem] font-semibold tabular-nums " +
+                (weather.notable ? "text-target" : "text-muted")
+              }
+            >
+              {weather.text}
+            </span>
+          ) : null}
+        </span>
       </div>
 
       <div className="flex flex-col gap-1.5">

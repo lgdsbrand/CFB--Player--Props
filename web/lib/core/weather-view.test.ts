@@ -19,6 +19,7 @@ import { test } from "node:test";
 import type { GameConditions } from "./types.ts";
 import {
   conditionFlags,
+  conditionsSummary,
   formatPrecipitation,
   formatTemperature,
   formatWind,
@@ -186,4 +187,80 @@ test("a calm reading gets no direction", () => {
   assert.equal(formatWindDirection(4, 0), null);
   assert.equal(formatWindDirection(4, 0.3), null);
   assert.equal(formatWindDirection(4, 3.1), "N");
+});
+
+/* ---------------------------------------------------------------------------
+ * The one-line summary on a games-index card.
+ *
+ * THE POINT OF THESE IS WHAT IT DOES NOT SAY. The panel is a section a reader
+ * opened; the card is one of sixty in a grid. "No forecast yet" is a useful
+ * answer in the first place and sixty identical apologies in the second, so
+ * the summary returns null where the panel returns a sentence.
+ * ------------------------------------------------------------------------ */
+
+test("a card with no forecast gets no conditions line at all", () => {
+  assert.equal(conditionsSummary(null), null);
+  assert.equal(
+    conditionsSummary(
+      conditions({ temperatureF: null, windSpeedMph: null, condition: null }),
+    ),
+    null,
+  );
+  // A finished game that never had conditions recorded is equally silent — the
+  // card cannot act on either, and they differ only in the explanation the
+  // game page gives.
+  assert.equal(
+    conditionsSummary(
+      conditions({
+        completed: true,
+        temperatureF: null,
+        windSpeedMph: null,
+        condition: null,
+      }),
+    ),
+    null,
+  );
+});
+
+test("a dome says so, because that IS the answer", () => {
+  assert.deepEqual(conditionsSummary(conditions({ venueIsDome: true })), {
+    text: "Indoors",
+    notable: false,
+  });
+});
+
+test("the summary leads with temperature and adds wind when it is blowing", () => {
+  // The real Scott Stadium forecast: 79.3°F, 3.1 mph.
+  assert.deepEqual(conditionsSummary(conditions()), {
+    text: "79° · 3 mph",
+    notable: false,
+  });
+
+  // A calm reading drops the wind rather than printing "0 mph".
+  assert.deepEqual(conditionsSummary(conditions({ windSpeedMph: 0.2 })), {
+    text: "79°",
+    notable: false,
+  });
+});
+
+test("the card highlights on the same thresholds the panel flags", () => {
+  // A card calling 12 mph notable while the page it links to calls it
+  // unremarkable would be two answers to one question.
+  assert.equal(conditionsSummary(conditions({ windSpeedMph: 12 }))?.notable, false);
+  assert.equal(conditionsSummary(conditions({ windSpeedMph: 15 }))?.notable, true);
+});
+
+test("rain earns a word, wind does not repeat itself", () => {
+  const wet = conditionsSummary(
+    conditions({ windSpeedMph: 18, precipitationIn: 0.2 }),
+  );
+  // "18 mph" appears once as a number; the wind flag must not also print
+  // "18 mph wind" beside it.
+  assert.equal(wet?.text, "79° · 18 mph · Rain");
+  assert.equal(wet?.notable, true);
+
+  const snowy = conditionsSummary(
+    conditions({ temperatureF: 28, snowfallIn: 0.5, precipitationIn: 0.2 }),
+  );
+  assert.equal(snowy?.text, "28° · 3 mph · Snow falling");
 });

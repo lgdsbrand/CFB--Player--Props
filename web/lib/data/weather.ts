@@ -67,3 +67,34 @@ export async function getGameConditions(
   );
   return rows.length > 0 ? toConditions(rows[0]) : null;
 }
+
+/**
+ * Conditions for a whole week, keyed by game — one read for the games index.
+ *
+ * The largest week ingested holds 99 games, so this is nowhere near PostgREST's
+ * 1,000-row cap. It is still an explicit `limit` rather than a bare select:
+ * silent truncation here would drop the conditions line off the tail of the
+ * index, which looks exactly like "those games have no forecast".
+ */
+export async function getSlateConditions(
+  season: number,
+  week: number,
+): Promise<Map<number, GameConditions>> {
+  const supabase = createServerSupabaseClient();
+  const rows = unwrap<DbRow[]>(
+    await supabase
+      .from("v_game_conditions")
+      .select(COLUMNS)
+      .eq("season", season)
+      .eq("week", week)
+      .limit(500),
+    "v_game_conditions (slate)",
+  );
+
+  return new Map(
+    rows.map((row) => {
+      const conditions = toConditions(row);
+      return [conditions.gameId, conditions];
+    }),
+  );
+}

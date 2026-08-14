@@ -10,16 +10,22 @@ import type { GameConditions } from "@/lib/core/types";
 /**
  * Conditions at kickoff (CLAUDE.md §4, §7).
  *
+ * SHARED BY THE PLAYER PAGE AND THE GAME PAGE, which is why it lives here and
+ * not under `components/player`. Conditions are a fact about a GAME; the player
+ * page just happened to need one first. The copy is written to hold on both
+ * surfaces — it says "the calls" rather than "the call above", because on the
+ * game page there are many and they are below.
+ *
  * FOUR STATES, EACH WITH ITS OWN ANSWER. A dome and a game outside the forecast
  * horizon both have no weather and mean opposite things, so this panel never
  * renders one shrug for both — see `lib/core/weather-view.ts` and migration
  * 0042 for why the view is driven from `games` to make that possible.
  *
  * IT DESCRIBES, IT DOES NOT DISCOUNT. Weather is already a feature of the
- * projection, so the call and the confidence above have accounted for it. A
- * reader who sees "22 mph wind" and marks the passing line down again is
- * counting the same fact twice, which is why the footnote says so plainly
- * rather than leaving it to be inferred.
+ * projection, so the calls and their confidence have accounted for it. A reader
+ * who sees "22 mph wind" and marks the passing line down again is counting the
+ * same fact twice, which is why the footnote says so plainly rather than
+ * leaving it to be inferred.
  */
 export function WeatherPanel({
   conditions,
@@ -100,7 +106,12 @@ function Reading({
         </div>
       ) : null}
 
-      <dl className="grid grid-cols-2 gap-x-3 gap-y-2">
+      {/* `max-w-md` because this panel is now used at two very different
+          widths. In the player page's column the four cells fill the space; on
+          the full-width game page they were stretched across 950px, which put
+          "Wind" and "Precipitation" far enough apart to stop reading as a
+          group. Capping the group keeps one layout honest in both places. */}
+      <dl className="grid max-w-md grid-cols-2 gap-x-3 gap-y-2">
         <Cell
           label="Wind"
           value={
@@ -123,7 +134,7 @@ function Reading({
         {view.state === "forecast"
           ? "Forecast for the kickoff hour."
           : "Measured at the game."}{" "}
-        Weather is already an input to the projection above, so the call and its
+        Weather is already an input to the projections, so the calls and their
         confidence have accounted for it — this panel is the detail behind that,
         not a further adjustment to make yourself.
       </p>

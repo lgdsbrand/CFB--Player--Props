@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { TeamChip } from "@/components/board/team-chip";
 import { MatchupGrid } from "@/components/games/matchup-grid";
 import { PropsTable } from "@/components/games/props-table";
+import { WeatherPanel } from "@/components/games/weather-panel";
 import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
 import { boardHref, parseBoardParams, type RawParams } from "@/lib/core/board-params";
@@ -15,6 +16,7 @@ import { getMarkets } from "@/lib/data/catalogue";
 import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
 import { getGame } from "@/lib/data/games";
+import { getGameConditions } from "@/lib/data/weather";
 
 /**
  * One game: the line, the position matchups, and every prop on both teams.
@@ -58,7 +60,7 @@ export default async function GamePage({
   const raw = await searchParams;
   const boardParams = parseBoardParams(raw, { edgesOnlyDefault: false });
 
-  const [config, markets, ratings, page] = await Promise.all([
+  const [config, markets, ratings, page, conditions] = await Promise.all([
     getAppConfig(),
     // Only for the display order of a player's markets. Cached seed data, so
     // this costs a map lookup rather than a round trip on most requests.
@@ -76,6 +78,10 @@ export default async function GamePage({
       limit: 1000,
       sort: "confidence",
     }),
+    // Joins the existing wave rather than forming its own. A wave costs one
+    // round trip whatever its width, so this read is effectively free here and
+    // would cost a full one as a fifth wait.
+    getGameConditions(gameId),
   ]);
 
   const truncated = page.total > page.rows.length;
@@ -168,6 +174,12 @@ export default async function GamePage({
           does not model game outcomes.
         </p>
       </header>
+
+      {/* Above the matchups on purpose. Conditions are one glance and they
+          frame everything below — a 20 mph crosswind is the reason a passing
+          matchup that looks soft may not play soft. The position table is the
+          deep-dive and reads slower, so it follows. */}
+      <WeatherPanel conditions={conditions} />
 
       <MatchupGrid matchups={matchups} />
 

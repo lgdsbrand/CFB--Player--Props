@@ -14,6 +14,7 @@ import { getDefenseRatings } from "@/lib/data/defense";
 import { getSlateGames } from "@/lib/data/games";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
 import { getTeamDirectory } from "@/lib/data/teams";
+import { getSlateConditions } from "@/lib/data/weather";
 
 /**
  * Analyze Games — the week's slate, game first.
@@ -63,11 +64,12 @@ export default async function Games({
     );
   }
 
-  const [games, ratings] = await Promise.all([
+  const [games, ratings, conditions] = await Promise.all([
     getSlateGames(active.season, active.week),
     // Pinned to the week on screen, never "the latest": a rating from a later
     // cutoff knows results the reader is being asked to look ahead at.
     getDefenseRatings(active.season, active.week),
+    getSlateConditions(active.season, active.week),
   ]);
 
   const teamDirectory = await getTeamDirectory(
@@ -144,6 +146,7 @@ export default async function Games({
               key={game.gameId}
               game={game}
               matchups={gameMatchups(game, ratings)}
+              conditions={conditions.get(game.gameId) ?? null}
             />
           ))}
         </div>

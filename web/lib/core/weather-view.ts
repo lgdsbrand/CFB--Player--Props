@@ -163,3 +163,48 @@ export function formatPrecipitation(value: number | null): string {
   if (value === 0) return "None";
   return `${value.toFixed(2)} in`;
 }
+
+/**
+ * One line of conditions for a card in a list, or null when there is nothing to
+ * say.
+ *
+ * RETURNS NULL RATHER THAN A PLACEHOLDER, and that is the difference between
+ * this and the panel. The panel is a section a reader opened deliberately, so
+ * "no forecast yet" is a useful answer there. On the games index the same
+ * sentence would repeat down sixty cards and say nothing sixty times — worse
+ * than silence, because it reads as sixty faults. A card with no conditions
+ * line simply has no conditions line, and the game page explains why.
+ *
+ * `notable` drives the colour, and it is deliberately the SAME thresholds the
+ * panel flags. A card that highlighted wind at 12 mph while the page it links
+ * to called 12 mph unremarkable would be two answers to one question.
+ */
+export type ConditionsSummary = {
+  text: string;
+  /** True when a flagged condition is present — wind, precipitation, extremes. */
+  notable: boolean;
+};
+
+export function conditionsSummary(
+  conditions: GameConditions | null,
+): ConditionsSummary | null {
+  const view = weatherView(conditions);
+
+  if (view.state === "indoors") return { text: "Indoors", notable: false };
+  if (!view.hasReading || !conditions) return null;
+
+  // Temperature first because it is the one figure every reader can place
+  // without thinking, then wind, which is the one that moves a passing line.
+  const parts = [formatTemperature(conditions.temperatureF)];
+  if (conditions.windSpeedMph !== null && Math.round(conditions.windSpeedMph) > 0) {
+    parts.push(formatWind(conditions.windSpeedMph));
+  }
+  // Only the precipitation and snow flags earn a word here. Wind is already a
+  // number above, and repeating "15 mph wind" beside "15 mph" is noise.
+  const wet = view.flags.find(
+    (flag) => flag.key === "snow" || flag.key === "precipitation",
+  );
+  if (wet) parts.push(wet.label);
+
+  return { text: parts.join(" · "), notable: view.flags.length > 0 };
+}

@@ -850,6 +850,30 @@ note above the cards: it states how many rows rest on fewer than four effective
 games and whether any defense carries a rating yet, both counted from the week on
 screen.
 
+### The cheat sheet is empty
+
+**For the first month of a season this is correct and needs no action.** An
+entry needs four decided games behind it (six at L10), so the sheet cannot
+produce one until about week 5 — the page says which of four causes applies and
+distinguishes "too early in the season" from an ordinary empty week. Weeks 1-4
+reporting nothing is arithmetic, not a fault, and `monitor_pipeline` deliberately
+does not alert on it.
+
+After week 5, in order of likelihood:
+
+1. **No lines.** A hit rate is measured against a line and college books post
+   late (CLAUDE.md §7). The page says so and the board still has the leans.
+   Check `v_board_rows` for the week: `line is not null`.
+2. **`ingest_stats` has not run**, so there are no box scores to grade. Check
+   `pipeline_runs` — this is the same cause as a stale board.
+3. **The view is missing.** `v_cheat_sheet` arrived in migration 0045; if the
+   web deploy is ahead of the database the page 400s rather than emptying, which
+   is the failure the migration-before-push order exists to prevent.
+
+Nothing schedules or materialises the sheet — it is a view over `v_board_rows`
+and `v_player_game_log`, computed per request, so it is never stale and there is
+no job to re-run.
+
 ### An alert channel is not delivering
 
 Alerting is the one component that cannot report its own outage. Check

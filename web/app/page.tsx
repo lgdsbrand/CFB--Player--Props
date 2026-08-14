@@ -110,9 +110,16 @@ export default async function Home({
         )}`}
       />
 
+      {/* An odd tile count leaves a hole in a two-column grid, so the last one
+          takes the full width instead. A gap reads as something failing to
+          render; a wide tile reads as a decision. */}
       <div className="grid gap-3 sm:grid-cols-2">
-        {tiles.map((tile) => (
-          <Tile key={tile.key} tile={tile} />
+        {tiles.map((tile, index) => (
+          <Tile
+            key={tile.key}
+            tile={tile}
+            wide={tiles.length % 2 === 1 && index === tiles.length - 1}
+          />
         ))}
       </div>
 
@@ -179,7 +186,7 @@ function Hero({ subtitle }: { subtitle: string }) {
  * with a real number (zero) and a sentence about the market, because nothing is
  * broken and a greyed-out control implies something is.
  */
-function Tile({ tile }: { tile: HomeTile }) {
+function Tile({ tile, wide = false }: { tile: HomeTile; wide?: boolean }) {
   const body = (
     <>
       <div className="flex items-baseline gap-2">
@@ -222,7 +229,8 @@ function Tile({ tile }: { tile: HomeTile }) {
     </>
   );
 
-  const shell = "panel flex flex-col gap-3 p-5";
+  const shell =
+    "panel flex flex-col gap-3 p-5" + (wide ? " sm:col-span-2" : "");
 
   if (!tile.href) {
     return <div className={shell}>{body}</div>;

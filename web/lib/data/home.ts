@@ -16,6 +16,11 @@
  */
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import {
+  CHEAT_TIERS,
+  DEFAULT_CHEAT_WINDOW,
+  minDecidedFor,
+} from "@/lib/core/cheat-sheet";
 import { DEFAULT_SPORT } from "@/lib/core/sport";
 import type { HomeCounts } from "@/lib/core/home-view";
 import { SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
@@ -37,7 +42,31 @@ export async function getHomeCounts(
       .eq("week", week)
       .eq("conference_is_displayed", true);
 
-  const [props, calls, edges, developmentLine, bookLine] = await Promise.all(
+  /**
+   * The cheat-sheet tile's number, counted exactly as `getCheatSheet` selects
+   * — same window, same floors, same exclusion — because the tile promises what
+   * the reader will find when they click it.
+   *
+   * IT IS THE ONE COUNT HERE THAT IS NOT A PREDICATE ON AN INDEXED COLUMN: it
+   * grades every priced prop on the slate. Measured warm on the fullest week in
+   * the database (2025 week 12, 405 entries) it runs in 300-530 ms, which is
+   * the same order as the five above and it shares their wave, so it costs the
+   * page nothing sequentially. A cold first hit measured 2.4 s; if this page
+   * ever needs to be faster than its slowest count, that is the one to cache.
+   */
+  const cheatSheet = supabase
+    .from("v_cheat_sheet")
+    .select("projection_id", { count: "exact", head: true })
+    .eq("sport", DEFAULT_SPORT)
+    .eq("season", season)
+    .eq("week", week)
+    .eq("window_size", DEFAULT_CHEAT_WINDOW)
+    .eq("conference_is_displayed", true)
+    .gte("hit_rate", CHEAT_TIERS[CHEAT_TIERS.length - 1].min)
+    .gte("decided", minDecidedFor(DEFAULT_CHEAT_WINDOW))
+    .or("is_binary.eq.false,hit_side.eq.over");
+
+  const [props, calls, edges, developmentLine, bookLine, sheet] = await Promise.all(
     [
       base(),
       // The population "best plays" ORDERS, not a threshold within it. A
@@ -51,6 +80,7 @@ export async function getHomeCounts(
       // line at all, and counting those as book-priced would report a market
       // that does not exist yet.
       base().eq("has_book_line", true).neq("sportsbook_key", SYNTHETIC_BOOK_KEY),
+      cheatSheet,
     ],
   );
 
@@ -60,6 +90,7 @@ export async function getHomeCounts(
     [edges, "edges"],
     [developmentLine, "development line"],
     [bookLine, "book line"],
+    [sheet, "cheat sheet"],
   ] as const) {
     if (result.error) {
       throw new Error(`Home count failed (${label}): ${result.error.message}`);
@@ -73,5 +104,6 @@ export async function getHomeCounts(
     edges: edges.count ?? 0,
     developmentLine: developmentLine.count ?? 0,
     bookLine: bookLine.count ?? 0,
+    cheatSheet: sheet.count ?? 0,
   };
 }

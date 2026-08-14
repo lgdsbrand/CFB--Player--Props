@@ -108,6 +108,21 @@ const EXPECTED = {
     "is_forecast", "observed_at", "temperature_f", "dew_point_f", "humidity",
     "precipitation_in", "snowfall_in", "wind_speed_mph", "wind_direction_deg",
     "pressure_mb", "condition",
+    // Filtered on, never selected — `getSlateConditions` reads a whole week for
+    // the games index. A predicate on a column the anon role cannot see fails
+    // exactly like a missing select column.
+    "season", "week",
+  ],
+  v_cheat_sheet: [
+    "projection_id", "pick_id", "sport", "season", "week", "player_id",
+    "player_name", "position_group", "team_id", "team_school",
+    "team_abbreviation", "team_color", "team_alt_color", "opponent_team_id",
+    "opponent_school", "opponent_abbreviation", "opponent_rank_vs_position",
+    "game_id", "start_date", "is_home", "neutral_site", "market_key",
+    "market_label", "market_emoji", "is_binary", "line", "model_side",
+    "display_confidence", "edge", "has_call", "has_book_line", "sportsbook_key",
+    "conference_name", "conference_is_displayed", "window_size", "decided",
+    "pushes", "hits", "hit_side", "hit_rate",
   ],
   v_slate_games: [
     "game_id", "sport", "season", "week", "start_date", "start_time_tbd",

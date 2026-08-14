@@ -77,6 +77,16 @@ export type HomeCounts = {
   developmentLine: number;
   /** Rows carrying a price from a real sportsbook. */
   bookLine: number;
+  /**
+   * Entries on the cheat sheet at the default window — props whose recent games
+   * have already cleared today's line at 80% or better.
+   *
+   * ZERO FOR THE WHOLE OF WEEK 1, every season, and that is arithmetic rather
+   * than a fault: a hit rate needs games already played and there are none. The
+   * tile therefore does not link, and says so in terms of the season rather
+   * than of the software.
+   */
+  cheatSheet: number;
 };
 
 export type HomeTile = {
@@ -176,6 +186,28 @@ export function homeTiles(
       // books have not opened these props yet.
       emptyReason:
         "An edge needs a price to measure against, and no sportsbook has posted an NCAAF player prop for this slate. College books usually post on Thursday or Friday for Saturday games.",
+    }),
+    tile({
+      key: "cheat",
+      emoji: "🔥",
+      title: "Cheat Sheets",
+      blurb:
+        "Players whose recent games have already cleared the line showing today — the 100% and 80%-and-up lists.",
+      href: `/cheat-sheets?${scope}`,
+      count: counts.cheatSheet,
+      countLabel: "at 80% or better",
+      // The same rule as BEST PLAYS, one step further. That tile has to say
+      // confidence is not value; this one has to say history is not a forecast,
+      // because a percentage beside a player's name is the exact shape of a
+      // tout sheet and will be read as a prediction unless it is contradicted.
+      caveat:
+        "A streak is what has already happened against today's line, not a forecast and not an edge.",
+      // Covers both structural causes in one sentence, because the tile cannot
+      // tell them apart without paying for a second count: before kickoff there
+      // are no games to grade, and before the books post there is no line to
+      // grade them against.
+      emptyReason:
+        "A hit rate needs games already played and a line to grade them against. This fills in once the season is under way — a first entry needs four decided games behind it.",
     }),
   ];
 }

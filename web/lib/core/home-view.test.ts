@@ -29,6 +29,8 @@ function counts(overrides: Partial<HomeCounts> = {}): HomeCounts {
     edges: 246,
     developmentLine: 0,
     bookLine: 715,
+    // 2025 week 12 on production, the fullest week in the database.
+    cheatSheet: 405,
     ...overrides,
   };
 }
@@ -42,6 +44,9 @@ function openingWeekend(): HomeCounts {
     edges: 0,
     developmentLine: 0,
     bookLine: 0,
+    // Zero by arithmetic rather than by accident: no 2026 game has been played,
+    // so there is no history to grade against any line.
+    cheatSheet: 0,
   };
 }
 

@@ -16,6 +16,7 @@ import json
 import time
 from decimal import Decimal
 
+import cfbd
 import pytest
 
 from worker.adapters.cfbd.cache import ResponseCache, _stable_key
@@ -25,7 +26,12 @@ from worker.adapters.cfbd.client import (
     _retry_after_seconds,
     _to_rows,
 )
-from worker.adapters.cfbd.quota import AccountStatus, QuotaError, require_capacity
+from worker.adapters.cfbd.quota import (
+    AccountStatus,
+    QuotaError,
+    fetch_account_status,
+    require_capacity,
+)
 
 
 class FakeApiError(Exception):
@@ -246,6 +252,109 @@ def test_client_errors_are_not_retried(monkeypatch, status):
     with pytest.raises(FakeApiError):
         client._call_with_retry(denied, {}, "/test")
     assert calls["n"] == 1
+
+
+# ------------------------------------------------------- the account preflight
+#
+# `fetch_account_status` is the first CFBD call every ingest job makes, so
+# whatever protection it has is the protection each job's opening move has. It
+# had none: it went through a bare `api()` helper that skipped pacing, backoff
+# and retry, and nothing here covered it.
+#
+# On 2026-08-17 that ended the Sunday chain. The five jobs run back-to-back
+# under one `&&`, so `ingest_stats` opened on a rate limiter `ingest_reference`
+# had just left hot, drew a 429 on this call, and exited 1 — taking
+# `ingest_ratings`, `ingest_rankings` and `build_splits` down with it.
+
+
+def _preflight_client(**overrides):
+    """A CfbdClient with the retry machinery live and the network absent."""
+    client = CfbdClient.__new__(CfbdClient)  # bypass __init__/auth
+    client.min_interval = 0
+    client.max_retries = 5
+    client.call_count = 0
+    client._last_call_at = 0.0
+    client._api_client = object()  # only ever handed to the API class
+    client.cache = overrides.get("cache")
+    return client
+
+
+def _fake_info_api(responder):
+    """Build a stand-in for cfbd.InfoApi whose get_user_info runs `responder`."""
+
+    class FakeInfoApi:
+        def __init__(self, _api_client):
+            pass
+
+        def get_user_info(self, **_params):
+            return responder()
+
+    return FakeInfoApi
+
+
+def test_preflight_survives_a_rate_limit(monkeypatch):
+    """THE REGRESSION. A 429 on /info must cost a retry, not the whole chain."""
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+
+    attempts = {"n": 0}
+
+    def flaky():
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise FakeApiError(429)
+        return FakeModel(
+            tierName="Tier 2", monthlyLimit=30_000, remainingCalls=29_000
+        )
+
+    monkeypatch.setattr(cfbd, "InfoApi", _fake_info_api(flaky))
+
+    status = fetch_account_status(_preflight_client())
+
+    assert attempts["n"] == 3, "the preflight did not retry"
+    assert status.tier_name == "Tier 2"
+    assert status.remaining_calls == 29_000
+
+
+def test_preflight_still_fails_fast_on_a_bad_key(monkeypatch):
+    """Retrying must not mask the one failure that will never come good.
+
+    A 401 means the key is wrong. Backing off five times before saying so turns
+    an instant, clear answer into a minute of silence in a cron log.
+    """
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+
+    attempts = {"n": 0}
+
+    def denied():
+        attempts["n"] += 1
+        raise FakeApiError(401)
+
+    monkeypatch.setattr(cfbd, "InfoApi", _fake_info_api(denied))
+
+    with pytest.raises(FakeApiError):
+        fetch_account_status(_preflight_client())
+    assert attempts["n"] == 1
+
+
+def test_preflight_is_never_served_from_cache(monkeypatch, tmp_path):
+    """A cached quota reading is worse than none.
+
+    /info reports remaining calls. Cache it and the guard reads yesterday's
+    headroom as today's, then waves through a job that cannot afford to run —
+    the failure `require_capacity` exists to prevent.
+    """
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    cache = ResponseCache(tmp_path)
+
+    monkeypatch.setattr(
+        cfbd,
+        "InfoApi",
+        _fake_info_api(lambda: FakeModel(tierName="Tier 2", remainingCalls=5)),
+    )
+
+    fetch_account_status(_preflight_client(cache=cache))
+
+    assert cache.get("/info", {}, None) is None, "the preflight wrote to the cache"
 
 
 def test_retryable_statuses_cover_rate_limit_and_5xx():

@@ -95,8 +95,16 @@ def fetch_account_status(client: Any) -> AccountStatus:
     `client` is an open CfbdClient. Taking it as an argument rather than opening
     one keeps this usable inside a job that already holds a client, so a
     preflight does not cost a second connection.
+
+    GOES THROUGH `call_uncached`, NOT AROUND IT. Every ingest job calls this
+    before its first real request, so whatever protection this one call has is
+    the protection the whole job's opening move has. It previously used a bare
+    `api()` helper with no pacing, backoff or retry, and on 2026-08-17 a 429
+    here ended the Sunday chain three jobs early. Uncached rather than `fetch()`
+    because the remaining-call count is the entire point of the request — see
+    `CfbdClient.call_uncached`.
     """
-    raw = _as_dict(client.api(cfbd.InfoApi).get_user_info())
+    raw = _as_dict(client.call_uncached("/info", cfbd.InfoApi, "get_user_info"))
 
     features = raw.get("features") or {}
     if not isinstance(features, dict):

@@ -255,6 +255,6 @@ Worth stating plainly so nobody discovers it in production.
 - A walk-forward backtest over both seasons: Brier skill **+0.196**, ECE
   **0.0162**, with the opening weekends graded separately and coming out the
   best-calibrated stretch of the season.
-- 944 Python tests, 227 web tests, 192 data-integrity checks, all passing.
+- 947 Python tests, 227 web tests, 192 data-integrity checks, all passing.
 - Nine scheduled jobs with monitoring that alerts when any of them stops
   producing — including the case where a job succeeds and writes nothing.

@@ -26,7 +26,7 @@ import time
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, TypeVar
+from typing import Any
 
 import cfbd
 
@@ -35,8 +35,6 @@ from worker.config import get_settings
 from worker.logging_setup import get_logger
 
 log = get_logger(__name__)
-
-ApiT = TypeVar("ApiT")
 
 # Retry on transient conditions only. A 401/403/404 will never succeed on retry
 # and must surface immediately rather than being masked by a slow retry loop.
@@ -175,15 +173,47 @@ class CfbdClient:
                 self.cache.stats.summary(),
             )
 
-    def api(self, api_class: type[ApiT]) -> ApiT:
-        """Instantiate a CFBD API class bound to this client's credentials.
+    def call_uncached(
+        self,
+        endpoint: str,
+        api_class: type[Any],
+        method: str,
+        **params: Any,
+    ) -> Any:
+        """Make one paced, retried call and return the vendor result unchanged.
 
-        Bypasses pacing, backoff and caching — use `fetch()` for ingest work.
-        This remains for one-off calls such as the account preflight.
+        The uncached sibling of `fetch()`, for endpoints whose whole value is
+        that they are read fresh. `/info` is the case that matters: it reports
+        the remaining quota, and a cached quota reading is worse than no quota
+        reading, because it would report yesterday's headroom as today's and the
+        guard built on it would wave through a job that cannot afford to run.
+
+        THIS REPLACED A BARE `api()` HELPER, AND THE REPLACEMENT IS THE POINT.
+        That helper returned the vendor API object for the caller to invoke
+        directly, which meant its calls skipped pacing, backoff and retry. Its
+        one and only user was `fetch_account_status`, the account preflight —
+        so the single unprotected call in the codebase was also the FIRST call
+        every ingest job made.
+
+        On 2026-08-17 that combination took the Sunday chain down. The five jobs
+        run back-to-back under one `&&`, so `ingest_stats` opened on a rate
+        limiter that `ingest_reference` had just left hot, drew a 429 on the
+        preflight, and exited 1 — killing `ingest_ratings`, `ingest_rankings`
+        and `build_splits` behind it. CFBD's own advice in that response body is
+        "wait a few seconds and retry", which is exactly what `_call_with_retry`
+        does and exactly what this call could not reach.
+
+        Returning results raw rather than through `_to_rows()` is deliberate:
+        `/info` is a single object, not a row set, and normalising it would make
+        the caller unwrap a one-item list for no gain.
         """
         if self._api_client is None:
             raise RuntimeError("CfbdClient must be used as a context manager")
-        return api_class(self._api_client)  # type: ignore[call-arg]
+
+        clean = {k: v for k, v in params.items() if v is not None}
+        label = f"{endpoint} {clean}" if clean else endpoint
+        bound = getattr(api_class(self._api_client), method)  # type: ignore[call-arg]
+        return self._call_with_retry(bound, clean, label)
 
     def _pace(self) -> None:
         elapsed = time.monotonic() - self._last_call_at

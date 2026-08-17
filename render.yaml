@@ -40,10 +40,12 @@ envVarGroups:
         sync: false
       - key: CFBD_API_KEY
         sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
+      # NO SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY. Nothing reads them: there is
+      # no supabase-py in requirements.txt and every write is psycopg against
+      # SUPABASE_DB_URL. They were declared here through Phase 1 and their
+      # presence in the blueprint is what made them look required — a `sync:
+      # false` key materialises as nothing in the dashboard, so it reads as a
+      # blank waiting to be filled rather than as an unused declaration.
       # Optional. The pipeline runs without these: odds and AI both default to
       # the "none" adapter and the app degrades to model leans and an empty
       # read slot (CLAUDE.md §9.1).

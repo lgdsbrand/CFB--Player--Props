@@ -54,8 +54,8 @@ confirmed at signup — they move.
 |---|---|---|---|
 | **GitHub** | the repo, and the deploy trigger | Free | Nothing here needs paid GitHub. |
 | **Vercel** | the Next.js board | Free may do; Pro (~$20/user/mo) if the client wants team seats or password-protected previews | The board is server-rendered on demand and does not need paid features to run. |
-| **Supabase** | the database everything reads and writes | **Pro (~$25/mo) — required, not optional** | The free tier stops at 500 MB. The development database is at **448 MB** today with two seasons of play-by-play, and 2026 adds a third. It will not fit. |
-| **Render** | the Python worker's seven cron jobs | A paid plan; cron services are not on Render's free tier | Free static/web services exist there; scheduled jobs do not. |
+| **Supabase** | the database everything reads and writes | **Pro (~$25/mo) — required, not optional** | The free tier stops at 500 MB. The development database measured **473 MB** on 2026-08-14 with two seasons of play-by-play, and 2026 adds a third. It will not fit. |
+| **Render** | the Python worker's nine cron jobs | A paid plan; cron services are not on Render's free tier | Free static/web services exist there; scheduled jobs do not. |
 | **CollegeFootballData** | all football data | Tier 2, already funded (~$5/mo) | The free tier rate-limits too hard for an all-FBS backfill. |
 
 Rough all-in: **$50–75/month**, dominated by Supabase and Render, plus whatever
@@ -255,6 +255,6 @@ Worth stating plainly so nobody discovers it in production.
 - A walk-forward backtest over both seasons: Brier skill **+0.196**, ECE
   **0.0162**, with the opening weekends graded separately and coming out the
   best-calibrated stretch of the season.
-- 713 Python tests, 98 web tests, 168 data-integrity checks, all passing.
-- Seven scheduled jobs with monitoring that alerts when any of them stops
+- 944 Python tests, 227 web tests, 192 data-integrity checks, all passing.
+- Nine scheduled jobs with monitoring that alerts when any of them stops
   producing — including the case where a job succeeds and writes nothing.

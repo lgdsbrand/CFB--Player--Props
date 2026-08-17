@@ -99,7 +99,7 @@ broken" from "the data is wrong" in about two seconds.
 python -m worker.jobs.audit_data
 ```
 
-The data-integrity canary: **182 checks** over schema objects and constraints,
+The data-integrity canary: **192 checks** over schema objects and constraints,
 RLS posture, the odds math, referential integrity, the sport dimension and the
 four joins where a mislabelled row would mix two sports, the anti-lookahead
 guarantees, data completeness, value plausibility, cross-source reconciliation

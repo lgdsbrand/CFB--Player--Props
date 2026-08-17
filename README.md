@@ -292,7 +292,7 @@ rationale in [docs/schema.md](docs/schema.md).
 
 - **Web → Vercel.** Root directory `web/`. Set the two `NEXT_PUBLIC_` variables.
   Preview deploy per branch so changes are reviewable on a live URL before merge.
-- **Worker → Render.** Uses [render.yaml](render.yaml): seven crons and one
+- **Worker → Render.** Uses [render.yaml](render.yaml): nine crons and one
   shared env var group, every secret `sync: false` so it is entered in the
   dashboard and never committed. The schedules and what to do when one stops are
   in [docs/runbook.md](docs/runbook.md); `monitor_pipeline` watches the rest and

@@ -17,7 +17,6 @@ import pytest
 
 from worker.adapters.cfbd import ingest_lines
 
-
 # The real week-8 response for game 401752871, trimmed to the fields used.
 NOTRE_DAME_USC: dict[str, Any] = {
     "id": 401752871,

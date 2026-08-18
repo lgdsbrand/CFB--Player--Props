@@ -8,8 +8,9 @@ several-hundred-call backfill and a suspended API key:
 
   * **Pacing.** A minimum interval between requests, so a tight backfill loop
     does not look like an attack.
-  * **Backoff.** Retries on 429 and 5xx with exponential delay and jitter,
-    honouring Retry-After when the server sends it.
+  * **Backoff.** Retries on 429 and 5xx with exponential delay and jitter, on a
+    heavier curve for 429, and honouring Retry-After only when it asks for
+    LONGER than that curve.
   * **Caching.** Completed-season responses are immutable, so re-running the
     split engine while refining play attribution costs zero quota.
 
@@ -44,6 +45,16 @@ DEFAULT_MIN_INTERVAL = 0.12  # seconds between requests (~8/sec ceiling)
 DEFAULT_MAX_RETRIES = 5
 DEFAULT_BACKOFF_BASE = 1.5  # seconds; doubled each attempt
 MAX_BACKOFF = 60.0
+
+# A 429 gets its own, much heavier curve: 5, 10, 20, 40, 60 (capped) — over two
+# minutes of waiting across the five attempts, against ~35s for the default
+# base. That is sized from a measurement, not a guess. On 2026-08-17 the chain's
+# second job drew a 429 on its FIRST request, 74 seconds after the previous job
+# had made its last one — so CFBD's burst penalty outlives more than a minute of
+# total silence, and a retry curve that gives up inside 35s cannot clear it.
+# 5xx keeps the shorter base: a bad gateway is usually gone in a second, and
+# there is no penalty box to sit out.
+RATE_LIMIT_BACKOFF_BASE = 5.0
 
 
 def build_configuration(api_key: str | None = None) -> cfbd.Configuration:
@@ -114,7 +125,21 @@ def _to_rows(result: Any) -> list[dict[str, Any]]:
 
 
 def _retry_after_seconds(exc: Exception) -> float | None:
-    """Extract Retry-After from an API exception, if the server sent one."""
+    """Extract Retry-After from an API exception, if the server sent a USABLE one.
+
+    A NON-POSITIVE VALUE IS TREATED AS ABSENT, and that is the whole point of
+    this function's shape. CFBD's 429 carries `Retry-After: 0` — sitting in the
+    middle of `Cache-Control: no-store, no-cache, must-revalidate, post-check=0,
+    pre-check=0` and `Expires: Thu, 01 Jan 1970`, i.e. it is part of a
+    boilerplate no-cache header block, not an instruction about when to come
+    back. The same response body says "wait a few seconds and retry".
+
+    Honouring that 0 literally is what turned the 2026-08-17 fix into a second
+    outage: five retries fired inside a second, all into a still-hot rate
+    limiter, and the job raised the same uncaught HTTP 429 as before. A server
+    telling us to retry immediately after rate-limiting us is telling us
+    nothing, so we fall through to our own backoff.
+    """
     headers = getattr(exc, "headers", None)
     if not headers:
         return None
@@ -125,9 +150,31 @@ def _retry_after_seconds(exc: Exception) -> float | None:
     if not value:
         return None
     try:
-        return float(value)
+        seconds = float(value)
     except (TypeError, ValueError):
         return None
+    return seconds if seconds > 0 else None
+
+
+def _backoff_seconds(attempt: int, exc: Exception, status: int | None) -> float:
+    """How long to wait before retry number `attempt` (1-based).
+
+    Retry-After can only ever LENGTHEN the wait, never shorten it. Deferring to
+    a server that asks for longer than our curve is politeness; letting one
+    shorten it hands a rate limiter the power to talk us into hammering it, and
+    a header does not have to be malicious to do that — CFBD's `Retry-After: 0`
+    is simply boilerplate (see `_retry_after_seconds`).
+    """
+    base = RATE_LIMIT_BACKOFF_BASE if status == 429 else DEFAULT_BACKOFF_BASE
+    delay = min(base * (2 ** (attempt - 1)), MAX_BACKOFF)
+    # Jitter so parallel or repeated runs do not resynchronize their retries
+    # into a thundering herd.
+    delay *= 0.5 + random.random()  # noqa: S311 - not cryptographic
+
+    retry_after = _retry_after_seconds(exc)
+    if retry_after is not None:
+        delay = max(delay, min(retry_after, MAX_BACKOFF))
+    return delay
 
 
 class CfbdClient:
@@ -223,6 +270,7 @@ class CfbdClient:
 
     def _call_with_retry(self, bound_method: Any, params: dict[str, Any], label: str) -> Any:
         attempt = 0
+        waited = 0.0
         while True:
             self._pace()
             try:
@@ -234,17 +282,26 @@ class CfbdClient:
                 if status not in RETRYABLE_STATUSES or attempt >= self.max_retries:
                     # Count it: a failed call still consumes quota server-side.
                     self.call_count += 1
+                    # SAY WHAT THIS 429 IS, in the log, in one line. What the
+                    # cfbd exception prints is a wall of response headers, and
+                    # twice now that has had to be read by someone deciding
+                    # whether the key had run out of calls. It had not: this is
+                    # the burst limiter, and CFBD's own body says so.
+                    if status == 429:
+                        log.error(
+                            "%s -> HTTP 429 after %d retries over %.0fs. This is "
+                            "CFBD's BURST limit, NOT the monthly quota — the key "
+                            "has calls left. Something upstream is calling too "
+                            "fast, or another product on this shared key is.",
+                            label,
+                            attempt,
+                            waited,
+                        )
                     raise
 
                 attempt += 1
-                delay = _retry_after_seconds(exc)
-                if delay is None:
-                    delay = min(
-                        DEFAULT_BACKOFF_BASE * (2 ** (attempt - 1)), MAX_BACKOFF
-                    )
-                    # Jitter so parallel or repeated runs do not resynchronize
-                    # their retries into a thundering herd.
-                    delay *= 0.5 + random.random()  # noqa: S311 - not cryptographic
+                delay = _backoff_seconds(attempt, exc, status)
+                waited += delay
 
                 self.call_count += 1
                 log.warning(

@@ -134,13 +134,24 @@ class AiHttpClient:
         self._last_call = time.monotonic()
 
     def _sleep_for(self, attempt: int, retry_after: str | None = None) -> None:
-        """Back off, preferring the provider's own instruction when it gives one."""
+        """Back off, preferring the provider's own instruction when it gives one.
+
+        A NON-POSITIVE Retry-After IS NOT AN INSTRUCTION and must not be obeyed.
+        CFBD sends `Retry-After: 0` on its 429s as part of a no-cache header
+        block, and honouring that literally fired five retries inside one second
+        and took the ingest chain down on 2026-08-17 — see
+        `worker/adapters/cfbd/client.py::_retry_after_seconds`. Nothing says a
+        provider on this path cannot do the same, and here it would mean a burst
+        of retries into a rate limiter we are already over.
+        """
         if retry_after:
             try:
-                time.sleep(min(float(retry_after), MAX_BACKOFF))
-                return
+                seconds = float(retry_after)
             except (TypeError, ValueError):
-                pass
+                seconds = 0.0
+            if seconds > 0:
+                time.sleep(min(seconds, MAX_BACKOFF))
+                return
         # Jitter matters here: a weekly job fires ~1,700 requests, and a fleet
         # of retries synchronised to the same schedule re-creates the burst that
         # caused the rate limit.

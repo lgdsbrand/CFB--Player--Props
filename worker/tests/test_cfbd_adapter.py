@@ -23,6 +23,7 @@ from worker.adapters.cfbd.cache import ResponseCache, _stable_key
 from worker.adapters.cfbd.client import (
     RETRYABLE_STATUSES,
     CfbdClient,
+    _backoff_seconds,
     _retry_after_seconds,
     _to_rows,
 )
@@ -195,6 +196,80 @@ def test_retry_after_header_is_honoured():
     assert _retry_after_seconds(FakeApiError(429, {"Retry-After": "soon"})) is None
 
 
+def test_a_non_positive_retry_after_is_treated_as_absent():
+    """CFBD's 429 really does send `Retry-After: 0`.
+
+    It arrives inside a boilerplate no-cache header block (`no-store,
+    post-check=0, pre-check=0`, `Expires: Thu, 01 Jan 1970`) while the body of
+    the same response says "wait a few seconds and retry", so it is not an
+    instruction about anything. Reading it literally is what made the morning's
+    retry fix fail again the same evening.
+    """
+    assert _retry_after_seconds(FakeApiError(429, {"Retry-After": "0"})) is None
+    assert _retry_after_seconds(FakeApiError(429, {"Retry-After": "-30"})) is None
+
+
+def test_rate_limits_wait_far_longer_than_transient_5xx():
+    """A 429 is a penalty box; a 502 is a hiccup. They do not deserve one curve.
+
+    Measured 2026-08-17: the limiter was still hot 74 seconds after the previous
+    job's last call, so the 5xx curve's ~35s over five attempts cannot clear it.
+    """
+    assert 2.5 <= _backoff_seconds(1, FakeApiError(429), 429) <= 7.5
+    assert 0.75 <= _backoff_seconds(1, FakeApiError(503), 503) <= 2.25
+
+
+def test_retry_after_can_lengthen_a_wait_but_never_shorten_one():
+    """Deferring to a longer request is politeness; accepting a shorter one is
+    letting a rate limiter talk us into hammering it."""
+    assert _backoff_seconds(1, FakeApiError(503, {"Retry-After": "45"}), 503) == 45.0
+    # Capped: a server asking for ten minutes still gets retried at MAX_BACKOFF.
+    assert _backoff_seconds(1, FakeApiError(503, {"Retry-After": "600"}), 503) == 60.0
+    # And the zero cannot pull the 429 curve down to nothing.
+    assert _backoff_seconds(1, FakeApiError(429, {"Retry-After": "0"}), 429) >= 2.5
+
+
+def test_a_rate_limited_run_actually_waits(monkeypatch):
+    """THE REGRESSION, 2026-08-17 evening. Retries that do not wait are not retries.
+
+    `d0c221e` gave the account preflight the retry loop it had been missing, and
+    the re-triggered ingest failed at 20:12 with the identical uncaught HTTP 429
+    — every log line on the same second. The loop was running; it honoured
+    `Retry-After: 0` five times over, so all five attempts fired inside a second
+    into a limiter that needed more than a minute.
+
+    This asserts the wait, not just the attempt count, because the attempt count
+    was already right when the job died.
+    """
+    waits: list[float] = []
+    monkeypatch.setattr(time, "sleep", waits.append)
+
+    client = CfbdClient.__new__(CfbdClient)
+    client.min_interval = 0
+    client.max_retries = 5
+    client.call_count = 0
+    client._last_call_at = 0.0
+
+    def always_limited(**_params):
+        # The exact header block CFBD sent on 2026-08-17.
+        raise FakeApiError(
+            429,
+            {
+                "Retry-After": "0",
+                "Cache-Control": "private, max-age=0, no-store, no-cache, "
+                "must-revalidate, post-check=0, pre-check=0",
+                "Expires": "Thu, 01 Jan 1970 00:00:01 GMT",
+            },
+        )
+
+    with pytest.raises(FakeApiError):
+        client._call_with_retry(always_limited, {}, "/info")
+
+    assert len(waits) == 5, "five retries, five waits"
+    assert min(waits) >= 2.5, "a retry fired without waiting"
+    assert sum(waits) > 60, "gave up inside the burst penalty seen in production"
+
+
 def test_retries_then_succeeds(monkeypatch):
     monkeypatch.setattr(time, "sleep", lambda _: None)  # no real waiting
     client = CfbdClient.__new__(CfbdClient)  # bypass __init__/auth
@@ -301,7 +376,12 @@ def test_preflight_survives_a_rate_limit(monkeypatch):
     def flaky():
         attempts["n"] += 1
         if attempts["n"] < 3:
-            raise FakeApiError(429)
+            # WITH THE HEADER PRODUCTION ACTUALLY SENDS. This test passed while
+            # the job kept failing, because a headerless 429 never exercised the
+            # `Retry-After: 0` path. Stubbed sleep means the count is all this
+            # one can see — `test_a_rate_limited_run_actually_waits` checks the
+            # waits themselves.
+            raise FakeApiError(429, {"Retry-After": "0"})
         return FakeModel(
             tierName="Tier 2", monthlyLimit=30_000, remainingCalls=29_000
         )

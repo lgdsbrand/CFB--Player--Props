@@ -11,6 +11,8 @@ All offline. No key, no network, no spend.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from worker.adapters.ai import (
@@ -23,7 +25,7 @@ from worker.adapters.ai import (
 )
 from worker.adapters.ai.gemini import _parse as parse_gemini
 from worker.adapters.ai.grok import _parse as parse_grok
-from worker.adapters.ai.http import redact
+from worker.adapters.ai.http import AiHttpClient, redact
 
 
 def _gemini(text: str, finish: str = "STOP", **extra) -> dict:
@@ -164,3 +166,29 @@ class TestKeyHygiene:
 
     def test_ordinary_text_survives(self):
         assert redact("Allar projects under 238.5") == "Allar projects under 238.5"
+
+
+class TestBackoff:
+    """The same defect that took the CFBD ingest down on 2026-08-17 lived here too.
+
+    `Retry-After: 0` is boilerplate on some providers' 429s, not an instruction.
+    Obeyed literally it means "retry immediately", so every attempt fires into a
+    limiter that is still over its ceiling and the run ends on the rate limit it
+    was supposed to wait out.
+    """
+
+    def _slept(self, monkeypatch, retry_after: str | None) -> float:
+        waits: list[float] = []
+        monkeypatch.setattr(time, "sleep", waits.append)
+        AiHttpClient(headers={})._sleep_for(1, retry_after=retry_after)
+        assert len(waits) == 1
+        return waits[0]
+
+    def test_a_zero_retry_after_does_not_skip_the_wait(self, monkeypatch):
+        assert self._slept(monkeypatch, "0") > 0
+
+    def test_a_real_retry_after_is_still_obeyed(self, monkeypatch):
+        assert self._slept(monkeypatch, "12") == 12.0
+
+    def test_an_unparseable_retry_after_falls_back_to_the_curve(self, monkeypatch):
+        assert self._slept(monkeypatch, "in a bit") > 0

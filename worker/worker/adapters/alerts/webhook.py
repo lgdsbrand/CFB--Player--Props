@@ -125,12 +125,17 @@ def _url_from_environment() -> str | None:
 
 
 def _backoff(attempt: int, retry_after: str | None = None) -> None:
+    # A non-positive Retry-After is boilerplate, not an instruction — obeying one
+    # is retrying with no wait at all. It cost the ingest chain a run on
+    # 2026-08-17; see worker/adapters/cfbd/client.py::_retry_after_seconds.
     if retry_after:
         try:
-            time.sleep(min(float(retry_after), MAX_BACKOFF))
-            return
+            seconds = float(retry_after)
         except (TypeError, ValueError):
-            pass
+            seconds = 0.0
+        if seconds > 0:
+            time.sleep(min(seconds, MAX_BACKOFF))
+            return
     delay = min(2.0**attempt, MAX_BACKOFF)
     time.sleep(delay * (0.5 + random.random() / 2))  # noqa: S311 - not crypto
 

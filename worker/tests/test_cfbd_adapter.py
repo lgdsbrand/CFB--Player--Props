@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import datetime
 import enum
+import http.client
 import json
 import time
 from decimal import Decimal
 
 import cfbd
 import pytest
+import urllib3
 
 from worker.adapters.cfbd.cache import ResponseCache, _stable_key
 from worker.adapters.cfbd.client import (
@@ -227,6 +229,37 @@ def test_retry_after_can_lengthen_a_wait_but_never_shorten_one():
     assert _backoff_seconds(1, FakeApiError(503, {"Retry-After": "600"}), 503) == 60.0
     # And the zero cannot pull the 429 curve down to nothing.
     assert _backoff_seconds(1, FakeApiError(429, {"Retry-After": "0"}), 429) >= 2.5
+
+
+def test_the_real_cfbd_exception_is_read_correctly():
+    """Against the REAL exception class and a REAL HTTPHeaderDict, not our fake.
+
+    This is the check the morning's fix did not have. `FakeApiError` carries a
+    plain dict; production carries `urllib3.HTTPHeaderDict` built from
+    `http_resp.getheaders()`, and a fake that gets that shape wrong is exactly
+    how a green suite ships an outage. Verified live against CFBD on 2026-08-18:
+    the 429 body is "Too many requests in a short period" and the header block
+    really does say `Retry-After: 0`.
+    """
+
+    class FakeHttpResponse:
+        status = 429
+        reason = "Too Many Requests"
+        data = b'{"error":{"code":429}}'
+
+        def getheaders(self):
+            return urllib3.HTTPHeaderDict(
+                {
+                    "Retry-After": "0",
+                    "Cache-Control": "private, max-age=0, no-store, no-cache",
+                }
+            )
+
+    exc = cfbd.exceptions.ApiException(http_resp=FakeHttpResponse())
+
+    assert exc.status == 429
+    assert _retry_after_seconds(exc) is None, "the zero was taken at face value"
+    assert _backoff_seconds(1, exc, exc.status) >= 2.5
 
 
 def test_a_rate_limited_run_actually_waits(monkeypatch):
@@ -441,6 +474,66 @@ def test_retryable_statuses_cover_rate_limit_and_5xx():
     assert 429 in RETRYABLE_STATUSES
     assert {500, 502, 503, 504} <= RETRYABLE_STATUSES
     assert 401 not in RETRYABLE_STATUSES
+
+
+# ------------------------------------------------------- transport-level failures
+#
+# `cfbd/rest.py` converts exactly ONE transport failure into an ApiException
+# (SSLError, as status 0). A read timeout, a reset connection, a DNS failure or
+# urllib3's MaxRetryError arrive as themselves with no `status` attribute, so a
+# status-only retry test declines to retry them and the Sunday chain dies on a
+# blip. Nothing in production had exercised this; the tests come first here.
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        urllib3.exceptions.ProtocolError("Connection aborted"),
+        urllib3.exceptions.ReadTimeoutError(None, "/info", "read timed out"),
+        ConnectionResetError("reset by peer"),
+        http.client.RemoteDisconnected("closed without response"),
+        FakeApiError(0),  # how cfbd reports a TLS failure
+    ],
+)
+def test_transport_failures_are_retried(monkeypatch, error):
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    client = CfbdClient.__new__(CfbdClient)
+    client.min_interval = 0
+    client.max_retries = 3
+    client.call_count = 0
+    client._last_call_at = 0.0
+
+    attempts = {"n": 0}
+
+    def flaky(**_params):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise error
+        return [FakeModel(ok=True)]
+
+    assert _to_rows(client._call_with_retry(flaky, {}, "/test")) == [{"ok": True}]
+    assert attempts["n"] == 3, f"{type(error).__name__} was not retried"
+
+
+def test_our_own_bugs_are_not_retried(monkeypatch):
+    """A TypeError is a defect here, not weather. Retrying it wastes a minute
+    and buries the traceback under five warnings."""
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    client = CfbdClient.__new__(CfbdClient)
+    client.min_interval = 0
+    client.max_retries = 5
+    client.call_count = 0
+    client._last_call_at = 0.0
+
+    calls = {"n": 0}
+
+    def broken(**_params):
+        calls["n"] += 1
+        raise TypeError("get_games() got an unexpected keyword argument")
+
+    with pytest.raises(TypeError):
+        client._call_with_retry(broken, {}, "/test")
+    assert calls["n"] == 1
 
 
 # ------------------------------------------------------------------ quota guard

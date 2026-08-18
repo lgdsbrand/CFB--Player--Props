@@ -22,6 +22,7 @@ the first place.
 
 from __future__ import annotations
 
+import http.client
 import random
 import time
 from datetime import date, datetime
@@ -30,6 +31,7 @@ from enum import Enum
 from typing import Any
 
 import cfbd
+import urllib3
 
 from worker.adapters.cfbd.cache import ResponseCache
 from worker.config import get_settings
@@ -40,6 +42,19 @@ log = get_logger(__name__)
 # Retry on transient conditions only. A 401/403/404 will never succeed on retry
 # and must surface immediately rather than being masked by a slow retry loop.
 RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+# CATCH THE TRANSPORT LAYER, DO NOT ENUMERATE IT. A status-only retry test looks
+# complete and is not: `cfbd/rest.py` converts exactly ONE transport failure into
+# an ApiException (SSLError, as status 0). A read timeout, a reset connection, a
+# DNS failure or urllib3's MaxRetryError all propagate as themselves, carrying no
+# `status` attribute at all, so `status not in RETRYABLE_STATUSES` quietly
+# declines to retry them and a Sunday cron dies on a blip.
+#
+# `urllib3.exceptions.HTTPError` is the base for urllib3's own family. `OSError`
+# covers socket errors, connection resets and DNS. `http.client.HTTPException`
+# covers protocol errors that are not OSErrors. The odds adapter learned this
+# list one production failure at a time; there is no reason to relearn it here.
+TRANSPORT_ERRORS = (urllib3.exceptions.HTTPError, OSError, http.client.HTTPException)
 
 DEFAULT_MIN_INTERVAL = 0.12  # seconds between requests (~8/sec ceiling)
 DEFAULT_MAX_RETRIES = 5
@@ -279,7 +294,14 @@ class CfbdClient:
                 return result
             except Exception as exc:
                 status = getattr(exc, "status", None)
-                if status not in RETRYABLE_STATUSES or attempt >= self.max_retries:
+                # status 0 is how cfbd reports a TLS failure; a transport error
+                # carries no status at all.
+                retryable = (
+                    status in RETRYABLE_STATUSES
+                    or status == 0
+                    or (status is None and isinstance(exc, TRANSPORT_ERRORS))
+                )
+                if not retryable or attempt >= self.max_retries:
                     # Count it: a failed call still consumes quota server-side.
                     self.call_count += 1
                     # SAY WHAT THIS 429 IS, in the log, in one line. What the
@@ -305,9 +327,11 @@ class CfbdClient:
 
                 self.call_count += 1
                 log.warning(
-                    "%s -> HTTP %s; retry %d/%d in %.1fs",
+                    "%s -> %s; retry %d/%d in %.1fs",
                     label,
-                    status,
+                    # A transport error has no status, and "HTTP None" in a cron
+                    # log tells the reader nothing about what actually broke.
+                    f"HTTP {status}" if status else f"{type(exc).__name__}: {exc}",
                     attempt,
                     self.max_retries,
                     delay,

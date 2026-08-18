@@ -54,12 +54,60 @@ confirmed at signup — they move.
 |---|---|---|---|
 | **GitHub** | the repo, and the deploy trigger | Free | Nothing here needs paid GitHub. |
 | **Vercel** | the Next.js board | Free may do; Pro (~$20/user/mo) if the client wants team seats or password-protected previews | The board is server-rendered on demand and does not need paid features to run. |
-| **Supabase** | the database everything reads and writes | **Pro (~$25/mo) — required, not optional** | The free tier stops at 500 MB. The development database measured **473 MB** on 2026-08-14 with two seasons of play-by-play, and 2026 adds a third. It will not fit. |
+| **Supabase** | the database everything reads and writes | **Pro (~$25/mo) — required, not optional** | Two independent reasons. **Storage:** the free tier stops at 500 MB; the development database measured **473 MB** on 2026-08-14 with two seasons of play-by-play, and 2026 adds a third. **Capacity:** the free tier's compute cannot serve the board to a dozen concurrent readers — see below. |
 | **Render** | the Python worker's nine cron jobs | A paid plan; cron services are not on Render's free tier | Free static/web services exist there; scheduled jobs do not. |
 | **CollegeFootballData** | all football data | Tier 2, already funded (~$5/mo) | The free tier rate-limits too hard for an all-FBS backfill. |
 
 Rough all-in: **$50–75/month**, dominated by Supabase and Render, plus whatever
 the odds plan costs.
+
+### The board's concurrency ceiling on the free tier — measured 2026-08-18
+
+The storage cap is the deadline everyone tracks, but it is not the limit that
+bites first. **Measured against the live deployment, requesting distinct board
+URLs:**
+
+| Concurrent readers | Result |
+|---|---|
+| 1 (24 distinct URLs, serial) | 24 / 24 OK |
+| 2 | 16 / 16 OK |
+| 4 | 16 / 16 OK |
+| 8 | 24 / 24 OK |
+| **12** | **20 / 24 OK — 4 responses were HTTP 500** |
+
+The failure is not a bug in a page. Reproduced locally against the production
+database, the error is
+`Read failed (v_slate_weeks): canceling statement due to statement timeout`,
+and it also hits `v_slate_games` and `v_board_rows`. The board renders from
+several views at once; past roughly a dozen simultaneous renders the free
+tier's shared compute cannot finish them inside Postgres's `statement_timeout`,
+so a page that is completely healthy at rest returns a 500.
+
+**Three things this is NOT**, each checked rather than assumed:
+
+- **Not a slow query in isolation.** `v_slate_weeks` served 16-way concurrency
+  on its own at ~1.5s, all 200. It is the whole render competing that fails.
+- **Not Supabase's request layer.** The PostgREST API took 80-way concurrency
+  with zero errors. It is database compute, not the API in front of it.
+- **Not a cold-cache effect.** 24 distinct, never-cached URLs requested one at
+  a time were all 200. Concurrency is the variable, not cache misses.
+
+`v_slate_weeks` is nonetheless the most expensive thing on the path: it
+aggregates **every row of `projections`** (90,108 at the time of measurement)
+with three `count(distinct …)`s and no filter, taking ~3.8s cold and ~0.7s
+warm. `getSlateWeeks` caches it for 300s (`lib/data/cache.ts`), so the cost is
+paid whenever that window turns over. **This gets worse as the season runs** —
+`projections` grows every week — so the ceiling above is the best it will be,
+not the worst.
+
+If Pro does not move the number enough, the next step is to stop recomputing
+that aggregate per cache-miss: a materialised view refreshed at the end of
+`run_projections` would make the week strip a small indexed read. That is a
+migration plus a pipeline step, so it is worth measuring on Pro first.
+
+**Reproduce it** with `web/scripts/audit-app.mjs`, which walks 126 URLs across
+every page and re-checks any 5xx serially before reporting it, precisely so
+load-induced failures are not mistaken for broken pages.
 
 ---
 

@@ -342,10 +342,7 @@ export default async function Home({
         softer matchup. Ranks come from opponent-adjusted yards allowed to that
         position: rushing for QB and RB, receiving for WR and TE, so a QB rank
         describes rushing only. Confidence is the share of the projected
-        distribution past the line.{" "}
-        <Link href="/health" className="hover:text-accent-cyan underline">
-          System health
-        </Link>
+        distribution past the line.
       </p>
     </Shell>
   );

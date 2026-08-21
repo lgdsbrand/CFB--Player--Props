@@ -11,12 +11,18 @@ import { BOARD_PATH } from "@/lib/core/board-params";
  * measured palette stays a one-file change.
  */
 export function SiteHeader({ activeHref = "/" }: { activeHref?: string }) {
+  // `/health` IS DELIBERATELY NOT HERE. It is an operator's deploy proof, not a
+  // destination: it names internal tables, prints row counts, echoes raw
+  // Postgres error text when a check fails, and reports on the RLS posture by
+  // name. None of that is for the audience this nav is built for, and it sat
+  // between SHEETS and the client's own brand line. The route still works and
+  // is still what `docs/deployment.md` step 7 tells you to open after a deploy —
+  // it is unlinked and noindexed, not removed. See `app/health/page.tsx`.
   const links = [
     { href: "/", label: "Home" },
     { href: BOARD_PATH, label: "Props" },
     { href: "/games", label: "Games" },
     { href: "/cheat-sheets", label: "Sheets" },
-    { href: "/health", label: "Health" },
   ];
 
   return (

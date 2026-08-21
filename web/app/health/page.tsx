@@ -5,6 +5,13 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 export const metadata = {
   title: "Health · CFB Props",
+  // UNLINKED AND UNINDEXED. This is an operator's page on a client-facing
+  // product: nothing in the nav points here (see `site-header.tsx` for why), so
+  // without this a crawler would still find it through the sitemap or an
+  // external link and put "System Health — Degraded" in a search result for the
+  // client's brand. `nocache` keeps a stale snapshot of a failing check out of
+  // search previews too.
+  robots: { index: false, follow: false, nocache: true },
 };
 
 type Check = {

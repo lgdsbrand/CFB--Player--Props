@@ -113,12 +113,18 @@ export type BoardPage = {
  * page and the read fills their cards — and two copies of a dozen predicates
  * would eventually disagree about an edge case and paginate wrongly.
  */
-function buildBoardQuery(select: string, filters: BoardFilters, count?: "exact") {
+function buildBoardQuery(
+  select: string,
+  filters: BoardFilters,
+  count?: "exact",
+  /** Return the count and NO rows. Only meaningful alongside `count`. */
+  head?: boolean,
+) {
   const supabase = createServerSupabaseClient();
 
   let query = supabase
     .from("v_board_rows")
-    .select(select, count ? { count } : undefined)
+    .select(select, count ? { count, head } : undefined)
     .eq("sport", filters.sport ?? DEFAULT_SPORT)
     .eq("season", filters.season)
     .eq("week", filters.week);
@@ -209,6 +215,85 @@ export async function getBoardRows(filters: BoardFilters): Promise<BoardPage> {
     rows: rows.map(toBoardRow),
     total: result.count ?? rows.length,
   };
+}
+
+/**
+ * One page of board ROWS, for the table layout — as two cheap queries.
+ *
+ * WHY NOT JUST `getBoardRows` WITH A LIMIT. Because that times out, and the
+ * measurement is worth recording. On 2025 week 9 filtered to `rank >= 100`
+ * (764 matching rows), against the free tier:
+ *
+ *   wide select + sort + exact count, 50 rows    500, statement timeout at 3.5s
+ *   wide select + sort, NO count,     50 rows    500, statement timeout at 3.4s
+ *   exact count alone                            206, 455ms
+ *   `projection_id` only + sort + count          206, 613ms
+ *   wide select by `projection_id in (50 ids)`   200, 344ms
+ *
+ * THE COUNT IS NOT THE COST — dropping it changed nothing. What times out is
+ * projecting all 53 columns of `v_board_rows` across a week-wide sort: the view
+ * is a wide join, and asking for every column of it forces a plan that the free
+ * tier's `statement_timeout` will not sit through. Asking for one column is
+ * fine, and asking for 53 columns of fifty rows named by id is fine. Only the
+ * combination is not.
+ *
+ * So this is the same two-step the card path takes, keyed on `projection_id`
+ * instead of on player-game: establish WHICH rows and in what order, then fetch
+ * exactly those. Total 957ms where the single query would not finish at all.
+ */
+export async function getBoardRowPage(
+  filters: BoardFilters,
+): Promise<BoardRow[]> {
+  const limit = Math.min(filters.limit ?? 50, MAX_ROWS_PER_REQUEST);
+  const offset = filters.offset ?? 0;
+
+  const scan = await applySort(
+    buildBoardQuery("projection_id", filters),
+    filters.sort,
+  ).range(offset, offset + limit - 1);
+
+  const scanned = unwrap<DbRow[]>(scan, "v_board_rows (row ids)");
+  const ids = scanned.map((row) => row.projection_id as number);
+  if (ids.length === 0) return [];
+
+  const supabase = createServerSupabaseClient();
+  const result = await supabase
+    .from("v_board_rows")
+    .select(COLUMNS)
+    .in("projection_id", ids);
+
+  // The second query has no ORDER BY — adding one would put the week-wide sort
+  // back, which is the thing being avoided. `projection_id` is unique, so the
+  // scan's order is restored here exactly rather than approximated.
+  const order = new Map(ids.map((id, index) => [id, index]));
+  return unwrap<DbRow[]>(result, "v_board_rows (page)")
+    .map(toBoardRow)
+    .sort(
+      (a, b) =>
+        (order.get(a.projectionId) ?? 0) - (order.get(b.projectionId) ?? 0),
+    );
+}
+
+/**
+ * How many rows match, without fetching any.
+ *
+ * SEPARATE FROM THE PAGE READ, AND FETCHED FIRST, because PostgREST answers a
+ * range past the end of the result with an ERROR — "Requested range not
+ * satisfiable" — not with an empty page. Asking for page 999 of a 70-page week
+ * therefore 500s the board, and stale links and narrowed filters both produce
+ * exactly that request. Knowing the total first makes the out-of-range range
+ * impossible to ask for, which is a better answer than catching the error after
+ * the fact and guessing what the reader meant.
+ *
+ * `head: true` returns the count and no body, which measured 455ms against the
+ * free tier where the full read of the same filter times out.
+ */
+export async function getBoardRowCount(filters: BoardFilters): Promise<number> {
+  const result = await buildBoardQuery("projection_id", filters, "exact", true);
+  if (result.error) {
+    throw new Error(`Board row count failed: ${result.error.message}`);
+  }
+  return result.count ?? 0;
 }
 
 export type CardKey = { playerId: number; gameId: number };

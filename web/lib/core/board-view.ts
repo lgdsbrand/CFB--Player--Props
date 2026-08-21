@@ -9,10 +9,113 @@
  * in a component — it is a data shape, and it is worth testing.
  */
 
-import type { BoardRow, PositionGroup } from "@/lib/core/types";
+// Relative, not aliased: these are VALUES, so they survive type stripping and
+// the test runner has to resolve them for real. Type-only imports keep the
+// alias because they are erased before Node sees them.
+import { gradeGames, hitRate } from "./hit-rate.ts";
+import type { GradedGame, HitRateSummary } from "@/lib/core/hit-rate";
+import type {
+  BetSide,
+  BoardRow,
+  Market,
+  PlayerGameLogRow,
+  PositionGroup,
+} from "@/lib/core/types";
 
 /** How the board orders rows. Mirrors the sort-priority switch in §7. */
 export type BoardSort = "edge" | "confidence" | "opponent_rank";
+
+/**
+ * What one row actually claims — the three states every board surface renders.
+ *
+ * SHARED SO THE CARD AND THE TABLE CANNOT DISAGREE. Both must invert anytime
+ * TD the same way, and that inversion is subtle enough to be got wrong
+ * independently in two components: the called side there is `under` on ~97% of
+ * picks, so a receiver with a 10% chance to score reads "UNDER 90%", which is
+ * true, useless, and looks like a strong pick. `modelProbOver` is P(more than
+ * 0.5 touchdowns), which IS the anytime-scorer probability CLAUDE.md §1 asks
+ * for. This repo has already shipped one bug of exactly this shape (a panel and
+ * the board disagreeing about scope, with no test able to catch it), so the
+ * decision lives here as data and each surface only chooses how to draw it.
+ */
+export type BoardCall =
+  /** A binary market: the probability the player DOES it, never a called side. */
+  | { kind: "binary"; probability: number | null }
+  /** A line exists and the model has taken a side. */
+  | { kind: "call"; side: BetSide; confidence: number }
+  /** No line to call against — the model's lean, and nothing to measure it on. */
+  | { kind: "lean" };
+
+export function callFor(row: BoardRow): BoardCall {
+  if (row.isBinary) return { kind: "binary", probability: row.modelProbOver };
+  if (row.hasCall && row.side && row.confidence !== null) {
+    return { kind: "call", side: row.side, confidence: row.confidence };
+  }
+  return { kind: "lean" };
+}
+
+/**
+ * Grade this row's past games against the line now showing.
+ *
+ * LIFTED OUT OF THE PLAYER CARD so the card and the table grade identically.
+ * It was a file-local helper there, which was fine while one surface used it
+ * and is exactly how two surfaces come to disagree about a push.
+ *
+ * Returns an EMPTY ARRAY, never null, when there is nothing to grade — no line,
+ * no side, or a market whose stat column the game log does not carry. Callers
+ * turn that into an explicit "no line to grade against" rather than a zero,
+ * which would read as "never hits".
+ *
+ * Binary markets grade on the OVER side whatever the call was, so a green dot
+ * means the player scored. Grading on the call would paint five green dots for
+ * a player who has not scored all season — accurate against "under 0.5" and the
+ * opposite of what a reader takes from it.
+ */
+export function gradeRow(
+  row: Pick<BoardRow, "line" | "side">,
+  market: Pick<Market, "statColumn" | "isBinary"> | undefined,
+  games: PlayerGameLogRow[],
+): GradedGame[] {
+  if (row.line === null || row.side === null || !market) return [];
+  const side: BetSide = market.isBinary ? "over" : row.side;
+  return gradeGames(games, market.statColumn, row.line, side);
+}
+
+/**
+ * The card's hit-rate summary for one row: grade, then take one window.
+ *
+ * The table deliberately does NOT use this — it needs three windows off one
+ * grading pass, so it calls `gradeRow` once and `hitRate` per column rather
+ * than re-grading the same games three times.
+ */
+export function summariseRow(
+  row: Pick<BoardRow, "line" | "side">,
+  market: Pick<Market, "statColumn" | "isBinary"> | undefined,
+  games: PlayerGameLogRow[],
+  window: number,
+): HitRateSummary | null {
+  const graded = gradeRow(row, market, games);
+  if (graded.length === 0) return null;
+  return hitRate(graded, window);
+}
+
+/**
+ * Hit rate across everything graded, for the SZN column.
+ *
+ * SEASON TO DATE, AND ONLY THAT. The games handed in come from
+ * `getGameLogsByPlayer(..., { before: week })`, so this is the current season up
+ * to but excluding the week on screen — never a career figure and never
+ * including the result being predicted.
+ *
+ * THIS IS WHY THERE IS NO L20 COLUMN. A college team plays 12-13 games, so an
+ * L20 window would be the season for every player alive and would print the
+ * same number as this column beside it. The MLB board the client sent has one
+ * because a baseball season is 162 games.
+ */
+export function seasonToDate(graded: GradedGame[]): HitRateSummary | null {
+  if (graded.length === 0) return null;
+  return hitRate(graded, graded.length);
+}
 
 /** One ORDER BY term, in the shape PostgREST's `.order()` takes. */
 export type BoardSortKey = {

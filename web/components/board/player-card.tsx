@@ -7,7 +7,7 @@ import { rankBasis } from "@/lib/core/defense-view";
 import { formatGameLine, formatKickoff, formatVenue } from "@/lib/core/format";
 import { playerHref } from "@/lib/core/player-params";
 import { gradeFor, gradeToneToken } from "@/lib/core/grade";
-import { gradeGames, hitRate, type HitRateSummary } from "@/lib/core/hit-rate";
+import { summariseRow } from "@/lib/core/board-view";
 import type { PlayerCard as PlayerCardData } from "@/lib/core/board-view";
 import type { Market, PlayerGameLogRow } from "@/lib/core/types";
 
@@ -177,7 +177,12 @@ export function PlayerCard({
           <MarketRow
             key={row.projectionId}
             row={row}
-            hitRate={summarise(row.line, row.side, marketsByKey.get(row.marketKey), gameLog, hitRateWindow)}
+            hitRate={summariseRow(
+              row,
+              marketsByKey.get(row.marketKey),
+              gameLog,
+              hitRateWindow,
+            )}
             hitRateWindow={hitRateWindow}
             edgeThreshold={edgeThreshold}
           />
@@ -185,31 +190,4 @@ export function PlayerCard({
       </div>
     </article>
   );
-}
-
-/**
- * Grade this player's past games against the line now showing.
- *
- * Returns null when there is nothing to grade — no line, or a market whose stat
- * column is not one the game log carries. Null renders as an explicit "no line
- * to grade against" rather than as a zero, which would read as "never hits".
- */
-function summarise(
-  line: number | null,
-  side: "over" | "under" | null,
-  market: Market | undefined,
-  gameLog: PlayerGameLogRow[],
-  window: number,
-): HitRateSummary | null {
-  if (line === null || side === null || !market) return null;
-
-  // Binary markets grade on the OVER side whatever the call was, so a green dot
-  // means the player scored. Grading on the call would paint five green dots
-  // for a player who has not scored all season — accurate against "under 0.5"
-  // and the opposite of what a reader takes from it.
-  const gradeSide = market.isBinary ? "over" : side;
-
-  const graded = gradeGames(gameLog, market.statColumn, line, gradeSide);
-  if (graded.length === 0) return null;
-  return hitRate(graded, window);
 }

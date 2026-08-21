@@ -18,6 +18,19 @@ import type { BoardSort } from "@/lib/data/board";
 // above can keep the alias because they are erased before Node sees them.
 import { POSITION_GROUPS, type PositionGroup } from "./types.ts";
 
+/**
+ * How the board lays its results out.
+ *
+ * `cards` is one card per PLAYER holding a sub-card per market — the client's
+ * pitcher card (CLAUDE.md §7). `table` is one row per PROP, columns aligned so a
+ * reader can scan a single number down the page.
+ *
+ * These are two answers to different questions, not a preference. A card
+ * compares a player's markets to each other; a table compares one market across
+ * players. That is why both exist rather than one replacing the other.
+ */
+export type BoardView = "cards" | "table";
+
 export type BoardParams = {
   season?: number;
   week?: number;
@@ -40,6 +53,13 @@ export type BoardParams = {
   minConfidence?: number;
   minOpponentRank?: number;
   hitRateWindow: number;
+  /**
+   * Undefined means "not chosen", which is NOT the same as `cards`. The default
+   * depends on the market filter — see `resolveBoardView` — so storing a
+   * concrete value here would freeze whichever layout the reader happened to
+   * land on first and stop the default ever applying again.
+   */
+  view?: BoardView;
   page: number;
 };
 
@@ -65,7 +85,7 @@ export const BOARD_PATH = "/props";
  */
 const BOARD_PARAM_KEYS = [
   "season", "week", "position", "market", "game", "conference", "q", "sort",
-  "edges", "top25", "conf", "rank", "window", "page",
+  "edges", "top25", "conf", "rank", "window", "view", "page",
 ] as const;
 
 /**
@@ -87,6 +107,39 @@ export const DEFAULT_HIT_RATE_WINDOW = 5;
 
 /** Cards per page. Deliberately modest — see `getGameLogsByPlayer`. */
 export const CARDS_PER_PAGE = 25;
+
+/**
+ * Rows per page in table view.
+ *
+ * Sized against the same constraint the card page is: every row on the page
+ * needs its player's game log to grade a hit rate, and `getGameLogsByPlayer`
+ * batches 40 players per request. A card page is 25 players; 50 rows is at
+ * worst 50 distinct players and in practice fewer, because a player's markets
+ * cluster in the sort. Two batches at the very worst, usually one.
+ *
+ * Also chosen so a table page is a comparable amount of PAGE to a card page —
+ * 50 rows at ~52px is about 2,600px against the card grid's ~9,900px, which is
+ * the whole point of the layout.
+ */
+export const ROWS_PER_PAGE = 50;
+
+/**
+ * Which layout to render, given what the reader asked for.
+ *
+ * AN EXPLICIT CHOICE ALWAYS WINS. Absent one, the default follows the MARKET
+ * filter, which is the client's own framing of the problem: with All markets
+ * selected a card carries up to six sub-cards and runs 963px tall, so the board
+ * is ~185px of page per prop. Narrowed to a single market a card holds exactly
+ * one sub-card and the card layout is the denser and more legible of the two.
+ *
+ * So the default is table for All and cards for a single market, and the toggle
+ * overrides either — carried in the URL like every other filter, so a layout is
+ * part of a shared link rather than a local preference.
+ */
+export function resolveBoardView(params: BoardParams): BoardView {
+  if (params.view) return params.view;
+  return params.market ? "cards" : "table";
+}
 
 function first(raw: string | string[] | undefined): string | undefined {
   const value = Array.isArray(raw) ? raw[0] : raw;
@@ -121,6 +174,7 @@ export function parseBoardParams(
   const position = first(raw.position) as PositionGroup | undefined;
   const sort = first(raw.sort);
   const edgesOnly = first(raw.edges);
+  const view = first(raw.view);
 
   return {
     season: int(raw.season),
@@ -140,6 +194,7 @@ export function parseBoardParams(
     minConfidence: float(raw.conf),
     minOpponentRank: int(raw.rank),
     hitRateWindow: int(raw.window) ?? DEFAULT_HIT_RATE_WINDOW,
+    view: view === "cards" || view === "table" ? view : undefined,
     page: Math.max(int(raw.page) ?? 1, 1),
   };
 }
@@ -178,6 +233,10 @@ export function boardHref(
   if (next.hitRateWindow !== DEFAULT_HIT_RATE_WINDOW) {
     set("window", next.hitRateWindow);
   }
+  // Written even when it matches what the default would pick. Omitting it would
+  // turn an explicit choice back into "not chosen", so the next market change
+  // would silently flip the layout out from under a reader who had just set it.
+  set("view", next.view);
   if (next.page > 1) set("page", next.page);
 
   const query = search.toString();

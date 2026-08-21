@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { BoardControls } from "@/components/board/board-controls";
+import { BoardTable } from "@/components/board/board-table";
 import { PlayerCard } from "@/components/board/player-card";
 import { WeeklyTargets } from "@/components/board/weekly-targets";
 import { NotConfigured } from "@/components/not-configured";
@@ -13,20 +14,29 @@ import {
   CARDS_PER_PAGE,
   parseBoardParams,
   resetBoardHref,
+  resolveBoardView,
+  ROWS_PER_PAGE,
   type RawParams,
 } from "@/lib/core/board-params";
 import { offenseOnBoard } from "@/lib/core/board-scope";
-import { groupIntoCards, lineCoverage } from "@/lib/core/board-view";
+import {
+  groupIntoCards,
+  lineCoverage,
+  type PlayerCard as PlayerCardData,
+} from "@/lib/core/board-view";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount } from "@/lib/core/format";
 import { buildWeeklyTargets } from "@/lib/core/targets";
 import {
   getBoardCardKeys,
   getBoardCounts,
+  getBoardRowCount,
+  getBoardRowPage,
   getRowsForCards,
   type BoardCounts,
   type BoardFilters,
 } from "@/lib/data/board";
+import type { BoardRow } from "@/lib/core/types";
 import { getConferences, getMarkets } from "@/lib/data/catalogue";
 import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
@@ -107,46 +117,44 @@ export default async function Home({
     sort: resolved.sort,
   };
 
-  const [counts, games, cardKeys, ratings] = await Promise.all([
+  const view = resolveBoardView(resolved);
+
+  const [counts, games, ratings] = await Promise.all([
     getBoardCounts(active.season, active.week, config.edgeThreshold),
     getSlateGames(active.season, active.week),
-    getBoardCardKeys(filters),
     // Pinned to as_of_week = the week on screen, never "the latest": a rating
     // from a later cutoff knows results the reader is being asked to predict.
     getDefenseRatings(active.season, active.week),
   ]);
 
-  const totalPages = Math.max(
-    Math.ceil(cardKeys.keys.length / CARDS_PER_PAGE),
-    1,
-  );
-  const page = Math.min(resolved.page, totalPages);
-  const pageKeys = cardKeys.keys.slice(
-    (page - 1) * CARDS_PER_PAGE,
-    page * CARDS_PER_PAGE,
-  );
-
-  const rows = await getRowsForCards(pageKeys, filters);
-
-  // Card order comes from the key scan, which applied the sort. Grouping the
-  // refetched rows would otherwise order by whatever the second query returned.
-  const order = new Map(
-    pageKeys.map((key, index) => [`${key.playerId}-${key.gameId}`, index]),
-  );
-  const cards = groupIntoCards(rows).sort(
-    (a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0),
-  );
+  // THE TWO LAYOUTS PAGE DIFFERENT THINGS, and that is why the fetch branches
+  // rather than one path feeding both. A card is one player holding every
+  // market he has, so the card path must establish which PLAYERS make the page
+  // before it can fetch their rows. A table row is one prop, so the table pages
+  // rows — but by the same two-step, establishing WHICH rows before fetching
+  // them, because the one-query version does not survive the free tier's
+  // `statement_timeout` (measured, in `getBoardRowPage`).
+  //
+  // The table path does still page an exact total rather than a scan capped at
+  // `KEY_SCAN_MAX_ROWS`, so unlike the card path it cannot be truncated — which
+  // is why the "partial slate" banner is card-only below.
+  const board =
+    view === "table"
+      ? await loadTable(filters, resolved.page)
+      : await loadCards(filters, resolved.page);
 
   const [gameLogs, teamDirectory] = await Promise.all([
-    getGameLogsByPlayer(
-      cards.map((card) => card.playerId),
-      { season: active.season, before: active.week },
-    ),
+    getGameLogsByPlayer(board.playerIds, {
+      season: active.season,
+      before: active.week,
+    }),
     getTeamDirectory(
       active.season,
       games.flatMap((game) => [game.homeTeamId, game.awayTeamId]),
     ),
   ]);
+
+  const { page, totalPages } = board;
 
   // The conference filter applies to the OFFENSE, matching the board: someone
   // narrowed to the SEC wants SEC players to look at, and the soft defense is a
@@ -210,10 +218,12 @@ export default async function Home({
         conferences={conferences}
         games={selectableGames}
         hitRateWindows={config.hitRateWindows}
-        resultCount={cardKeys.keys.length}
+        resultCount={board.resultCount}
+        resultNoun={board.kind === "table" ? "prop" : "player"}
+        view={view}
       />
 
-      {cardKeys.truncated ? (
+      {board.kind === "cards" && board.truncated ? (
         <p className="border-negative/40 bg-negative/5 text-muted rounded-xl border px-3 py-2 text-xs">
           <span className="text-negative font-bold uppercase tracking-label">
             Partial slate
@@ -255,15 +265,34 @@ export default async function Home({
         </p>
       ) : null}
 
-      {cards.length === 0 ? (
+      {board.resultCount === 0 ? (
         <EmptyBoard
           params={resolved}
           counts={counts}
           edgeThreshold={config.edgeThreshold}
         />
+      ) : board.kind === "table" ? (
+        <BoardTable
+          rows={board.rows}
+          marketsByKey={marketsByKey}
+          gameLogs={gameLogs}
+          hitRateWindows={config.hitRateWindows}
+          hitRateWindow={resolved.hitRateWindow}
+          edgeThreshold={config.edgeThreshold}
+        />
       ) : (
-        <section className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-          {cards.map((card) => (
+        /*
+          `items-start`, not the default stretch. CSS grid makes every item in a
+          row as tall as the tallest, and nothing inside a card grows to fill —
+          so a player with three markets was padded to match the six-market card
+          beside him. Measured at 1440: every card on the page rendered exactly
+          963px, which on the three-market ones is ~400px of bordered empty
+          panel. The gap is still there, but it is now between cards where it
+          reads as spacing, rather than inside one where it reads as a card that
+          failed to load.
+        */
+        <section className="grid items-start gap-3 lg:grid-cols-2 xl:grid-cols-3">
+          {board.cards.map((card) => (
             <PlayerCard
               key={card.key}
               card={card}
@@ -289,7 +318,7 @@ export default async function Home({
           </PageLink>
           <span className="text-muted text-xs">
             Page {page} of {formatCount(totalPages)}
-            {cardKeys.truncated ? " (capped)" : ""}
+            {board.kind === "cards" && board.truncated ? " (capped)" : ""}
           </span>
           <PageLink
             href={boardHref(resolved, { page: page + 1 })}
@@ -320,6 +349,117 @@ export default async function Home({
       </p>
     </Shell>
   );
+}
+
+/**
+ * One page of the board, in whichever shape the layout needs.
+ *
+ * Both variants carry `playerIds` so the page can fetch game logs once without
+ * caring which layout produced them — the hit rates on a card and in a table
+ * row are graded from the same logs by the same core function.
+ */
+type BoardPageContent =
+  | {
+      kind: "table";
+      rows: BoardRow[];
+      playerIds: number[];
+      page: number;
+      totalPages: number;
+      /** Matching PROPS across the whole week, not just this page. */
+      resultCount: number;
+    }
+  | {
+      kind: "cards";
+      cards: PlayerCardData[];
+      playerIds: number[];
+      page: number;
+      totalPages: number;
+      /** Matching PLAYERS across the whole week, not just this page. */
+      resultCount: number;
+      /** The key scan hit the row cap, so the week is not fully represented. */
+      truncated: boolean;
+    };
+
+/**
+ * Table view: page the filtered rows directly.
+ *
+ * COUNT FIRST, THEN CLAMP, THEN READ — in that order, and the order is the
+ * point. PostgREST answers a range past the end of a result with an error
+ * ("Requested range not satisfiable"), not with an empty page, so asking for
+ * page 999 of a 70-page week 500s the board. Both a stale link and a filter
+ * narrowed while the reader sat on page 6 produce exactly that request. Knowing
+ * the total before asking for a range makes it unaskable.
+ *
+ * `getBoardRowPage` is itself a two-step read for a separate, measured reason —
+ * see its comment; the single wide query it replaces does not finish inside the
+ * free tier's `statement_timeout`.
+ */
+async function loadTable(
+  filters: BoardFilters,
+  requestedPage: number,
+): Promise<BoardPageContent> {
+  const total = await getBoardRowCount(filters);
+  const totalPages = Math.max(Math.ceil(total / ROWS_PER_PAGE), 1);
+  const page = Math.min(requestedPage, totalPages);
+
+  const rows = await getBoardRowPage({
+    ...filters,
+    limit: ROWS_PER_PAGE,
+    offset: (page - 1) * ROWS_PER_PAGE,
+  });
+
+  return {
+    kind: "table",
+    rows,
+    playerIds: rows.map((row) => row.playerId),
+    page,
+    totalPages,
+    resultCount: total,
+  };
+}
+
+/**
+ * Card view: establish which player-games make the page, then fetch their rows.
+ *
+ * Unchanged behaviour, moved out of the component so the two layouts read as
+ * two paths rather than as one path with conditionals threaded through it.
+ */
+async function loadCards(
+  filters: BoardFilters,
+  requestedPage: number,
+): Promise<BoardPageContent> {
+  const cardKeys = await getBoardCardKeys(filters);
+
+  const totalPages = Math.max(
+    Math.ceil(cardKeys.keys.length / CARDS_PER_PAGE),
+    1,
+  );
+  const page = Math.min(requestedPage, totalPages);
+  const pageKeys = cardKeys.keys.slice(
+    (page - 1) * CARDS_PER_PAGE,
+    page * CARDS_PER_PAGE,
+  );
+
+  const rows = await getRowsForCards(pageKeys, filters);
+
+  // Card order comes from the key scan, which applied the sort. Grouping the
+  // refetched rows would otherwise order by whatever the second query returned.
+  const order = new Map(
+    pageKeys.map((key, index) => [`${key.playerId}-${key.gameId}`, index]),
+  );
+  const cards = groupIntoCards(rows).sort(
+    (a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0),
+  );
+
+  return {
+    kind: "cards",
+    cards,
+    playerIds: cards.map((card) => card.playerId),
+    page,
+    totalPages,
+    resultCount: cardKeys.keys.length,
+    truncated: cardKeys.truncated,
+  };
 }
 
 /**

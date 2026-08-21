@@ -19,16 +19,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  barWindow,
   boardSortKeys,
+  callFor,
   displayQuantile,
+  gradeRow,
   groupIntoCards,
   lineCoverage,
   positionInRange,
-  barWindow,
+  seasonToDate,
+  summariseRow,
   type BoardSort,
 } from "./board-view.ts";
 import { gradeFor } from "./grade.ts";
-import type { BoardRow } from "./types.ts";
+import { hitRate, hitRateTone } from "./hit-rate.ts";
+import type { BoardRow, PlayerGameLogRow } from "./types.ts";
 
 // -----------------------------------------------------------------------------
 // Line coverage
@@ -436,4 +441,195 @@ test("the bar renders without a line, which is the common state", () => {
   const window = barWindow(20, 90, null);
   assert.ok(window);
   assert.equal(positionInRange(null, window.low, window.high), null);
+});
+
+// -----------------------------------------------------------------------------
+// The call — the three states the card and the table both render
+// -----------------------------------------------------------------------------
+
+test("anytime TD reports the chance the player SCORES, not the called side", () => {
+  // THE BUG THIS EXISTS TO PREVENT, and it has shipped on this board before.
+  // The called side on anytime TD is `under` on ~97% of picks, so a receiver
+  // with a 12% chance to score carries confidence 0.88 on the under. A surface
+  // that read `side` and `confidence` would print "UNDER 88%" — true, useless,
+  // and indistinguishable from a strong pick. `modelProbOver` is P(more than
+  // 0.5 touchdowns), which IS the anytime-scorer probability CLAUDE.md §1 asks
+  // for.
+  const call = callFor(
+    row({
+      isBinary: true,
+      hasCall: true,
+      hasBookLine: true,
+      line: 0.5,
+      side: "under",
+      confidence: 0.88,
+      modelProbOver: 0.12,
+    }),
+  );
+
+  assert.equal(call.kind, "binary");
+  assert.equal(call.kind === "binary" ? call.probability : null, 0.12);
+});
+
+test("a priced row reports the side and the mass past the line", () => {
+  const call = callFor(
+    row({ hasCall: true, hasBookLine: true, line: 62.5, side: "over", confidence: 0.71 }),
+  );
+
+  assert.equal(call.kind, "call");
+  assert.equal(call.kind === "call" ? call.side : null, "over");
+  assert.equal(call.kind === "call" ? call.confidence : null, 0.71);
+});
+
+test("an unpriced row is a lean, which is the state most of a live week is in", () => {
+  // College books post props Thursday or Friday for Saturday games
+  // (CLAUDE.md §7), so this is the ordinary case, not an error path.
+  assert.equal(callFor(row()).kind, "lean");
+});
+
+// -----------------------------------------------------------------------------
+// Grading — shared by the card's last-5 row and the table's hit-rate columns
+// -----------------------------------------------------------------------------
+
+const REC_YARDS = { statColumn: "rec_yards", isBinary: false };
+const ANYTIME_TD = { statColumn: "offensive_tds", isBinary: true };
+
+function log(week: number, values: Partial<PlayerGameLogRow> = {}): PlayerGameLogRow {
+  return {
+    playerId: 10,
+    gameId: 1000 + week,
+    season: 2025,
+    week,
+    positionGroup: "WR",
+    isHome: true,
+    opponentTeamId: 500 + week,
+    opponentAbbreviation: "OPP",
+    opponentSchool: "Opponent",
+    startDate: null,
+    neutralSite: false,
+    passAttempts: null,
+    passCompletions: null,
+    passYards: null,
+    passTds: null,
+    interceptions: null,
+    rushAttempts: null,
+    rushYards: null,
+    rushTds: null,
+    targets: null,
+    receptions: null,
+    recYards: null,
+    recTds: null,
+    offensiveTds: null,
+    ...values,
+  };
+}
+
+test("a row with no line grades nothing, and says so with an empty array", () => {
+  // Not a zero. "Never hit" and "no line to grade against" are different
+  // claims, and a 0% in a hit-rate column is the one that gets acted on.
+  const graded = gradeRow(row({ line: null, side: null }), REC_YARDS, [
+    log(1, { recYards: 80 }),
+  ]);
+
+  assert.deepEqual(graded, []);
+  assert.equal(seasonToDate(graded), null);
+});
+
+test("an unmapped stat column grades nothing rather than guessing", () => {
+  // The market catalogue is a database table, so a market can be added by
+  // INSERT with no deploy. An unmapped column must surface as "no data", never
+  // as a coincidentally-named field's number.
+  const graded = gradeRow(
+    row({ line: 3.5, side: "over" }),
+    { statColumn: "tackles_for_loss", isBinary: false },
+    [log(1, { recYards: 80 })],
+  );
+
+  assert.deepEqual(graded, []);
+});
+
+test("a binary market grades on the OVER side whatever the call was", () => {
+  // Grading on the call would paint a green dot for every week a player did
+  // NOT score — accurate against "under 0.5" and the opposite of what a reader
+  // takes from a green dot.
+  const graded = gradeRow(
+    row({ isBinary: true, line: 0.5, side: "under" }),
+    ANYTIME_TD,
+    [log(1, { offensiveTds: 1 }), log(2, { offensiveTds: 0 })],
+  );
+
+  assert.equal(graded.length, 2);
+  assert.equal(graded.find((g) => g.week === 1)?.hit, true);
+  assert.equal(graded.find((g) => g.week === 2)?.hit, false);
+});
+
+test("the card's summary and the table's columns come off one grading pass", () => {
+  // The guarantee that matters: `summariseRow` (the card) and `gradeRow` +
+  // `hitRate` (the table) must not be able to disagree about the same row.
+  const boardRow = row({ line: 70, side: "over" });
+  const games = [
+    log(4, { recYards: 90 }),
+    log(3, { recYards: 40 }),
+    log(2, { recYards: 100 }),
+    log(1, { recYards: 60 }),
+  ];
+
+  const fromCard = summariseRow(boardRow, REC_YARDS, games, 2);
+  const fromTable = hitRate(gradeRow(boardRow, REC_YARDS, games), 2);
+
+  assert.deepEqual(fromCard, fromTable);
+  assert.equal(fromCard?.rate, 0.5);
+});
+
+test("SZN counts every graded game, and L-windows only the recent ones", () => {
+  const boardRow = row({ line: 70, side: "over" });
+  const games = [
+    log(4, { recYards: 90 }),
+    log(3, { recYards: 40 }),
+    log(2, { recYards: 30 }),
+    log(1, { recYards: 20 }),
+  ];
+  const graded = gradeRow(boardRow, REC_YARDS, games);
+
+  assert.equal(hitRate(graded, 2).decided, 2);
+  assert.equal(seasonToDate(graded)?.decided, 4);
+  assert.equal(seasonToDate(graded)?.rate, 0.25);
+});
+
+test("a push leaves the denominator rather than counting as a miss", () => {
+  // Synthetic development lines are a rounded trailing average and land on
+  // whole numbers often, so ties are real here even though a book's
+  // half-point makes them impossible on a posted line.
+  const graded = gradeRow(row({ line: 70, side: "over" }), REC_YARDS, [
+    log(2, { recYards: 70 }),
+    log(1, { recYards: 90 }),
+  ]);
+  const summary = seasonToDate(graded);
+
+  assert.equal(summary?.pushes, 1);
+  assert.equal(summary?.decided, 1);
+  assert.equal(summary?.rate, 1);
+});
+
+// -----------------------------------------------------------------------------
+// Hit-rate tone — shared by the last-5 row and the table's columns
+// -----------------------------------------------------------------------------
+
+test("a hit rate near even gets no colour, because it is noise", () => {
+  // Four of eight is not a signal, and on a board whose whole claim is
+  // calibration, tinting it green would be the one lie that matters.
+  assert.equal(hitRateTone(0.5), "muted");
+  assert.equal(hitRateTone(0.55), "muted");
+  assert.equal(hitRateTone(0.45), "muted");
+});
+
+test("only rates far enough from even to survive five games get a colour", () => {
+  assert.equal(hitRateTone(0.6), "positive");
+  assert.equal(hitRateTone(0.8), "positive");
+  assert.equal(hitRateTone(0.4), "negative");
+  assert.equal(hitRateTone(0), "negative");
+});
+
+test("a null rate is uncoloured — nothing was decided, which is not zero", () => {
+  assert.equal(hitRateTone(null), "muted");
 });

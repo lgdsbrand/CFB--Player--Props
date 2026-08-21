@@ -1,5 +1,6 @@
 import { LastFive } from "@/components/board/last-five";
 import { ProjectionBar } from "@/components/board/projection-bar";
+import { callFor } from "@/lib/core/board-view";
 import {
   formatAmericanOdds,
   formatConfidence,
@@ -37,6 +38,9 @@ export function MarketRow({
   edgeThreshold: number;
 }) {
   const isEdge = meetsEdgeThreshold(row.edge, edgeThreshold);
+  // The three states live in the core so the table renders the same ones — the
+  // anytime-TD inversion below is too easy to get independently wrong twice.
+  const call = callFor(row);
 
   return (
     <div className="panel-inset flex flex-col gap-2.5 p-3">
@@ -46,22 +50,22 @@ export function MarketRow({
           {row.marketLabel ?? row.marketName}
         </span>
 
-        {row.isBinary ? (
-          <BinaryProbability probability={row.modelProbOver} />
-        ) : row.hasCall && row.side && row.confidence !== null ? (
+        {call.kind === "binary" ? (
+          <BinaryProbability probability={call.probability} />
+        ) : call.kind === "call" ? (
           <span className="flex items-center gap-2">
             <span
               className={
                 "pill " +
-                (row.side === "over"
+                (call.side === "over"
                   ? "bg-positive/15 text-positive"
                   : "bg-negative/15 text-negative")
               }
             >
-              {row.side}
+              {call.side}
             </span>
             <span className="gradient-text text-lg font-extrabold leading-none">
-              {formatConfidence(row.confidence)}
+              {formatConfidence(call.confidence)}
             </span>
           </span>
         ) : (

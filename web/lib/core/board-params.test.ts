@@ -40,6 +40,11 @@ const FULLY_FILTERED: BoardParams = {
   minConfidence: 0.65,
   minOpponentRank: 110,
   hitRateWindow: 10,
+  // `table` is a genuinely non-default choice HERE, which is the point of
+  // putting it in this fixture: with `market` set, `resolveBoardView` would
+  // pick `cards`, so this only round-trips if an explicit choice is being
+  // carried rather than re-derived.
+  view: "table",
   page: 4,
 };
 
@@ -67,6 +72,11 @@ test("reset clears every filter a reader can see", () => {
   assert.equal(params.rankedOnly, false);
   assert.equal(params.sort, "edge");
   assert.equal(params.hitRateWindow, DEFAULT_HIT_RATE_WINDOW);
+  // RESET RETURNS THE LAYOUT TO "not chosen", not to a named one. The default
+  // depends on the market filter, and reset has just cleared that — so pinning
+  // a concrete layout here would leave a reset board on whichever one the
+  // reader happened to pick before, with the market pill reading All.
+  assert.equal(params.view, undefined);
   assert.equal(params.page, 1);
 });
 

@@ -1,4 +1,14 @@
-import { formatHitRate, type HitRateSummary } from "@/lib/core/hit-rate";
+import {
+  formatHitRate,
+  hitRateTone,
+  type HitRateSummary,
+} from "@/lib/core/hit-rate";
+
+const TONE_CLASS = {
+  positive: "text-positive",
+  negative: "text-negative",
+  muted: "text-muted",
+} as const;
 
 /**
  * The recent-form row: "LAST 5 (80%) HITS UNDER · ● ● ● ● ●".
@@ -46,10 +56,7 @@ export function LastFive({
       </span>
       <span
         className={
-          "text-[0.625rem] font-bold " +
-          (summary.rate !== null && summary.rate >= 0.6
-            ? "text-positive"
-            : "text-muted")
+          "text-[0.625rem] font-bold " + TONE_CLASS[hitRateTone(summary.rate)]
         }
       >
         {formatHitRate(summary.rate)}

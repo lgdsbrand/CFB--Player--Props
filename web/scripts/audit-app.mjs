@@ -102,7 +102,19 @@ async function visit(url, category) {
   try {
     const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
     status = res ? res.status() : 0;
-    cards = await page.locator('a[href^="/player/"]').count();
+    // DISTINCT player hrefs, not anchors. The board now has two layouts and
+    // they link differently: a card carries one player link, while a table row
+    // carries one in the PLAYER cell and a second in its (eagerly rendered,
+    // collapsed) detail. Counting anchors would report a table page as twice
+    // the board it is, and the number is here to be compared across URLs.
+    cards = await page.evaluate(
+      () =>
+        new Set(
+          [...document.querySelectorAll('a[href^="/player/"]')].map((a) =>
+            (a.getAttribute("href") || "").split("?")[0],
+          ),
+        ).size,
+    );
     const text = await page.locator("body").innerText();
     empty = /No players match|Not configured|No results/i.test(text);
     // A number fused to a word is the JSX-whitespace defect that produced
@@ -278,7 +290,7 @@ for (const r of bad) {
   if (r.overflow) console.log("     horizontal body overflow");
   if (r.glued.length) console.log(`     glued text: ${r.glued.join(", ")}`);
 }
-console.log("\ncategory                       n   avg cards   empty");
+console.log("\ncategory                       n  avg players   empty");
 const by = {};
 for (const r of results) {
   by[r.category] ??= { n: 0, cards: 0, empty: 0 };

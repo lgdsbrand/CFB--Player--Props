@@ -67,6 +67,12 @@ export type GradedGame = {
   gameId: number;
   season: number;
   week: number;
+  /**
+   * Kickoff, carried so the sort below has a chronological tiebreak within a
+   * week. Nullable because `games.venue_id` and `start_date` both are for games
+   * CFBD posts far ahead — see `orderGames` for what happens when it is missing.
+   */
+  startDate: string | null;
   value: number;
   line: number;
   outcome: GameOutcome;
@@ -134,6 +140,7 @@ export function gradeGames(
         gameId: game.gameId,
         season: game.season,
         week: game.week,
+        startDate: game.startDate,
         value,
         line,
         outcome,
@@ -145,9 +152,41 @@ export function gradeGames(
       } satisfies GradedGame;
     })
     .filter((game): game is GradedGame => game !== null)
-    .sort((a, b) =>
-      a.season === b.season ? b.week - a.week : b.season - a.season,
-    );
+    .sort(orderGames);
+}
+
+/**
+ * Most recent game first — and TOTAL, which is the whole point.
+ *
+ * THE BUG THIS FIXES WAS VISIBLE ON THE BOARD AND NONDETERMINISTIC. Sorting on
+ * `(season, week)` alone leaves ties, because CFBD's week 1 spans 9-10 days and
+ * really does hold two games for some teams — Gabe Burkle played Kansas State
+ * and South Dakota, both filed as 2025 week 1. With six games and a five-game
+ * window, WHICH of those two fell inside L5 decided the hit rate, and nothing
+ * decided which: `Array.sort` is stable, so it preserved whatever order Postgres
+ * returned, and Postgres is free to return them either way for a query whose
+ * only ORDER BY is `week desc`. The same prop showed "2 of 2" on one filter and
+ * "2 of 3" on another, off identical data.
+ *
+ * `start_date` is the honest tiebreak — within a week, the later kickoff is the
+ * more recent game. `gameId` is the last resort, and it is there for
+ * determinism rather than for meaning: CFBD ids are not guaranteed
+ * chronological, but they ARE unique, so the comparator is a total order and
+ * two renders of the same games cannot disagree. A game with no kickoff sorts
+ * after games that have one, rather than winning the tie by being null.
+ */
+export function orderGames(
+  a: Pick<GradedGame, "season" | "week" | "startDate" | "gameId">,
+  b: Pick<GradedGame, "season" | "week" | "startDate" | "gameId">,
+): number {
+  if (a.season !== b.season) return b.season - a.season;
+  if (a.week !== b.week) return b.week - a.week;
+  if (a.startDate !== b.startDate) {
+    if (a.startDate === null) return 1;
+    if (b.startDate === null) return -1;
+    return a.startDate < b.startDate ? 1 : -1;
+  }
+  return b.gameId - a.gameId;
 }
 
 /**
@@ -195,4 +234,29 @@ export function splitByVenue(graded: GradedGame[]): {
  */
 export function formatHitRate(rate: number | null): string {
   return rate === null ? "—" : `${Math.round(rate * 100)}%`;
+}
+
+/**
+ * Semantic colour token for a hit rate. A token name, never a hex value — the
+ * colours live in `app/globals.css` so the reskin stays one file.
+ *
+ * SHARED BY THE LAST-5 ROW AND THE TABLE'S HIT-RATE COLUMNS, so a figure cannot
+ * be tinted one way on a card and another way in a table of the same week.
+ *
+ * THE BANDS ARE DELIBERATELY WIDE AND THE MIDDLE ONE IS DELIBERATELY GREY. A
+ * hit rate near 50% over five games is noise, and colouring it would dress four
+ * coin flips up as a signal — which on a board whose whole claim is calibration
+ * is the one lie that matters. Only a rate far enough from even to survive a
+ * five-game sample gets a colour.
+ *
+ * A NULL RATE IS NOT ZERO and gets no colour at all. Nothing was decided; a red
+ * dash would read as "never hits".
+ */
+export function hitRateTone(
+  rate: number | null,
+): "positive" | "negative" | "muted" {
+  if (rate === null) return "muted";
+  if (rate >= 0.6) return "positive";
+  if (rate <= 0.4) return "negative";
+  return "muted";
 }

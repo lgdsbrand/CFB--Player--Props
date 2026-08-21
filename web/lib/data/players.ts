@@ -44,6 +44,13 @@ export async function getPlayerGameLog(
     .eq("player_id", playerId)
     .order("season", { ascending: false })
     .order("week", { ascending: false })
+    // THE TIEBREAKS ARE NOT COSMETIC — see `orderGames` in the core, which
+    // applies the same rule. CFBD's week 1 spans 9-10 days and holds two games
+    // for some teams, so `week desc` alone leaves real ties and Postgres may
+    // break them either way between two identical requests. With a LIMIT here,
+    // an unstable order can change WHICH games come back at all.
+    .order("start_date", { ascending: false, nullsFirst: false })
+    .order("game_id", { ascending: false })
     .limit(limit);
 
   if (season !== undefined) query = query.eq("season", season);
@@ -127,7 +134,13 @@ export async function getGameLogsByPlayer(
       .select(COLUMNS)
       .eq("season", season)
       .in("player_id", chunk)
-      .order("week", { ascending: false });
+      .order("week", { ascending: false })
+      // Same total order as the single-player read and as `orderGames`. It
+      // matters most HERE: the batch's player set changes with the board's
+      // filters, which changes the plan, which is exactly how the same prop
+      // came to show two different L5 figures on two filters of one week.
+      .order("start_date", { ascending: false, nullsFirst: false })
+      .order("game_id", { ascending: false });
 
     if (before !== undefined) query = query.lt("week", before);
 

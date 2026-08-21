@@ -242,3 +242,58 @@ test("counts are grouped for a US audience regardless of server locale", () => {
   assert.equal(formatCount(3788), "3,788");
   assert.equal(formatCount(999), "999");
 });
+
+// -----------------------------------------------------------------------------
+// Ordering — the tie that made a hit rate nondeterministic
+// -----------------------------------------------------------------------------
+
+test("two games in one week sort by kickoff, so the window is deterministic", () => {
+  // REAL DATA, AND A REAL BUG. CFBD's week 1 spans 9-10 days and genuinely
+  // holds two games for some teams: Gabe Burkle (Iowa State) played Kansas
+  // State on 23 Aug and South Dakota on 30 Aug, both filed as 2025 week 1. With
+  // six games logged and a five-game window, which of those two fell inside L5
+  // decided the hit rate — and with only `(season, week)` in the comparator
+  // nothing decided which. The board showed "2 of 2" under one filter and
+  // "2 of 3" under another, off identical rows.
+  const games = [
+    game(7, { receptions: 3, startDate: "2025-10-11T18:00:00Z" }),
+    game(6, { receptions: 2, startDate: "2025-10-04T18:00:00Z" }),
+    game(5, { receptions: 2, startDate: "2025-09-27T18:00:00Z" }),
+    game(2, { receptions: 3, startDate: "2025-09-06T18:00:00Z" }),
+    game(1, { gameId: 1101, receptions: 3, startDate: "2025-08-23T11:00:00Z" }),
+    game(1, { gameId: 1149, receptions: 4, startDate: "2025-08-30T18:00:00Z" }),
+  ];
+
+  const forwards = gradeGames(games, "receptions", 3, "under");
+  const backwards = gradeGames([...games].reverse(), "receptions", 3, "under");
+
+  // Same input order or not, the later week-1 kickoff is the more recent game.
+  assert.deepEqual(
+    forwards.map((g) => g.gameId),
+    backwards.map((g) => g.gameId),
+  );
+  assert.equal(forwards[4].gameId, 1149);
+  assert.equal(forwards[5].gameId, 1101);
+
+  // And the figure the board prints no longer depends on the arrival order.
+  assert.deepEqual(hitRate(forwards, 5), hitRate(backwards, 5));
+});
+
+test("a game with no kickoff loses the tie rather than winning it by being null", () => {
+  const dated = game(1, { gameId: 10, receptions: 5, startDate: "2025-08-30T18:00:00Z" });
+  const undated = game(1, { gameId: 11, receptions: 5, startDate: null });
+
+  assert.equal(gradeGames([undated, dated], "receptions", 3, "over")[0].gameId, 10);
+  assert.equal(gradeGames([dated, undated], "receptions", 3, "over")[0].gameId, 10);
+});
+
+test("identical kickoffs still order deterministically, by id", () => {
+  // The last resort exists for determinism, not for meaning — CFBD ids are not
+  // guaranteed chronological, but they are unique, which makes the comparator a
+  // total order and two renders of one week impossible to disagree.
+  const a = game(1, { gameId: 10, receptions: 5, startDate: "2025-08-30T18:00:00Z" });
+  const b = game(1, { gameId: 11, receptions: 5, startDate: "2025-08-30T18:00:00Z" });
+
+  assert.equal(gradeGames([a, b], "receptions", 3, "over")[0].gameId, 11);
+  assert.equal(gradeGames([b, a], "receptions", 3, "over")[0].gameId, 11);
+});

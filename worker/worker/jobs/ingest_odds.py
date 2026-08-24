@@ -433,19 +433,34 @@ def run(
     adapter_name: str,
     dry_run: bool,
     event_limit: int | None,
+    prefer_free: bool = False,
 ) -> IngestReport:
     report = IngestReport()
     settings = get_settings()
 
     kwargs = {}
     if adapter_name == THEODDSAPI_ADAPTER_NAME:
-        key = settings.odds_key()
+        key = settings.odds_key(prefer_free=prefer_free)
         if not key:
             raise ConfigError(
                 "ODDS_API_KEY is not set, but app_config.odds_adapter selects "
                 f"{adapter_name!r}. Set the key, or set the adapter to "
                 f"{NULL_ADAPTER_NAME!r} to run without lines."
             )
+        # Name the pool this run will bill. odds_key() falls back to the paid
+        # key when --free is asked for and no free key is configured, so the
+        # flag alone does not prove which allowance got spent -- and a run that
+        # quietly drained the shared pool is the surprise this line prevents.
+        using_free = prefer_free and bool(settings.odds_api_key_free)
+        if prefer_free and not using_free:
+            log.warning(
+                "--free was requested but ODDS_API_KEY_FREE is unset, so this "
+                "run bills the shared paid pool instead."
+            )
+        log.info(
+            "Billing against %s.",
+            "ODDS_API_KEY_FREE" if using_free else "ODDS_API_KEY (shared paid pool)",
+        )
         kwargs["api_key"] = key
 
     adapter = get_adapter(adapter_name, **kwargs)
@@ -545,6 +560,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Fetch props for at most N matched events. Quota discipline: "
              "billing is per market returned, so this bounds the spend.",
     )
+    parser.add_argument(
+        "--free", action="store_true",
+        help="Bill against ODDS_API_KEY_FREE instead of the shared paid pool. "
+             "The paid allowance is shared with the client's other models and "
+             "has already run out mid-month once; this is the fallback for a "
+             "slate that needs lines while that pool is empty.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -588,6 +610,7 @@ def main(argv: list[str] | None = None) -> int:
                 adapter_name=adapter_name,
                 dry_run=args.dry_run,
                 event_limit=args.event_limit,
+                prefer_free=args.free,
             )
             log.info(
                 "Odds ingest (%s%s):\n%s",

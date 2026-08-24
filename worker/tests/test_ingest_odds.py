@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from worker.config import Settings
 from worker.core.name_match import TeamResolver
 from worker.jobs.ingest_odds import (
     KICKOFF_TOLERANCE_HOURS,
@@ -164,3 +165,47 @@ class TestReportUnits:
         report = IngestReport(events_seen=1, events_matched=0)
         report.events_unmatched.append("Albany @ Buffalo Bulls")
         assert "Albany @ Buffalo Bulls" in report.render()
+
+
+def _settings(*, paid: str | None, free: str | None) -> Settings:
+    return Settings(
+        database_url="postgresql:///test",
+        cfbd_api_key=None,
+        supabase_url=None,
+        supabase_service_role_key=None,
+        odds_api_key=paid,
+        odds_api_key_free=free,
+    )
+
+
+class TestOddsKeySelection:
+    """Which of the client's two allowances a run bills.
+
+    Untested until 2026-08-24, which is the wrong shape of gap: the paid pool
+    is SHARED with the client's other three models and has already hit zero
+    mid-month once. A wrong answer here does not raise — it just quietly
+    spends someone else's budget.
+    """
+
+    def test_defaults_to_the_paid_key(self):
+        assert _settings(paid="paid", free="free").odds_key() == "paid"
+
+    def test_free_is_opt_in(self):
+        settings = _settings(paid="paid", free="free")
+        assert settings.odds_key(prefer_free=True) == "free"
+
+    def test_free_falls_back_to_paid_when_unset(self):
+        """`--free` degrades to "run it anyway" rather than refusing.
+
+        Deliberate, but it means the flag alone never proves which pool got
+        spent — which is why ingest_odds logs the pool by name and warns on
+        exactly this fallback.
+        """
+        settings = _settings(paid="paid", free=None)
+        assert settings.odds_key(prefer_free=True) == "paid"
+
+    def test_no_key_at_all_is_none_not_an_error(self):
+        """Loading config must not fail without an odds key; the null adapter
+        is a real selectable state and the board degrades to model leans."""
+        assert _settings(paid=None, free=None).odds_key() is None
+        assert _settings(paid=None, free=None).odds_key(prefer_free=True) is None

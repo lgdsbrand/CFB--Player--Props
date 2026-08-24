@@ -180,5 +180,29 @@ while the adapter reads `"none"`, because the job exits before constructing an
 adapter or making a single call. So the cadence and `--event-limit` in
 `render.yaml` want to be right *before* this flip, not after it.
 
+### Which allowance a run bills
+
+There are two keys. `ODDS_API_KEY` is the paid pool, **shared with the client's
+MLB, tennis and WNBA models**, and it has already reached zero mid-month.
+`ODDS_API_KEY_FREE` is a separate 500-credit allowance.
+
+`ingest_odds` bills the paid pool by default. `--free` bills the free one:
+
+```bash
+python -m worker.jobs.ingest_odds --free --event-limit 120
+```
+
+The job logs the pool by name on every run that constructs an adapter, because
+`--free` **falls back to the paid key when `ODDS_API_KEY_FREE` is unset** rather
+than refusing to run — so the flag alone never proves which allowance was spent.
+That fallback warns.
+
+This exists for one situation: the paid pool is empty and a slate still needs
+lines. Measured 2026-08-24, live: **1 credit per market returned per event**.
+Events no book has priced cost nothing, and books are free — one market call
+returns every book — so cost scales with `markets x events`, never with how many
+books post. A full priced slate is roughly 228 credits, so the free key's 500
+buys about two refreshes. It is a fallback, not a budget.
+
 See [configuration.md](configuration.md) for the adapter seam and
 [runbook.md](runbook.md#ingest_odds--every-6-hours) for what the job does.

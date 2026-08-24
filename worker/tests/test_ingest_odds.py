@@ -13,7 +13,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from worker.config import Settings
+import pytest
+
+from worker.config import ConfigError, Settings
 from worker.core.name_match import TeamResolver
 from worker.jobs.ingest_odds import (
     KICKOFF_TOLERANCE_HOURS,
@@ -209,3 +211,66 @@ class TestOddsKeySelection:
         is a real selectable state and the board degrades to model leans."""
         assert _settings(paid=None, free=None).odds_key() is None
         assert _settings(paid=None, free=None).odds_key(prefer_free=True) is None
+
+
+def _settings_free(**kw) -> Settings:
+    base = dict(
+        database_url="postgresql:///test",
+        cfbd_api_key=None,
+        supabase_url=None,
+        supabase_service_role_key=None,
+        odds_api_key="paid",
+        odds_api_key_free="free",
+    )
+    base.update(kw)
+    return Settings(**base)
+
+
+class TestPreferFreeFlagEnv:
+    """ODDS_PREFER_FREE, the deployment-time half of `--free`.
+
+    It exists because render.yaml cannot express a one-shot: the odds cron's
+    command is fixed in the blueprint, and any dow-restricted schedule reads as
+    a 168h period to test_monitor's guards, which would force ingest_odds's
+    18h max_age past 193h and blind the monitor for eight days. So the
+    opening-weekend fallback is flipped from the Render dashboard instead.
+    """
+
+    def test_defaults_off(self):
+        assert _settings_free().odds_prefer_free is False
+        assert _settings_free().odds_key() == "paid"
+
+    def test_set_selects_the_free_key(self):
+        settings = _settings_free(odds_prefer_free=True)
+        assert settings.odds_key(prefer_free=settings.odds_prefer_free) == "free"
+
+
+class TestFlagParsing:
+    """A typo here bills the pool three other models share, and does it
+    silently. Ambiguity is a ConfigError, never a falsy default."""
+
+    @pytest.mark.parametrize("raw", ["1", "true", "TRUE", "yes", "on", " True "])
+    def test_truthy(self, raw, monkeypatch):
+        from worker.config import _flag
+        monkeypatch.setenv("ODDS_PREFER_FREE", raw)
+        assert _flag("ODDS_PREFER_FREE") is True
+
+    @pytest.mark.parametrize("raw", ["0", "false", "no", "off", ""])
+    def test_falsy(self, raw, monkeypatch):
+        from worker.config import _flag
+        monkeypatch.setenv("ODDS_PREFER_FREE", raw)
+        assert _flag("ODDS_PREFER_FREE") is False
+
+    def test_unset_is_false(self, monkeypatch):
+        from worker.config import _flag
+        monkeypatch.delenv("ODDS_PREFER_FREE", raising=False)
+        assert _flag("ODDS_PREFER_FREE") is False
+
+    @pytest.mark.parametrize("raw", ["ture", "maybe", "2", "y"])
+    def test_ambiguous_raises_rather_than_billing_the_paid_pool(
+        self, raw, monkeypatch
+    ):
+        from worker.config import _flag
+        monkeypatch.setenv("ODDS_PREFER_FREE", raw)
+        with pytest.raises(ConfigError):
+            _flag("ODDS_PREFER_FREE")

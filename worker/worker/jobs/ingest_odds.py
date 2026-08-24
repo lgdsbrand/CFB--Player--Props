@@ -440,6 +440,12 @@ def run(
 
     kwargs = {}
     if adapter_name == THEODDSAPI_ADAPTER_NAME:
+        # The env var is the deployment-time switch and the flag is the CLI
+        # one; either alone is enough. render.yaml cannot express this -- the
+        # cron's command is fixed and its schedule cannot be made one-shot
+        # without tripping the monitor's period guards -- so the fallback has
+        # to be flippable from the Render dashboard without a redeploy.
+        prefer_free = prefer_free or settings.odds_prefer_free
         key = settings.odds_key(prefer_free=prefer_free)
         if not key:
             raise ConfigError(
@@ -454,8 +460,9 @@ def run(
         using_free = prefer_free and bool(settings.odds_api_key_free)
         if prefer_free and not using_free:
             log.warning(
-                "--free was requested but ODDS_API_KEY_FREE is unset, so this "
-                "run bills the shared paid pool instead."
+                "The free key was requested (--free or ODDS_PREFER_FREE) but "
+                "ODDS_API_KEY_FREE is unset, so this run bills the shared paid "
+                "pool instead."
             )
         log.info(
             "Billing against %s.",
@@ -563,6 +570,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--free", action="store_true",
         help="Bill against ODDS_API_KEY_FREE instead of the shared paid pool. "
+             "ODDS_PREFER_FREE=1 in the environment does the same thing, for "
+             "the cron, whose command lives in render.yaml. "
              "The paid allowance is shared with the client's other models and "
              "has already run out mid-month once; this is the fallback for a "
              "slate that needs lines while that pool is empty.",

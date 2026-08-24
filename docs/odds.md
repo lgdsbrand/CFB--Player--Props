@@ -180,6 +180,59 @@ while the adapter reads `"none"`, because the job exits before constructing an
 adapter or making a single call. So the cadence and `--event-limit` in
 `render.yaml` want to be right *before* this flip, not after it.
 
+### Opening weekend with an empty paid pool
+
+The situation this was built for, measured 2026-08-24: the paid pool is
+**0 of 20,000** and does not reset until **1 September**, while kickoff is
+**29 August**. The free key holds ~400 credits and a full priced slate is
+roughly 230, so it covers **about one Saturday refresh** — a fallback, not a
+budget.
+
+**Why this is an environment variable and not a cron.** `render.yaml` cannot
+express a one-shot. `test_monitor.py` parses the blueprint and cross-checks it
+against `MONITORED_JOBS`, and two of its guards bite here: it keys jobs by
+*module*, so a second cron running `ingest_odds` would silently collapse onto
+the first, and `_cron_period_hours` scores **any** `dow`- or `dom`-restricted
+schedule as 168h, which would fail `ingest_odds`'s 18h `max_age_hours` and
+could only be "fixed" by blinding the monitor for eight days. So the fallback
+is flipped at runtime instead, and the blueprint is left alone.
+
+The sequence, all reversible, none of it a deploy:
+
+1. In the Render dashboard, set **`ODDS_PREFER_FREE=1`** on the
+   `cfb-props-worker` env group.
+2. Flip the adapter on:
+   ```sql
+   update app_config set value = '"theoddsapi"'::jsonb where key = 'odds_adapter';
+   ```
+3. Trigger `cfb-props-odds-refresh`, or wait for the next 6-hourly run. Run it
+   **as late as possible before kickoff** — books post Thu/Fri, and coverage
+   5 days out was one book and a quarter of the slate.
+4. **Confirm rows were actually written**, not merely that the job succeeded —
+   see the warning below.
+5. Set `odds_adapter` back to `"none"` once the board is populated. That stops
+   the next 6-hourly run spending the rest of the free key, and re-silences
+   the monitor.
+
+**A typo in the variable fails every job, not just this one.** `ODDS_PREFER_FREE`
+is read by `get_settings()`, which every job calls, and an unrecognised value
+raises rather than defaulting to false — so `ture` exits **2** with a named
+error on the healthcheck too, within minutes of being set. That is the intended
+trade: the alternative is a silent false that bills the empty paid pool and
+leaves the board blank while every job reports success. Verified 2026-08-24.
+
+**Running out of credits exits 0, not 1.** `fetch_props` catches
+`OddsQuotaError`, keeps what it already wrote, and returns success — correct,
+because a partial slate is worth keeping, and it means an empty pool never
+sends Render failure emails. The consequence is that **job success does not
+imply lines exist**: with the adapter on and no credits, this job succeeds
+every 6 hours while the board shows model leans. `monitor_pipeline` cannot see
+that; it only checks that the job ran. Check `rows_written` on the
+`pipeline_runs` row, or just look at the board.
+
+`/events` and `/sports` are billed at 0, so the slate list and the credit
+balance are always readable even at zero remaining.
+
 ### Which allowance a run bills
 
 There are two keys. `ODDS_API_KEY` is the paid pool, **shared with the client's

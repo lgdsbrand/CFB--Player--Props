@@ -217,6 +217,7 @@ Full reasoning per variable is in [.env.example](../.env.example). Copy it to
 | `SUPABASE_SERVICE_ROLE_KEY` | optional | worker — **never** in `web/.env.local` |
 | `ODDS_API_KEY` | optional | worker — paid, 20k/month, shared pool |
 | `ODDS_API_KEY_FREE` | optional | worker — free tier, for `probe_odds --free` |
+| `ODDS_PREFER_FREE` | defaults off | worker — makes `ingest_odds` bill the free key, the deploy-time form of `--free`. For an empty paid pool; see [odds.md](odds.md#opening-weekend-with-an-empty-paid-pool). A non-boolean value is a hard error, not a silent false |
 | `GEMINI_API_KEY` | optional | worker |
 | `GROK_API_KEY` | optional | worker |
 | `ALERT_WEBHOOK_URL` | optional | worker — only when `alert_adapter` is `"webhook"` |

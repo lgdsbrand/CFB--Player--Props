@@ -144,6 +144,33 @@ def _optional(name: str, default: str | None = None) -> str | None:
     return value if value else default
 
 
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off", ""})
+
+
+def _flag(name: str) -> bool:
+    """Read a boolean environment variable, refusing anything ambiguous.
+
+    Deliberately strict. The one flag this reads decides which of the client's
+    two odds allowances gets billed, and the paid one is shared with three
+    other models. A typo like ODDS_PREFER_FREE="ture" silently spending the
+    shared pool is precisely the failure this raises to prevent, so an
+    unrecognised value is a configuration error rather than a falsy default.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return False
+    value = raw.strip().lower()
+    if value in _TRUE:
+        return True
+    if value in _FALSE:
+        return False
+    raise ConfigError(
+        f"{name}={raw!r} is not a boolean. Use one of "
+        f"{sorted(_TRUE)} or {sorted(_FALSE)}."
+    )
+
+
 @dataclass(frozen=True)
 class Settings:
     """Resolved worker configuration."""
@@ -182,6 +209,13 @@ class Settings:
     # mid-month — so proving the adapter works must not be able to spend from it
     # by accident. Optional: falls back to the main key when unset.
     odds_api_key_free: str | None = None
+
+    # Bill the free key without editing render.yaml. The odds cron's command is
+    # fixed in the blueprint and its schedule cannot be made one-shot -- any
+    # dow-restricted cron reads as 168h to the monitor's guards -- so the
+    # opening-weekend fallback has to be switchable at runtime, from the Render
+    # dashboard, and revertible the same way. `--free` is the CLI equivalent.
+    odds_prefer_free: bool = False
 
     environment: str = "development"
     log_level: str = "INFO"
@@ -235,6 +269,7 @@ def get_settings() -> Settings:
         supabase_service_role_key=_optional("SUPABASE_SERVICE_ROLE_KEY"),
         odds_api_key=_optional("ODDS_API_KEY"),
         odds_api_key_free=_optional("ODDS_API_KEY_FREE"),
+        odds_prefer_free=_flag("ODDS_PREFER_FREE"),
         gemini_api_key=_optional("GEMINI_API_KEY"),
         grok_api_key=_optional("GROK_API_KEY"),
         alert_webhook_url=_optional("ALERT_WEBHOOK_URL"),

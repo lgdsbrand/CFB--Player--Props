@@ -1,8 +1,15 @@
 # CLAUDE.md — College Football Player Prop Model
 
 This file is the project brief and working agreement for this repo. Read it fully
-before writing any code. This is the **college football** build; a separate NFL
-repo reuses this project's core with a different data adapter.
+before writing any code. This is the **college football** build; NFL reuses this
+project's core with a different data adapter.
+
+> **Superseded 2026-08-11 — there is no separate NFL repo.** This line originally
+> read "a separate NFL repo reuses this project's core". The client chose **one
+> app with a sport toggle**, so NFL is a second `sport` in *this* repo and *this*
+> database, not a second product. **See the amendment in §3 for the whole
+> decision and its reasoning** — do not start an NFL build by copying this repo
+> into a second folder.
 
 ---
 
@@ -69,7 +76,11 @@ Structure the code so a second sport (NFL) can reuse most of it later. Two layer
   rating snapshots. This is the layer NFL will replace.
 
 Do not build a shared package or workspace. Just keep the boundary disciplined so
-the core can be copied into the NFL repo cleanly.
+the core stays cleanly separable.
+
+*(As originally written this sentence ended "so the core can be copied into the
+NFL repo cleanly." The amendment immediately below replaced the repo split with a
+runtime `sport` dimension; the two-layer discipline it describes is unchanged.)*
 
 > **Amended 2026-08-11 — the seam is now a runtime dimension, not a repo split.**
 > The client chose **one app with a sport toggle** over two separate products.

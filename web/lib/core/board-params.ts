@@ -37,6 +37,15 @@ export type BoardParams = {
   position?: PositionGroup;
   market?: string;
   game?: number;
+  /**
+   * One day of the slate week, `YYYY-MM-DD` in `SLATE_TIME_ZONE`.
+   *
+   * A week is not a day here: 2026 week 1 ran ten calendar days over six game
+   * days. Narrower than the week, wider than `game`, and resolved against the
+   * days that actually exist — an unknown value means "all days" rather than an
+   * empty board, so a stale link degrades instead of stranding the reader.
+   */
+  day?: string;
   conference?: string;
   /**
    * Only players whose OWN team is in the AP Top 25 that week.
@@ -84,8 +93,8 @@ export const BOARD_PATH = "/props";
  * would make a shared link silently land on the home page instead.
  */
 const BOARD_PARAM_KEYS = [
-  "season", "week", "position", "market", "game", "conference", "q", "sort",
-  "edges", "top25", "conf", "rank", "window", "view", "page",
+  "season", "week", "position", "market", "game", "day", "conference", "q",
+  "sort", "edges", "top25", "conf", "rank", "window", "view", "page",
 ] as const;
 
 /**
@@ -183,6 +192,7 @@ export function parseBoardParams(
       position && POSITION_GROUPS.includes(position) ? position : undefined,
     market: first(raw.market),
     game: int(raw.game),
+    day: first(raw.day),
     conference: first(raw.conference),
     rankedOnly: first(raw.top25) === "1",
     search: first(raw.q),
@@ -223,6 +233,7 @@ export function boardHref(
   set("position", next.position);
   set("market", next.market);
   set("game", next.game);
+  set("day", next.day);
   set("conference", next.conference);
   set("q", next.search);
   if (next.sort !== "edge") set("sort", next.sort);

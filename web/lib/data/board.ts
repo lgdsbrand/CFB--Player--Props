@@ -41,6 +41,8 @@ export type BoardFilters = {
   marketKey?: string;
   positionGroup?: PositionGroup;
   gameId?: number;
+  /** Restrict to these games — how the day filter is expressed. */
+  gameIds?: number[];
   /** Case-insensitive substring on the player's name. */
   search?: string;
 
@@ -134,6 +136,16 @@ function buildBoardQuery(
     query = query.eq("position_group", filters.positionGroup);
   }
   if (filters.gameId) query = query.eq("game_id", filters.gameId);
+  // One day of the slate, expressed as the games played on it. Resolved to ids
+  // by `slateDays` rather than to a timestamp range, because the day boundary
+  // is an Eastern calendar day and a late kickoff crosses midnight UTC — see
+  // `lib/core/slate-days.ts`.
+  //
+  // An EMPTY array is a real filter meaning "no games", not "no filter". It
+  // cannot arise from a resolved day (a day exists because it has games) but
+  // could from a caller building filters by hand, and `.in` on an empty list
+  // correctly returns nothing rather than everything.
+  if (filters.gameIds) query = query.in("game_id", filters.gameIds);
   if (filters.conferenceName) {
     query = query.eq("conference_name", filters.conferenceName);
   } else if (filters.displayedConferencesOnly !== false) {
@@ -443,6 +455,14 @@ export type BoardCounts = {
    * they are not evidence a market exists. See `lineCoverage`.
    */
   withDevLine: number;
+  /**
+   * Real-book rows whose de-vigged price is exactly 0.500, so `edge` restates
+   * confidence instead of disagreeing with a market. A SUBSET of
+   * `withBookLine`, and deliberately not of `withDevLine` — the synthetic book
+   * produces the same arithmetic and is already reported separately, so
+   * counting it here would double-describe the same rows.
+   */
+  withEvenBookPrice: number;
   overThreshold: number;
 };
 
@@ -483,12 +503,18 @@ export async function getBoardCounts(
       : query;
   };
 
-  const [all, withCall, withBookLine, withDevLine, overThreshold] =
+  const [all, withCall, withBookLine, withDevLine, withEvenBookPrice, overThreshold] =
     await Promise.all([
       base(),
       base().eq("has_call", true),
       base().eq("has_book_line", true),
       base().eq("sportsbook_key", SYNTHETIC_BOOK_KEY),
+      // Exactly 0.500, not "close to it". The claim the caveat makes — that edge
+      // IS confidence minus 50% — is only exactly true at the midpoint, and a
+      // tolerance here would put rows under a notice that misdescribes them.
+      base()
+        .eq("book_prob_over", 0.5)
+        .neq("sportsbook_key", SYNTHETIC_BOOK_KEY),
       base().gte("edge", edgeThreshold),
     ]);
 
@@ -497,6 +523,7 @@ export async function getBoardCounts(
     [withCall, "with call"],
     [withBookLine, "with book line"],
     [withDevLine, "with development line"],
+    [withEvenBookPrice, "with even book price"],
     [overThreshold, "over threshold"],
   ] as const) {
     if (result.error) {
@@ -509,6 +536,7 @@ export async function getBoardCounts(
     withCall: withCall.count ?? 0,
     withBookLine: withBookLine.count ?? 0,
     withDevLine: withDevLine.count ?? 0,
+    withEvenBookPrice: withEvenBookPrice.count ?? 0,
     overThreshold: overThreshold.count ?? 0,
   };
 }

@@ -32,6 +32,7 @@ const FULLY_FILTERED: BoardParams = {
   position: "WR",
   market: "receptions",
   game: 401,
+  day: "2025-10-18",
   conference: "SEC",
   search: "John",
   sort: "confidence",

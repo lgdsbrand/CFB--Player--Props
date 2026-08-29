@@ -6,6 +6,7 @@ import { PlayerCard } from "@/components/board/player-card";
 import { WeeklyTargets } from "@/components/board/weekly-targets";
 import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
+import { DayStrip } from "@/components/day-strip";
 import { WeekStrip } from "@/components/week-strip";
 import {
   type BoardParams,
@@ -19,6 +20,7 @@ import {
   type RawParams,
 } from "@/lib/core/board-params";
 import { offenseOnBoard } from "@/lib/core/board-scope";
+import { findSlateDay, slateDays } from "@/lib/core/slate-days";
 import {
   groupIntoCards,
   lineCoverage,
@@ -127,6 +129,18 @@ export default async function Home({
     getDefenseRatings(active.season, active.week),
   ]);
 
+  // AFTER the fetch, not before: the days of a week are derived from its games,
+  // so this is the first point they can be known. An unrecognised day resolves
+  // to undefined — all days — and `dayParams` carries the resolved value rather
+  // than the requested one, so a stale link corrects itself in the strip
+  // instead of leaving a pill highlighted that filters nothing.
+  const days = slateDays(games);
+  const activeDay = findSlateDay(days, resolved.day);
+  const dayParams = { ...resolved, day: activeDay?.key };
+  const boardFilters: BoardFilters = activeDay
+    ? { ...filters, gameIds: activeDay.gameIds }
+    : filters;
+
   // THE TWO LAYOUTS PAGE DIFFERENT THINGS, and that is why the fetch branches
   // rather than one path feeding both. A card is one player holding every
   // market he has, so the card path must establish which PLAYERS make the page
@@ -140,8 +154,8 @@ export default async function Home({
   // is why the "partial slate" banner is card-only below.
   const board =
     view === "table"
-      ? await loadTable(filters, resolved.page)
-      : await loadCards(filters, resolved.page);
+      ? await loadTable(boardFilters, resolved.page)
+      : await loadCards(boardFilters, resolved.page);
 
   const [gameLogs, teamDirectory] = await Promise.all([
     getGameLogsByPlayer(board.playerIds, {
@@ -212,6 +226,12 @@ export default async function Home({
 
       <WeekStrip weeks={weeks} active={active} basePath={BOARD_PATH} />
 
+      <DayStrip
+        days={days}
+        activeDay={activeDay?.key}
+        params={dayParams}
+      />
+
       <BoardControls
         params={resolved}
         markets={markets}
@@ -262,6 +282,26 @@ export default async function Home({
           {coverage.bookLine > 0
             ? `The other ${formatCount(coverage.bookLine)} come from a book.`
             : "No book has posted a real NCAAF prop yet."}
+        </p>
+      ) : null}
+
+      {coverage.evenPricedBookLine > 0 ? (
+        <p className="border-target/30 bg-target/5 text-muted rounded-xl border px-3 py-2 text-xs">
+          <span className="text-target font-bold uppercase tracking-label">
+            Even-priced
+          </span>{" "}
+          —{" "}
+          {coverage.evenPricedBookLine === coverage.bookLine
+            ? `all ${formatCount(coverage.bookLine)} rows priced by a book carry`
+            : `${formatCount(coverage.evenPricedBookLine)} of the ${formatCount(
+                coverage.bookLine,
+              )} rows priced by a book carry`}{" "}
+          a two-way price that de-vigs to exactly 0.500 — the book pricing both
+          sides the same, which is normal on a thin college prop and means it is
+          not taking a side. The edge on those rows is therefore the model&rsquo;s
+          own confidence minus 50%, not a disagreement with the market, so a
+          confident call prints a large edge whatever the book thinks. The call
+          still stands; read the edge as a restatement of it.
         </p>
       ) : null}
 

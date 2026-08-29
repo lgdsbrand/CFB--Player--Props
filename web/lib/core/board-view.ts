@@ -201,6 +201,24 @@ export type LineCoverage = {
   developmentLine: number;
   /** Called against a price a real sportsbook posted. */
   bookLine: number;
+  /**
+   * A SUBSET of `bookLine`, not a fifth population — deliberately excluded from
+   * the sum the other four satisfy.
+   *
+   * Real books do post two-way prices that de-vig to exactly 0.500: −114/−114 on
+   * a thin college prop is a book saying it has no lean, which is common and
+   * entirely legitimate. But it makes `edge` equal to `confidence − 50%` for
+   * those rows, so the board is restating its own confidence rather than
+   * disagreeing with a market — and at high confidence that prints an
+   * eye-catching number (a 0.844 confidence row shows a 34.4% edge).
+   *
+   * This is the same arithmetic the synthetic DEV book produces, which is why
+   * the two are described in the same language. The difference is only that
+   * these prices are real, so `developmentLine` — which keys off the DEV book —
+   * cannot see them, and the board went unqualified on the 2026 opening
+   * weekend with half its edges of this kind.
+   */
+  evenPricedBookLine: number;
 };
 
 export function lineCoverage(counts: {
@@ -208,16 +226,24 @@ export function lineCoverage(counts: {
   withCall: number;
   withBookLine: number;
   withDevLine: number;
+  withEvenBookPrice?: number;
 }): LineCoverage {
   const developmentLine = Math.min(
     Math.max(counts.withDevLine, 0),
     Math.max(counts.withBookLine, 0),
   );
+  const bookLine = Math.max(counts.withBookLine - developmentLine, 0);
   return {
     awaitingLine: Math.max(counts.rows - counts.withCall, 0),
     structuralLine: Math.max(counts.withCall - counts.withBookLine, 0),
     developmentLine,
-    bookLine: Math.max(counts.withBookLine - developmentLine, 0),
+    bookLine,
+    // Clamped to its own superset: a count taken by a separate query cannot be
+    // allowed to describe more rows than there are real book lines to describe.
+    evenPricedBookLine: Math.min(
+      Math.max(counts.withEvenBookPrice ?? 0, 0),
+      bookLine,
+    ),
   };
 }
 

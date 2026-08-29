@@ -633,3 +633,71 @@ test("only rates far enough from even to survive five games get a colour", () =>
 test("a null rate is uncoloured — nothing was decided, which is not zero", () => {
   assert.equal(hitRateTone(null), "muted");
 });
+
+/*
+ * EVEN-PRICED REAL BOOK LINES.
+ *
+ * Found live on the 2026 opening weekend: 33 of the board's 66 edges sat
+ * against a real book price of -114/-114, which de-vigs to exactly 0.500 and
+ * makes `edge` identical to `confidence - 50%`. The board's existing caveat
+ * keys off the synthetic DEV book, so it stayed hidden and the top row
+ * advertised a 34% edge that was purely a restatement of its own confidence.
+ *
+ * This is a SUBSET of `bookLine`, not a fifth population, so it is excluded
+ * from the sum the other four satisfy — the invariant test above must keep
+ * passing unchanged.
+ */
+
+test("even-priced real book lines are reported as a subset of bookLine", () => {
+  const coverage = lineCoverage({
+    rows: 100,
+    withCall: 90,
+    withBookLine: 60,
+    withDevLine: 0,
+    withEvenBookPrice: 33,
+  });
+  assert.equal(coverage.bookLine, 60);
+  assert.equal(coverage.evenPricedBookLine, 33);
+  // Still a subset: it must not consume any of the other populations.
+  assert.equal(
+    coverage.awaitingLine + coverage.structuralLine + coverage.developmentLine + coverage.bookLine,
+    100,
+  );
+});
+
+test("an absent even-price count reads as none, not as unknown", () => {
+  // Every existing caller passes a BoardCounts without the field until the
+  // query ships; the caveat must stay hidden rather than render "NaN rows".
+  const coverage = lineCoverage({
+    rows: 10,
+    withCall: 8,
+    withBookLine: 8,
+    withDevLine: 0,
+  });
+  assert.equal(coverage.evenPricedBookLine, 0);
+});
+
+test("even-priced cannot exceed the real book lines it describes", () => {
+  // Six independent count queries against a live week; a write landing between
+  // them must not make the caveat claim more rows than the board has priced.
+  const coverage = lineCoverage({
+    rows: 100,
+    withCall: 50,
+    withBookLine: 40,
+    withDevLine: 30,
+    withEvenBookPrice: 999,
+  });
+  assert.equal(coverage.bookLine, 10);
+  assert.equal(coverage.evenPricedBookLine, 10);
+});
+
+test("a negative even-price count clamps to zero", () => {
+  const coverage = lineCoverage({
+    rows: 100,
+    withCall: 90,
+    withBookLine: 60,
+    withDevLine: 0,
+    withEvenBookPrice: -5,
+  });
+  assert.equal(coverage.evenPricedBookLine, 0);
+});

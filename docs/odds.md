@@ -214,6 +214,34 @@ The sequence, all reversible, none of it a deploy:
    the next 6-hourly run spending the rest of the free key, and re-silences
    the monitor.
 
+6. **Run `run_projections` for that week.** Without this the board does not
+   change, and steps 1-5 look like they failed. `ingest_odds` writes
+   `player_prop_lines` and nothing else; `picks.book_prob_over` — the number
+   `picks.edge` is generated from — is written only by `run_projections`. The
+   only cron that runs it is **Tuesday 09:00 UTC**, so lines a book posts on
+   Thursday or Friday sit unattached until the following Tuesday, after the
+   games have been played. Measured on 2026-08-29: 421 lines ingested, board
+   edges still **0**, until this ran.
+
+**A cleaner way to run the whole thing, used on 2026-08-29.** `ingest_odds`
+takes `--adapter`, which overrides `app_config.odds_adapter` *without mutating
+it*, and `--free`, which overrides the env var. So steps 1, 2, 3 and 5 all
+collapse into one command, the adapter stays `"none"` in the database the whole
+time, and the 6-hourly cron stays inert — which removes the risk that step 5 is
+forgotten:
+
+```bash
+python -m worker.jobs.ingest_odds --free --adapter theoddsapi     --season 2026 --week 1 --event-limit 8
+python -m worker.jobs.run_projections --season 2026 --weeks 1
+```
+
+**`--event-limit` is load-bearing here, not optional.** CFBD week 1 spans 9-10
+days and held **99 games**, of which **98 matched a provider event** — so an
+unbounded run would have queried 98 events at ~4 markets each, about 390
+credits against the 341 the free key held. The provider returns events
+**ascending by kickoff**, verified, so `--event-limit 8` is exactly the opening
+weekend and nothing beyond it. The run cost **39 credits** and wrote 421 rows.
+
 **A typo in the variable fails every job, not just this one.** `ODDS_PREFER_FREE`
 is read by `get_settings()`, which every job calls, and an unrecognised value
 raises rather than defaulting to false — so `ture` exits **2** with a named

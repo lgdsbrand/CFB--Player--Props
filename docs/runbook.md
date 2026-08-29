@@ -707,6 +707,56 @@ pushes, not losses. `--adapter synthetic` is refused outright.
 
 **A negative result is a finding, not a failed run.** Report it.
 
+#### Grading the 2026 season — staged 2026-08-29
+
+**The opening-weekend fallback capture is NOT gradeable, and that is by
+design.** `ingest_odds` writes `is_closing = false` on every row and has no
+flag to change it: a live in-week run cannot know it is looking at the last
+line before kickoff, so it never claims to be. `grade_vs_book` filters on
+`is_closing`. So the lines the 29 Aug fallback puts on the board serve the
+board and nothing else — **closing lines only ever come from `backfill_odds`.**
+Do not try to grade week 1 straight off the live rows, and do not "fix" this by
+flipping the column by hand; the timestamp would be a lie the grader trusts.
+
+**`backfill_odds` needs the PAID pool.** `--min-remaining` defaults to 5,000,
+which the ~341-credit free key can never satisfy, so the job stops before
+spending. The paid pool resets **1 September**. That is the gate, and it falls
+after the games settle anyway, so nothing is lost waiting.
+
+Prerequisites, in order:
+
+1. Games played — last opening-weekend kickoff is 30 Aug 02:00 UTC, ending
+   ~05:00 UTC.
+2. Box scores ingested — `cfb-props-ingest-week`, **Sunday 09:00 UTC**, which
+   lands after every opening game has finished. `grade_vs_book` inner-joins
+   `player_game_stats`, so this must be green first.
+3. Paid pool reset — **1 September**.
+
+Then, earliest 1 Sep:
+
+```bash
+python -m worker.jobs.backfill_odds --season 2026 --weeks 1
+python -m worker.jobs.grade_vs_book --season 2026 --weeks 1
+```
+
+**Sizing.** Measured live at 02:00 UTC on 29 Aug: 8 events, and 4 of the 9
+markets posted — `anytime_td` (all 8 games, 3-6 books), `rush_yards`,
+`rec_yards`, `receptions`. The four passing markets and `rush_attempts` had not
+opened. The historical endpoint bills **10x**, so ~32 event-markets is roughly
+**320 credits** — trivial against a 20,000 pool, impossible on the free key.
+
+**Week 1 alone cannot settle profitability, so do not report it as if it
+could.** Eight games against the 73 games and 1,856 bets already measured for
+2025 weeks 7-8. It is a pipeline rehearsal that happens to produce a number.
+**The week worth buying is 5 September — 60 events**, the first full slate.
+
+Two standing instructions apply to whatever comes back, both from the 2025
+grading: report the **blind-under benchmark** beside any model ROI (the job
+prints it; a model ROI without its null hypothesis is a misleading number), and
+**check the over rate first**. Both graded weeks so far were under-heavy and the
+model's structural under lean has never been tested against an over-heavy slate.
+If 2026 week 1 closes over-heavy, that is the more valuable finding than the ROI.
+
 ### `migrate_database`
 
 ```bash

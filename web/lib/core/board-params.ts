@@ -215,10 +215,23 @@ export function parseBoardParams(
  * Changing a filter resets to page 1 unless the caller is explicitly paging:
  * landing on page 4 of a three-page result is a dead end, and the user did not
  * ask to keep their offset when they changed the question.
+ *
+ * `basePath` EXISTS BECAUSE THE FILTERS OUTLIVED THE BOARD. The day strip and
+ * the conference pills now appear on Analyze Games too, and both mean exactly
+ * what they mean here — same parser, same keys, same values. What must not be
+ * shared is the destination: a reader changing the day on `/games` is asking
+ * for another day of games, not to be moved to the props board. Same reasoning
+ * as `WeekStrip`'s own `basePath`, and it defaults to the board so every
+ * existing caller is unchanged.
+ *
+ * Params the other page has no control for simply survive the round trip
+ * untouched, which is the behaviour we want: they cost nothing, and dropping
+ * them would silently discard state a shared link was carrying.
  */
 export function boardHref(
   current: BoardParams,
   changes: Partial<BoardParams>,
+  basePath: string = BOARD_PATH,
 ): string {
   const next = { ...current, ...changes };
   if (!("page" in changes)) next.page = 1;
@@ -251,7 +264,7 @@ export function boardHref(
   if (next.page > 1) set("page", next.page);
 
   const query = search.toString();
-  return query ? `${BOARD_PATH}?${query}` : BOARD_PATH;
+  return query ? `${basePath}?${query}` : basePath;
 }
 
 /**

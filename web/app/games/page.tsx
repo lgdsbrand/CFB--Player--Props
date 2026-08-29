@@ -1,14 +1,24 @@
 import Link from "next/link";
 
+import { DayStrip } from "@/components/day-strip";
 import { GameCard } from "@/components/games/game-card";
 import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
 import { WeekStrip } from "@/components/week-strip";
-import { parseBoardParams, type RawParams } from "@/lib/core/board-params";
+import {
+  boardHref,
+  parseBoardParams,
+  type RawParams,
+} from "@/lib/core/board-params";
 import { offenseOnBoard } from "@/lib/core/board-scope";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount } from "@/lib/core/format";
 import { gameMatchups } from "@/lib/core/game-view";
+import {
+  findSlateDay,
+  narrowToDay,
+  slateDays,
+} from "@/lib/core/slate-days";
 import { getConferences } from "@/lib/data/catalogue";
 import { getDefenseRatings } from "@/lib/data/defense";
 import { getSlateGames } from "@/lib/data/games";
@@ -30,6 +40,12 @@ import { getSlateConditions } from "@/lib/data/weather";
  * this view was agreed: it is a view over existing outputs. The only numbers
  * here describing the game itself are the book's.
  */
+
+/**
+ * Where this page lives. Named once because the day strip, the conference
+ * pills, the week strip and the empty state all have to agree on it.
+ */
+const GAMES_PATH = "/games";
 
 export default async function Games({
   searchParams,
@@ -83,13 +99,54 @@ export default async function Games({
   // concludes the DATA is missing rather than the filter. Either side
   // qualifying is enough — a game with one displayed team still shows that
   // team's players.
-  const shown = games.filter(
+  const inConference = games.filter(
     (game) =>
       offenseOnBoard(teamDirectory.get(game.homeTeamId), params.conference) ||
       offenseOnBoard(teamDirectory.get(game.awayTeamId), params.conference),
   );
 
+  // THE DAYS COME FROM THE GAMES THAT SURVIVED THE CONFERENCE FILTER, not from
+  // the whole slate — the one decision in this block that could have gone the
+  // other way. Deriving them from the slate would put a count on each pill that
+  // the page then contradicts, and would offer days holding nothing a reader
+  // filtered to the SEC can see: a control that leads to an empty page, which
+  // this product has already decided twice not to ship. It also takes the strip
+  // off screen when a conference narrows the week to one day, which is exactly
+  // the point at which it can no longer change anything.
+  //
+  // The cost is that the pills move when the conference changes. That is
+  // correct: they describe the slate being looked at, not the calendar.
+  const days = slateDays(inConference);
+  const activeDay = findSlateDay(days, params.day);
+
+  // Season and week come from the RESOLVED week, not the URL — an unknown week
+  // falls back to the latest, and every link on this page has to carry the week
+  // actually on screen or it would send the reader somewhere else. `day` is
+  // likewise the resolved value, so a stale day in a shared link corrects
+  // itself in the strip instead of leaving a pill lit that filters nothing.
+  const linkParams = {
+    ...params,
+    season: active.season,
+    week: active.week,
+    day: activeDay?.key,
+  };
+
+  const shown = narrowToDay(inConference, activeDay);
+
   const conferenceLabel = params.conference ?? "displayed conferences";
+
+  // Two independent narrowings, so the sentence is composed rather than
+  // branched: either can be absent and the other still has to read as English.
+  const narrowings = [
+    activeDay ? `on ${activeDay.label}` : undefined,
+    // Keyed off the CONFERENCE step, not off `shown`, because with a day
+    // selected `shown` is always smaller than the slate — which would print
+    // "those with a team in the displayed conferences" on a page that had not
+    // dropped a single game for that reason.
+    inConference.length === games.length
+      ? undefined
+      : `with a team in the ${conferenceLabel}`,
+  ].filter((clause): clause is string => clause !== undefined);
 
   return (
     <Shell>
@@ -98,33 +155,44 @@ export default async function Games({
         <h1 className="text-2xl font-extrabold tracking-tight">Analyze Games</h1>
       </div>
 
-      <WeekStrip weeks={weeks} active={active} basePath="/games" />
+      <WeekStrip weeks={weeks} active={active} basePath={GAMES_PATH} />
+
+      <DayStrip
+        days={days}
+        activeDay={activeDay?.key}
+        params={linkParams}
+        basePath={GAMES_PATH}
+      />
 
       <div className="flex flex-wrap items-center gap-2">
         <ConferencePill
-          href="/games"
+          href={boardHref(linkParams, { conference: undefined }, GAMES_PATH)}
           active={params.conference === undefined}
           label="All displayed"
-          season={active.season}
-          week={active.week}
         />
         {conferences.map((conference) => (
           <ConferencePill
             key={conference.id}
-            href={`/games?conference=${encodeURIComponent(conference.name)}`}
+            // Built through `boardHref` rather than by hand so the day survives
+            // a conference change. The hand-built version carried the season
+            // and week and nothing else, so adding a second filter above it
+            // would have silently cleared the first on every click.
+            href={boardHref(
+              linkParams,
+              { conference: conference.name },
+              GAMES_PATH,
+            )}
             active={params.conference === conference.name}
             label={conference.abbreviation ?? conference.name}
-            season={active.season}
-            week={active.week}
           />
         ))}
       </div>
 
       <p className="text-muted text-xs">
         {formatCount(shown.length)} of {formatCount(games.length)} games —{" "}
-        {shown.length === games.length
+        {narrowings.length === 0
           ? "the whole slate"
-          : `those with a team in the ${conferenceLabel}`}
+          : `those ${narrowings.join(" ")}`}
         . Spreads and totals are the book&rsquo;s consensus, not a model output.
       </p>
 
@@ -133,7 +201,10 @@ export default async function Games({
           <h2 className="section-header mb-2">No games here</h2>
           <p className="text-muted max-w-prose text-sm">
             No game this week has a team in the {conferenceLabel}.{" "}
-            <Link href="/games" className="text-accent-cyan hover:underline">
+            <Link
+              href={boardHref(linkParams, { conference: undefined }, GAMES_PATH)}
+              className="text-accent-cyan hover:underline"
+            >
               Clear the conference filter
             </Link>{" "}
             to see the rest of the slate.
@@ -159,21 +230,17 @@ function ConferencePill({
   href,
   active,
   label,
-  season,
-  week,
 }: {
   href: string;
   active: boolean;
   label: string;
-  season: number;
-  week: number;
 }) {
-  // The week has to travel with the filter or changing conference would drop
-  // the reader back onto the default week.
-  const separator = href.includes("?") ? "&" : "?";
+  // The href arrives complete. It used to be assembled here, appending the
+  // season and week to a path the caller had half-built, which worked only for
+  // as long as those were the only two things a conference link had to carry.
   return (
     <Link
-      href={`${href}${separator}season=${season}&week=${week}`}
+      href={href}
       aria-current={active ? "true" : undefined}
       className={
         "rounded-full border px-2.5 py-1 text-[0.6875rem] font-bold uppercase tracking-label transition-colors " +

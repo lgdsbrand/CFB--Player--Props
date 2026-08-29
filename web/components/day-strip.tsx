@@ -33,10 +33,18 @@ export function DayStrip({
   days,
   activeDay,
   params,
+  basePath,
 }: {
   days: SlateDay[];
   activeDay: string | undefined;
   params: BoardParams;
+  /**
+   * Where a day pill links. The strip sits above the board and above Analyze
+   * Games, and each has to keep the reader on the page they are already on —
+   * picking a day is narrowing what you are looking at, not switching to a
+   * different view of it. Defaults to the board.
+   */
+  basePath?: string;
 }) {
   if (days.length < 2) return null;
 
@@ -46,7 +54,7 @@ export function DayStrip({
       className="border-border-subtle scroll-fade-x flex gap-2 overflow-x-auto border-b pb-3"
     >
       <DayPill
-        href={boardHref(params, { day: undefined })}
+        href={boardHref(params, { day: undefined }, basePath)}
         active={activeDay === undefined}
         caption="All days"
         value={`${days.length} days`}
@@ -63,7 +71,7 @@ export function DayStrip({
         return (
           <DayPill
             key={day.key}
-            href={boardHref(params, { day: day.key })}
+            href={boardHref(params, { day: day.key }, basePath)}
             active={activeDay === day.key}
             caption={day.weekday}
             value={day.label.replace(`${day.weekday} `, "")}

@@ -153,3 +153,29 @@ test("changing a filter drops the page, because page 4 of one row is a dead end"
   // Unless paging is what was asked for.
   assert.equal(boardHref(FULLY_FILTERED, { page: 2 }).includes("page=2"), true);
 });
+
+test("boardHref can target another page without changing what it carries", () => {
+  const filtered = boardHref(FULLY_FILTERED, {});
+  const onGames = boardHref(FULLY_FILTERED, {}, "/games");
+
+  // Same query, different page. Analyze Games shares the day and conference
+  // filters with the board, and a reader changing either must stay where they
+  // are rather than being moved to the props board.
+  assert.equal(onGames.startsWith("/games?"), true);
+  assert.equal(onGames.split("?")[1], filtered.split("?")[1]);
+});
+
+test("boardHref still defaults to the board", () => {
+  assert.equal(boardHref({ ...FULLY_FILTERED }, {}).startsWith("/props"), true);
+});
+
+test("a basePath with no parameters left is the bare path", () => {
+  // The conference pills on Analyze Games clear a filter this way; a trailing
+  // "?" would make two links to the same page look like different addresses.
+  const bare = boardHref(
+    { rankedOnly: false, edgesOnly: false, hitRateWindow: 5, sort: "edge", page: 1 },
+    {},
+    "/games",
+  );
+  assert.equal(bare, "/games");
+});

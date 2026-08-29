@@ -106,6 +106,27 @@ export function slateDays(games: GameSummary[]): SlateDay[] {
 }
 
 /**
+ * Narrow a list of games to one day, or leave it whole when no day is selected.
+ *
+ * THE BOARD CANNOT USE THIS AND THAT IS THE POINT. There the day reaches a
+ * database predicate as a list of ids, because the row cap makes filtering in
+ * the page incorrect rather than merely slow. Analyze Games already holds the
+ * whole slate in memory — 99 games is the largest week measured — so the same
+ * filter is a `Set` lookup, and writing it here rather than in the page keeps
+ * the two rules that matter testable: no day means EVERY game (including the
+ * TBD kickoffs that belong to no day at all), and membership is by id, never
+ * by recomputing a date.
+ */
+export function narrowToDay<T extends { gameId: number }>(
+  games: T[],
+  day: SlateDay | undefined,
+): T[] {
+  if (!day) return games;
+  const ids = new Set(day.gameIds);
+  return games.filter((game) => ids.has(game.gameId));
+}
+
+/**
  * Resolve a requested day against the days that exist.
  *
  * An unknown day resolves to undefined — meaning "all days" — rather than to an

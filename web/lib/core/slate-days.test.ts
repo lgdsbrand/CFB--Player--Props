@@ -14,7 +14,12 @@ import { test } from "node:test";
 // Relative, not aliased: these are VALUES, so they survive type stripping and
 // the test runner has to resolve them for real. The type-only import below
 // keeps the alias because it is erased before Node sees it.
-import { findSlateDay, slateDayKey, slateDays } from "./slate-days.ts";
+import {
+  findSlateDay,
+  narrowToDay,
+  slateDayKey,
+  slateDays,
+} from "./slate-days.ts";
 import type { GameSummary } from "./types.ts";
 
 function game(gameId: number, startDate: string | null): GameSummary {
@@ -103,4 +108,48 @@ test("an unknown day resolves to all days, not to an empty board", () => {
   assert.equal(findSlateDay(days, "2026-09-05"), undefined);
   assert.equal(findSlateDay(days, undefined), undefined);
   assert.equal(findSlateDay(days, "2026-08-29")?.key, "2026-08-29");
+});
+
+test("narrowing to a day keeps that day's games and only those", () => {
+  const games = [
+    game(1, "2026-08-29T16:00:00Z"),
+    game(2, "2026-08-30T02:00:00Z"),
+    game(3, "2026-09-05T16:00:00Z"),
+  ];
+  const days = slateDays(games);
+  const saturday = findSlateDay(days, "2026-08-29");
+
+  // Game 2 kicks at 02:00Z on the 30th and still belongs to the 29th.
+  assert.deepEqual(
+    narrowToDay(games, saturday).map((g) => g.gameId),
+    [1, 2],
+  );
+});
+
+test("no day selected means every game, TBD kickoffs included", () => {
+  const games = [game(1, "2026-08-29T16:00:00Z"), game(2, null)];
+
+  // The TBD game belongs to no day at all, so an unfiltered list is the ONLY
+  // place it is reachable. Returning the input unchanged is what makes the
+  // strip's "all days" option honest.
+  assert.deepEqual(
+    narrowToDay(games, undefined).map((g) => g.gameId),
+    [1, 2],
+  );
+});
+
+test("narrowing preserves the order the caller sorted the games into", () => {
+  const games = [
+    game(3, "2026-08-29T23:00:00Z"),
+    game(1, "2026-08-29T16:00:00Z"),
+    game(2, "2026-08-29T19:00:00Z"),
+  ];
+  const saturday = findSlateDay(slateDays(games), "2026-08-29");
+
+  // Analyze Games orders its cards by kickoff before this runs. A filter that
+  // reordered them would silently undo that.
+  assert.deepEqual(
+    narrowToDay(games, saturday).map((g) => g.gameId),
+    [3, 1, 2],
+  );
 });

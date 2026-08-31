@@ -31,6 +31,56 @@ import { POSITION_GROUPS, type PositionGroup } from "./types.ts";
  */
 export type BoardView = "cards" | "table";
 
+/**
+ * A named, filter-free list — the home page's two shortcut tiles.
+ *
+ * WHY THIS EXISTS. Both tiles used to link into the full board with one
+ * parameter preset, which meant a reader who asked for "the best plays" landed
+ * on the whole filter apparatus — position tabs, market dropdown, game
+ * selector, conference pills, search, two numeric filters, a hit-rate window, a
+ * view toggle and a sort switch — with the answer somewhere underneath it. The
+ * client's words: "do away with all the filters and just have all the plays in
+ * those sections, just a table view of the plays."
+ *
+ * So a preset is TWO decisions, not one: which rows, and no chrome around them.
+ * It stays a parameter on the board rather than a route of its own because the
+ * read layer, the row cap and the pagination are the board's and duplicating
+ * them is how the weekly-targets panel and the board came to disagree about
+ * scope (`lib/core/board-scope.ts`).
+ */
+export type BoardPreset = "best" | "edges";
+
+export const BOARD_PRESETS: Record<
+  BoardPreset,
+  {
+    title: string;
+    /** What the list is, in one line, shown under the title. */
+    blurb: string;
+    /** Travels with the list, not just with the tile that led here. */
+    caveat: string | null;
+  }
+> = {
+  best: {
+    title: "Best Plays",
+    blurb:
+      "Every call the model has made this week, strongest first.",
+    // Rule 2 from `home-view.ts`, restated at the destination. The tile carries
+    // it too, but a shared link arrives here without ever having shown the tile.
+    caveat:
+      "Most confident is not the same as best value — a call the book has priced correctly is worth nothing.",
+  },
+  edges: {
+    title: "Top Edges",
+    blurb:
+      "Where the model most disagrees with the book, measured against the de-vigged price.",
+    caveat: null,
+  },
+};
+
+export function isBoardPreset(value: string | undefined): value is BoardPreset {
+  return value === "best" || value === "edges";
+}
+
 export type BoardParams = {
   season?: number;
   week?: number;
@@ -69,6 +119,12 @@ export type BoardParams = {
    * land on first and stop the default ever applying again.
    */
   view?: BoardView;
+  /**
+   * Render as a named list with no controls. See `BoardPreset`.
+   *
+   * Deliberately NOT a filter the controls can set — it is the absence of them.
+   */
+  preset?: BoardPreset;
   page: number;
 };
 
@@ -94,7 +150,7 @@ export const BOARD_PATH = "/props";
  */
 const BOARD_PARAM_KEYS = [
   "season", "week", "position", "market", "game", "day", "conference", "q",
-  "sort", "edges", "top25", "conf", "rank", "window", "view", "page",
+  "sort", "edges", "top25", "conf", "rank", "window", "view", "preset", "page",
 ] as const;
 
 /**
@@ -133,6 +189,18 @@ export const CARDS_PER_PAGE = 25;
 export const ROWS_PER_PAGE = 50;
 
 /**
+ * Rows per page in a preset list.
+ *
+ * Larger than the board's, because the client asked for "all the plays" and a
+ * 50-row page of 433 calls reads as a filtered list — the exact impression the
+ * preset exists to remove. Still bounded: every row needs its player's game log
+ * to grade a hit rate, batched 40 players per request, so an unbounded page
+ * would be an unbounded number of round trips. 100 rows is at worst three
+ * batches and in practice fewer, since a player's markets cluster in the sort.
+ */
+export const PRESET_ROWS_PER_PAGE = 100;
+
+/**
  * Which layout to render, given what the reader asked for.
  *
  * AN EXPLICIT CHOICE ALWAYS WINS. Absent one, the default follows the MARKET
@@ -146,8 +214,17 @@ export const ROWS_PER_PAGE = 50;
  * part of a shared link rather than a local preference.
  */
 export function resolveBoardView(params: BoardParams): BoardView {
+  // A preset IS a table view — that is half of what the client asked for — and
+  // it outranks an explicit `view` because the only way to carry one here is a
+  // hand-edited or stale URL.
+  if (params.preset) return "table";
   if (params.view) return params.view;
   return params.market ? "cards" : "table";
+}
+
+/** How many rows a page holds, given whether this is a preset list. */
+export function rowsPerPage(params: BoardParams): number {
+  return params.preset ? PRESET_ROWS_PER_PAGE : ROWS_PER_PAGE;
 }
 
 function first(raw: string | string[] | undefined): string | undefined {
@@ -184,6 +261,7 @@ export function parseBoardParams(
   const sort = first(raw.sort);
   const edgesOnly = first(raw.edges);
   const view = first(raw.view);
+  const preset = first(raw.preset);
 
   return {
     season: int(raw.season),
@@ -205,6 +283,7 @@ export function parseBoardParams(
     minOpponentRank: int(raw.rank),
     hitRateWindow: int(raw.window) ?? DEFAULT_HIT_RATE_WINDOW,
     view: view === "cards" || view === "table" ? view : undefined,
+    preset: isBoardPreset(preset) ? preset : undefined,
     page: Math.max(int(raw.page) ?? 1, 1),
   };
 }
@@ -261,6 +340,7 @@ export function boardHref(
   // turn an explicit choice back into "not chosen", so the next market change
   // would silently flip the layout out from under a reader who had just set it.
   set("view", next.view);
+  set("preset", next.preset);
   if (next.page > 1) set("page", next.page);
 
   const query = search.toString();

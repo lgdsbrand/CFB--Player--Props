@@ -162,7 +162,10 @@ export function homeTiles(
       title: "Best Plays",
       blurb:
         "Every call the model has made this week, strongest first.",
-      href: `${BOARD_PATH}?${scope}&sort=confidence`,
+      // A PRESET, not a preset FILTER on the full board. The client asked for
+      // "all the plays, just a table view" without the filter apparatus — see
+      // `BoardPreset` in `board-params.ts`.
+      href: `${BOARD_PATH}?${scope}&preset=best`,
       count: counts.calls,
       countLabel: "calls to rank",
       // Rule 2, on the tile rather than the destination: the tile is what makes
@@ -178,7 +181,7 @@ export function homeTiles(
       title: "Top Edges",
       blurb:
         "Where the model most disagrees with the book, measured against the de-vigged price.",
-      href: `${BOARD_PATH}?${scope}&edges=1`,
+      href: `${BOARD_PATH}?${scope}&preset=edges`,
       count: counts.edges,
       countLabel: "clearing the threshold",
       caveat: null,

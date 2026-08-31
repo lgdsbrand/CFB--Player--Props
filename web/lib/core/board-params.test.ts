@@ -21,7 +21,11 @@ import {
   boardHref,
   DEFAULT_HIT_RATE_WINDOW,
   parseBoardParams,
+  PRESET_ROWS_PER_PAGE,
   resetBoardHref,
+  resolveBoardView,
+  ROWS_PER_PAGE,
+  rowsPerPage,
   type BoardParams,
 } from "./board-params.ts";
 
@@ -46,6 +50,11 @@ const FULLY_FILTERED: BoardParams = {
   // pick `cards`, so this only round-trips if an explicit choice is being
   // carried rather than re-derived.
   view: "table",
+  // Carried through the URL like every other key. A preset and the filters are
+  // mutually exclusive on screen — the page ignores the filters in preset mode
+  // — but they must still SERIALISE together, or a shared preset link would
+  // silently drop back to the full board on the next click.
+  preset: "best",
   page: 4,
 };
 
@@ -178,4 +187,70 @@ test("a basePath with no parameters left is the bare path", () => {
     "/games",
   );
   assert.equal(bare, "/games");
+});
+
+// -----------------------------------------------------------------------------
+// Presets — the two shortcut lists
+// -----------------------------------------------------------------------------
+
+const BARE: BoardParams = {
+  sort: "edge",
+  edgesOnly: false,
+  rankedOnly: false,
+  hitRateWindow: DEFAULT_HIT_RATE_WINDOW,
+  page: 1,
+};
+
+test("a preset always renders as a table", () => {
+  // Half of what the client asked for. `market` would otherwise resolve to
+  // cards, so this pins that a preset outranks the market-driven default.
+  assert.equal(
+    resolveBoardView({ ...BARE, preset: "best", market: "receptions" }),
+    "table",
+  );
+});
+
+test("a preset outranks an explicit view carried in a stale URL", () => {
+  assert.equal(
+    resolveBoardView({ ...BARE, preset: "edges", view: "cards" }),
+    "table",
+  );
+});
+
+test("without a preset the market still decides the default view", () => {
+  assert.equal(resolveBoardView({ ...BARE, market: "receptions" }), "cards");
+  assert.equal(resolveBoardView(BARE), "table");
+});
+
+test("a preset page holds more rows than a board page", () => {
+  // "All the plays" — a 50-row page of 433 calls reads as a filtered list,
+  // which is the impression the preset exists to remove.
+  assert.equal(rowsPerPage({ ...BARE, preset: "best" }), PRESET_ROWS_PER_PAGE);
+  assert.equal(rowsPerPage(BARE), ROWS_PER_PAGE);
+  assert.ok(PRESET_ROWS_PER_PAGE > ROWS_PER_PAGE);
+});
+
+test("an unknown preset is dropped rather than rendered as a bare list", () => {
+  // Same rule as every other parsed value: a hand-edited URL must not produce
+  // a page with no controls and no heading explaining what it is showing.
+  const params = parseBoardParams({ preset: "sharp" });
+  assert.equal(params.preset, undefined);
+  assert.equal(resolveBoardView(params), "table");
+});
+
+test("a preset round-trips through the URL", () => {
+  const href = boardHref({ ...BARE, season: 2026, week: 1, preset: "edges" }, {});
+  const back = parseBoardParams(
+    Object.fromEntries(new URLSearchParams(href.split("?")[1] ?? "")),
+  );
+  assert.equal(back.preset, "edges");
+});
+
+test("leaving a preset for the full board drops it", () => {
+  const href = boardHref(
+    { ...BARE, season: 2026, week: 1, preset: "best" },
+    { preset: undefined, sort: "confidence" },
+  );
+  assert.equal(href.includes("preset="), false);
+  assert.match(href, /sort=confidence/);
 });

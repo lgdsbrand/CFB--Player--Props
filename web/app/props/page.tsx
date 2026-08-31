@@ -12,11 +12,12 @@ import {
   type BoardParams,
   boardHref,
   BOARD_PATH,
+  BOARD_PRESETS,
   CARDS_PER_PAGE,
   parseBoardParams,
   resetBoardHref,
   resolveBoardView,
-  ROWS_PER_PAGE,
+  rowsPerPage,
   type RawParams,
 } from "@/lib/core/board-params";
 import { offenseOnBoard } from "@/lib/core/board-scope";
@@ -109,22 +110,41 @@ export default async function Home({
   // kickoff. See `lib/core/kickoff.ts`.
   const cutoff = kickoffCutoff();
 
-  const filters: BoardFilters = {
-    kickoffCutoff: cutoff,
-    season: active.season,
-    week: active.week,
-    marketKey: resolved.market,
-    positionGroup: resolved.position,
-    gameId: resolved.game,
-    conferenceName: resolved.conference,
-    rankedOnly: resolved.rankedOnly,
-    search: resolved.search,
-    edgesOnly: resolved.edgesOnly,
-    edgeThreshold: config.edgeThreshold,
-    minConfidence: resolved.minConfidence,
-    minOpponentRank: resolved.minOpponentRank,
-    sort: resolved.sort,
-  };
+  // A PRESET REPLACES THE FILTERS RATHER THAN ADDING TO THEM. The controls are
+  // not rendered in preset mode, so any other filter arriving in the URL would
+  // narrow the list with nothing on screen saying so — a board that silently
+  // shows less than its own heading claims. Season, week and the kickoff cut
+  // still apply: those are scope, not filters.
+  const preset = resolved.preset;
+
+  const filters: BoardFilters = preset
+    ? {
+        kickoffCutoff: cutoff,
+        season: active.season,
+        week: active.week,
+        edgeThreshold: config.edgeThreshold,
+        // "Best plays" is every CALL, ordered by confidence; "top edges" is
+        // every row clearing the threshold, ordered by edge.
+        withCallOnly: preset === "best",
+        edgesOnly: preset === "edges",
+        sort: preset === "best" ? "confidence" : "edge",
+      }
+    : {
+        kickoffCutoff: cutoff,
+        season: active.season,
+        week: active.week,
+        marketKey: resolved.market,
+        positionGroup: resolved.position,
+        gameId: resolved.game,
+        conferenceName: resolved.conference,
+        rankedOnly: resolved.rankedOnly,
+        search: resolved.search,
+        edgesOnly: resolved.edgesOnly,
+        edgeThreshold: config.edgeThreshold,
+        minConfidence: resolved.minConfidence,
+        minOpponentRank: resolved.minOpponentRank,
+        sort: resolved.sort,
+      };
 
   const view = resolveBoardView(resolved);
 
@@ -153,9 +173,9 @@ export default async function Home({
   const days = slateDays(live);
   const activeDay = findSlateDay(days, resolved.day);
   const dayParams = { ...resolved, day: activeDay?.key };
-  const boardFilters: BoardFilters = activeDay
-    ? { ...filters, gameIds: activeDay.gameIds }
-    : filters;
+  // The day strip is a filter, so a preset does not carry one.
+  const boardFilters: BoardFilters =
+    activeDay && !preset ? { ...filters, gameIds: activeDay.gameIds } : filters;
 
   // THE TWO LAYOUTS PAGE DIFFERENT THINGS, and that is why the fetch branches
   // rather than one path feeding both. A card is one player holding every
@@ -170,7 +190,7 @@ export default async function Home({
   // is why the "partial slate" banner is card-only below.
   const board =
     view === "table"
-      ? await loadTable(boardFilters, resolved.page)
+      ? await loadTable(boardFilters, resolved.page, rowsPerPage(resolved))
       : await loadCards(boardFilters, resolved.page);
 
   const [gameLogs, teamDirectory] = await Promise.all([
@@ -218,7 +238,7 @@ export default async function Home({
       <div className="flex flex-col gap-1">
         <span className="label-caption">Legends Sports · College Football</span>
         <h1 className="text-2xl font-extrabold tracking-tight">
-          Player Props Board
+          {preset ? BOARD_PRESETS[preset].title : "Player Props Board"}
         </h1>
         {/*
           THE SLATE SUMMARY LINE WAS REMOVED HERE, deliberately, and this note
@@ -242,11 +262,16 @@ export default async function Home({
 
       <WeekStrip weeks={weeks} active={active} basePath={BOARD_PATH} />
 
-      <DayStrip
-        days={days}
-        activeDay={activeDay?.key}
-        params={dayParams}
-      />
+      {/* A preset is the ABSENCE of filters, so the day strip goes with the
+          rest of them. The week strip stays: it is scope, and without it a
+          preset list would have no way to reach another week. */}
+      {preset ? null : (
+        <DayStrip
+          days={days}
+          activeDay={activeDay?.key}
+          params={dayParams}
+        />
+      )}
 
       {played > 0 ? (
         <p className="text-dim border-border-subtle rounded-xl border px-3 py-2 text-xs">
@@ -265,16 +290,47 @@ export default async function Home({
         </p>
       ) : null}
 
-      <BoardControls
-        params={resolved}
-        markets={markets}
-        conferences={conferences}
-        games={selectableGames}
-        hitRateWindows={config.hitRateWindows}
-        resultCount={board.resultCount}
-        resultNoun={board.kind === "table" ? "prop" : "player"}
-        view={view}
-      />
+      {preset ? (
+        <div className="flex flex-col gap-2">
+          <p className="text-muted text-sm">
+            {BOARD_PRESETS[preset].blurb}
+          </p>
+          <p className="text-dim text-xs">
+            <span className="text-accent-cyan font-bold tabular-nums">
+              {formatCount(board.resultCount)}
+            </span>{" "}
+            {board.resultCount === 1 ? "play" : "plays"}, unfiltered.{" "}
+            <Link
+              href={boardHref(
+                { ...resolved, preset: undefined },
+                preset === "best"
+                  ? { sort: "confidence" }
+                  : { edgesOnly: true },
+              )}
+              className="hover:text-accent-cyan underline underline-offset-2 transition-colors"
+            >
+              Open in the full board
+            </Link>{" "}
+            to filter by position, market, game or conference.
+          </p>
+          {BOARD_PRESETS[preset].caveat ? (
+            <p className="text-dim border-border-subtle rounded-xl border px-3 py-2 text-xs">
+              {BOARD_PRESETS[preset].caveat}
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <BoardControls
+          params={resolved}
+          markets={markets}
+          conferences={conferences}
+          games={selectableGames}
+          hitRateWindows={config.hitRateWindows}
+          resultCount={board.resultCount}
+          resultNoun={board.kind === "table" ? "prop" : "player"}
+          view={view}
+        />
+      )}
 
       {board.kind === "cards" && board.truncated ? (
         <p className="border-negative/40 bg-negative/5 text-muted rounded-xl border px-3 py-2 text-xs">
@@ -467,15 +523,16 @@ type BoardPageContent =
 async function loadTable(
   filters: BoardFilters,
   requestedPage: number,
+  perPage: number,
 ): Promise<BoardPageContent> {
   const total = await getBoardRowCount(filters);
-  const totalPages = Math.max(Math.ceil(total / ROWS_PER_PAGE), 1);
+  const totalPages = Math.max(Math.ceil(total / perPage), 1);
   const page = Math.min(requestedPage, totalPages);
 
   const rows = await getBoardRowPage({
     ...filters,
-    limit: ROWS_PER_PAGE,
-    offset: (page - 1) * ROWS_PER_PAGE,
+    limit: perPage,
+    offset: (page - 1) * perPage,
   });
 
   return {

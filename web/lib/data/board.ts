@@ -78,6 +78,15 @@ export type BoardFilters = {
   minOpponentRank?: number;
   /** Only rows that have a book line attached. */
   withBookLineOnly?: boolean;
+  /**
+   * Only rows the model has actually called — the population BEST PLAYS lists.
+   *
+   * The home tile counts calls, so without this the list it links to would
+   * carry every projection on the slate and contradict the number that sent the
+   * reader there. Rows with no call sort last anyway, so the old link LOOKED
+   * right on page one and went wrong at the pager.
+   */
+  withCallOnly?: boolean;
 
   /**
    * Hide games that have already kicked off, measured against this instant.
@@ -182,6 +191,7 @@ function buildBoardQuery(
   }
 
   if (filters.withBookLineOnly) query = query.eq("has_book_line", true);
+  if (filters.withCallOnly) query = query.eq("has_call", true);
 
   // `not null` rather than `lte 25`: the column only ever holds 1-25, and a
   // numeric bound would silently start meaning something else if a poll with a

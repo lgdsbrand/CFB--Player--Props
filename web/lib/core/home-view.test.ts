@@ -82,12 +82,27 @@ test("best plays orders by confidence and does not impose a floor", () => {
   // confidence on an opening slate is 0.574. "Top most confident" is an
   // ordering, not a threshold.
   const best = find(counts(), "best");
-  assert.match(best.href!, /sort=confidence/);
+  assert.match(best.href!, /preset=best/);
   assert.doesNotMatch(best.href!, /conf=/);
 });
 
-test("top edges links to the board's own edge filter", () => {
-  assert.match(find(counts(), "edges").href!, /edges=1/);
+test("the two shortcut tiles lead to a preset list, not to the filtered board", () => {
+  // The client's request: "do away with all the filters and just have all the
+  // plays in those sections, just a table view of the plays." A preset is that
+  // decision; linking with `sort=` or `edges=` would land him back on the whole
+  // filter apparatus with the answer somewhere underneath it.
+  for (const [key, expected] of [
+    ["best", "preset=best"],
+    ["edges", "preset=edges"],
+  ] as const) {
+    const href = find(counts(), key).href!;
+    assert.match(href, new RegExp(expected));
+    assert.doesNotMatch(href, /position=|market=|game=|conference=|q=/);
+  }
+});
+
+test("top edges links to its own preset list", () => {
+  assert.match(find(counts(), "edges").href!, /preset=edges/);
 });
 
 test("every count travels with a label saying what it counts", () => {

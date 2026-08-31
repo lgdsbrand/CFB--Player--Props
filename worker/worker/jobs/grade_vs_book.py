@@ -61,13 +61,19 @@ JOB_NAME = "grade_vs_book"
 DEFAULT_THRESHOLDS = (0.0, 0.02, 0.05, 0.10)
 
 
-def load_gradeable(season: int, week: int, adapter: str) -> list[dict[str, Any]]:
+def load_gradeable(
+    season: int, week: int, adapter: str, *, closing_only: bool = True
+) -> list[dict[str, Any]]:
     """Every (projection, real two-way line, actual) triple for one week.
 
     Grouped in SQL down to one row per (player, game, market, line) with the
     per-book prices aggregated, because that tuple IS the bet — two books
     quoting the same player at the same number are two prices on one wager, not
     two wagers.
+
+    `closing_only=False` grades the LAST PRE-KICKOFF SNAPSHOT instead of a true
+    closing line — see `--include-non-closing` in `main` for what that costs and
+    why the column is not simply flipped.
     """
     return fetch_all(
         """
@@ -82,7 +88,7 @@ def load_gradeable(season: int, week: int, adapter: str) -> list[dict[str, Any]]
               join sportsbooks b on b.id = l.sportsbook_id
              where l.season = %(season)s and l.week = %(week)s
                and l.source_adapter = %(adapter)s
-               and l.is_closing
+               and (%(closing_only)s is false or l.is_closing)
              group by l.player_id, l.game_id, l.market_key, l.line
         )
         select pr.player_id, pr.game_id, pr.market_key, pr.line, pr.prices,
@@ -109,7 +115,12 @@ def load_gradeable(season: int, week: int, adapter: str) -> list[dict[str, Any]]
           left join player_team_seasons pts
             on pts.player_id = pr.player_id and pts.season = %(season)s
         """,
-        {"season": season, "week": week, "adapter": adapter},
+        {
+            "season": season,
+            "week": week,
+            "adapter": adapter,
+            "closing_only": closing_only,
+        },
     )
 
 
@@ -354,11 +365,16 @@ def render(bets: list[BookBet], thresholds: tuple[float, ...]) -> str:
 
 
 def run(
-    *, season: int, weeks: list[int], adapter: str, thresholds: tuple[float, ...]
+    *,
+    season: int,
+    weeks: list[int],
+    adapter: str,
+    thresholds: tuple[float, ...],
+    closing_only: bool = True,
 ) -> list[BookBet]:
     bets: list[BookBet] = []
     for week in weeks:
-        rows = load_gradeable(season, week, adapter)
+        rows = load_gradeable(season, week, adapter, closing_only=closing_only)
         got = to_bets(rows, season, week)
         log.info("%s week %s: %d gradeable bet(s)", season, week, len(got))
         bets.extend(got)
@@ -387,6 +403,12 @@ def main(argv: list[str] | None = None) -> int:
         "--adapter", default="theoddsapi",
         help="Which source_adapter's lines to grade against. Never 'synthetic' "
              "— that is the thing this job exists to stop relying on.",
+    )
+    parser.add_argument(
+        "--include-non-closing", action="store_true",
+        help="Also grade lines that are not flagged closing — the last "
+             "pre-kickoff snapshot `ingest_odds` captured. Weaker evidence "
+             "than a closing line, and labelled as such in the output.",
     )
     parser.add_argument(
         "--threshold", type=float, action="append",
@@ -427,11 +449,32 @@ def main(argv: list[str] | None = None) -> int:
                 weeks=weeks,
                 adapter=args.adapter,
                 thresholds=thresholds,
+                closing_only=not args.include_non_closing,
+            )
+            # THE BASIS IS PART OF THE RESULT. A number from a pre-kickoff
+            # snapshot and a number from a closing line are different claims,
+            # and the second is the one this project has been waiting on (see
+            # `docs/runbook.md`). Printing both under the same words is how the
+            # weaker one ends up quoted as the stronger.
+            basis = (
+                "LAST PRE-KICKOFF lines (NOT closing, weaker evidence)"
+                if args.include_non_closing
+                else "closing lines"
             )
             log.info(
-                "Model vs %s closing lines, %s week(s) %s:\n%s",
-                args.adapter, args.season, weeks, render(bets, thresholds),
+                "Model vs %s %s, %s week(s) %s:\n%s",
+                args.adapter, basis, args.season, weeks,
+                render(bets, thresholds),
             )
+            if args.include_non_closing:
+                log.warning(
+                    "Graded against lines captured before kickoff, not at "
+                    "close. A book moves its number right up to kickoff, so "
+                    "this scores the model against a price that was still "
+                    "available rather than against the market's final word. "
+                    "Indicative only; never quote it as the closing-line "
+                    "result."
+                )
     except Exception as exc:
         log.error("Grading failed: %s", exc)
         return 1

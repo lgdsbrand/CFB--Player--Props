@@ -739,6 +739,42 @@ python -m worker.jobs.backfill_odds --season 2026 --weeks 1
 python -m worker.jobs.grade_vs_book --season 2026 --weeks 1
 ```
 
+##### The pre-kickoff grade, run 2026-08-31
+
+`--include-non-closing` grades the snapshot `ingest_odds` captured instead of a
+closing line, so week 1 could be scored without waiting for the paid pool:
+
+```bash
+python -m worker.jobs.grade_vs_book --season 2026 --weeks 1 --include-non-closing
+```
+
+It relaxes the `is_closing` predicate for that one run. It does **not** flip the
+column — the timestamp would then be a lie every later grade trusts — and it
+labels its own output `LAST PRE-KICKOFF lines (NOT closing, weaker evidence)`.
+
+**Result on 2026 week 1** (157 gradeable bets, 54 players, 8 games; anytime TD
+excluded because these books price it one-way and it cannot be de-vigged):
+
+| edge | n | win | break-even | ROI |
+|---|---|---|---|---|
+| >= 0% | 154 | 50.6% | 53.9% | **-6.2%** |
+| >= 2% | 137 | 52.6% | 53.7% | -2.8% |
+| >= 5% | 103 | 56.3% | 53.6% | **+4.1%** |
+| >= 10% | 72 | 55.6% | 53.1% | +3.0% |
+
+**Read the blind-under column before quoting the +4.1%.** OVER landed on only
+38.9% of decided lines, and betting every under blind returned **+15.1%** at
+0% and **+16.3%** at 5% — so the model's positive number on its own edge subset
+is *worse* than ignoring the model entirely. Player-level lift is negative on
+both sides (-5.7% over, -2.6% under), meaning no demonstrated discrimination
+between players in this sample.
+
+**Eight games cannot settle this** and the observations are correlated (one
+performance settles several of a player's markets). It is the same picture the
+2025 weeks 7-8 grade produced, on a third source of lines: the model rides the
+under shade rather than beating the price. The measurement worth having is still
+5 September against real closing lines.
+
 **Sizing.** Measured live at 02:00 UTC on 29 Aug: 8 events, and 4 of the 9
 markets posted — `anytime_td` (all 8 games, 3-6 books), `rush_yards`,
 `rec_yards`, `receptions`. The four passing markets and `rush_attempts` had not

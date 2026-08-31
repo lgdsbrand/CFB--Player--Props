@@ -622,11 +622,13 @@ check(G, "every completed game has box-score rows", """
        and not exists (select 1 from player_game_stats s where s.game_id=g.id)
 """, lambda r: r["missing"] <= 2, ["missing"])
 
-# Two seasons carry play-by-play and are backtestable (2024, 2025); prior-season
-# backfills add box scores only and are not counted here.
-check(G, "two full-ingest seasons present", """
+# A floor on backtestable history, not a census. Prior-season backfills add box
+# scores only and are not counted here, and the season being PLAYED joins `plays`
+# the moment its first game is ingested. Pinned at == 2 this went red on
+# 2026-08-30, when opening weekend landed and made the count 3.
+check(G, "at least two full-ingest seasons present", """
     select count(distinct season) as seasons from plays
-""", lambda r: r["seasons"] == 2, ["seasons"])
+""", lambda r: r["seasons"] >= 2, ["seasons"])
 
 check(G, "at least one prior season supplies prior-year features", """
     select count(distinct s.season) as seasons
@@ -653,12 +655,18 @@ check(G, "displayed conferences still flagged", """
 # Weather is ingested per season alongside play-by-play, so a box-score-only
 # prior season legitimately has none. Scoped to the seasons that were loaded in
 # full, where a gap really would be a gap.
-check(G, "weather covers >95% of full-ingest games", """
+#
+# COMPLETED games only. An unplayed game has no observed weather to record and
+# may sit beyond Open-Meteo's ~15-day forecast horizon, so counting it scores the
+# calendar rather than the ingest. When 2026 joined `plays` with 8 games played
+# and 880 still to come, this read 20.7% against a pipeline that had not changed.
+check(G, "weather covers >95% of completed full-ingest games", """
     with full_seasons as (select distinct season from plays)
     select round(100.0*count(distinct w.game_id)/count(distinct g.id),1) as pct
       from games g
       join full_seasons f on f.season = g.season
       left join game_weather w on w.game_id=g.id
+     where g.completed
 """, lambda r: float(r["pct"]) > 95, ["pct"])
 
 # =============================================================================
@@ -1150,10 +1158,18 @@ check(G, "no run is stranded in 'running'", """
 # specifically so its raw predictions can be audited below — and any of them can
 # be the most recent row. What must be true is that the report handed to the
 # client came from a walk over every season we can actually walk.
-check(G, "a backtest covered every ingested play-by-play season", """
+#
+# The season being PLAYED is excluded. It joins `plays` on its first ingest and
+# cannot be walked until it finishes, so counting it demands a backtest that
+# could not exist. `current_season` is the single source of truth for which one
+# that is; rolling it forward at season's end makes that season required here,
+# which is exactly when the walk should be re-run.
+check(G, "a backtest covered every finished play-by-play season", """
     with ingested as (
       select array_agg(distinct season order by season)::smallint[] as seasons
-        from plays)
+        from plays
+       where season <> (select (value #>> '{}')::smallint
+                          from app_config where key = 'current_season'))
     select (select seasons from ingested) as ingested,
            (select max(created_at) from backtests b, ingested i
              where b.seasons = i.seasons) as covered_at

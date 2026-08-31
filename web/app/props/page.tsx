@@ -21,6 +21,7 @@ import {
 } from "@/lib/core/board-params";
 import { offenseOnBoard } from "@/lib/core/board-scope";
 import { findSlateDay, slateDays } from "@/lib/core/slate-days";
+import { kickoffCutoff, playedCount, upcomingGames } from "@/lib/core/kickoff";
 import {
   groupIntoCards,
   lineCoverage,
@@ -103,7 +104,13 @@ export default async function Home({
   // one — otherwise the board would read one week and label itself another.
   const resolved = { ...params, season: active.season, week: active.week };
 
+  // ONE instant for every read this render fires, so the rows, the counts and
+  // the day pills cannot be measured against three different clocks across a
+  // kickoff. See `lib/core/kickoff.ts`.
+  const cutoff = kickoffCutoff();
+
   const filters: BoardFilters = {
+    kickoffCutoff: cutoff,
     season: active.season,
     week: active.week,
     marketKey: resolved.market,
@@ -122,7 +129,9 @@ export default async function Home({
   const view = resolveBoardView(resolved);
 
   const [counts, games, ratings] = await Promise.all([
-    getBoardCounts(active.season, active.week, config.edgeThreshold),
+    getBoardCounts(active.season, active.week, config.edgeThreshold, {
+      kickoffCutoff: cutoff,
+    }),
     getSlateGames(active.season, active.week),
     // Pinned to as_of_week = the week on screen, never "the latest": a rating
     // from a later cutoff knows results the reader is being asked to predict.
@@ -134,7 +143,14 @@ export default async function Home({
   // to undefined — all days — and `dayParams` carries the resolved value rather
   // than the requested one, so a stale link corrects itself in the strip
   // instead of leaving a pill highlighted that filters nothing.
-  const days = slateDays(games);
+  // DERIVED FROM THE GAMES STILL TO KICK, not from the week. A pill for a day
+  // whose games are all played would filter the board to nothing and read as a
+  // fault; the board itself has already dropped those rows. Same rule the
+  // conference filter follows on Analyze Games — the strip describes the slate
+  // being looked at, not the calendar.
+  const live = upcomingGames(games, cutoff);
+  const played = playedCount(games, cutoff);
+  const days = slateDays(live);
   const activeDay = findSlateDay(days, resolved.day);
   const dayParams = { ...resolved, day: activeDay?.key };
   const boardFilters: BoardFilters = activeDay
@@ -177,7 +193,7 @@ export default async function Home({
   // displayed conferences rather than every FBS offense, because that is what
   // the board itself falls back to — see `lib/core/board-scope.ts` for the 17
   // dead links that came of the two disagreeing.
-  const targets = buildWeeklyTargets(games, ratings, {
+  const targets = buildWeeklyTargets(live, ratings, {
     includeOffense: (teamId) =>
       offenseOnBoard(teamDirectory.get(teamId), resolved.conference),
   });
@@ -188,7 +204,7 @@ export default async function Home({
   // of the first eight games in this dropdown returned an empty board. EITHER
   // side qualifying is enough, since a game with one displayed team still shows
   // that team's players.
-  const selectableGames = games.filter(
+  const selectableGames = live.filter(
     (game) =>
       offenseOnBoard(teamDirectory.get(game.homeTeamId), resolved.conference) ||
       offenseOnBoard(teamDirectory.get(game.awayTeamId), resolved.conference),
@@ -231,6 +247,23 @@ export default async function Home({
         activeDay={activeDay?.key}
         params={dayParams}
       />
+
+      {played > 0 ? (
+        <p className="text-dim border-border-subtle rounded-xl border px-3 py-2 text-xs">
+          <span className="text-muted font-bold uppercase tracking-label">
+            Already played
+          </span>{" "}
+          — {formatCount(played)}{" "}
+          {played === 1 ? "game has" : "games have"} kicked off this week and{" "}
+          {played === 1 ? "is" : "are"}{" "}
+          {/* Explicit, not a literal space. A space that follows an expression
+              OPENING a line is dropped by the JSX transform — the same defect
+              that once rendered "confidenceis" on the home page. */}
+          no longer listed. Those props are settled, so they are results rather
+          than plays; a player&rsquo;s own page still shows how each one
+          finished.
+        </p>
+      ) : null}
 
       <BoardControls
         params={resolved}

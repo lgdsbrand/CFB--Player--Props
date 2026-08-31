@@ -16,6 +16,7 @@ import {
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount } from "@/lib/core/format";
 import { POSITION_GROUPS, type PositionGroup } from "@/lib/core/types";
+import { kickoffCutoff } from "@/lib/core/kickoff";
 import { getCheatSheet, getCheatSheetContext } from "@/lib/data/cheat-sheet";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
 
@@ -80,11 +81,14 @@ export default async function CheatSheets({
     ? params.hitRateWindow
     : DEFAULT_CHEAT_WINDOW;
 
+  const cutoff = kickoffCutoff();
+
   const page = await getCheatSheet({
     season: active.season,
     week: active.week,
     windowSize,
     positionGroup: params.position,
+    kickoffCutoff: cutoff,
   });
 
   const sections = cheatSections(page.rows);
@@ -93,7 +97,7 @@ export default async function CheatSheets({
   // Only when there is nothing to show. Each of these counts is another full
   // grading pass over the week, and on a populated sheet nothing needs them.
   const context = empty
-    ? await getCheatSheetContext(active.season, active.week)
+    ? await getCheatSheetContext(active.season, active.week, cutoff)
     : null;
 
   const href = (changes: {

@@ -18,7 +18,12 @@ import { parseLadder } from "@/lib/core/ladder-view";
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { BetSide, BoardRow, PositionGroup } from "@/lib/core/types";
 import { SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
-import { type DbRow, MAX_ROWS_PER_REQUEST, unwrap } from "@/lib/data/query";
+import {
+  type DbRow,
+  MAX_ROWS_PER_REQUEST,
+  unwrap,
+  upcomingOnly,
+} from "@/lib/data/query";
 
 /**
  * The sort switch lives in the core (`lib/core/board-view.ts`) because the
@@ -73,6 +78,19 @@ export type BoardFilters = {
   minOpponentRank?: number;
   /** Only rows that have a book line attached. */
   withBookLineOnly?: boolean;
+
+  /**
+   * Hide games that have already kicked off, measured against this instant.
+   *
+   * PUSHED INTO THE QUERY like every other filter, and for the same reason: a
+   * week holds ~6,000 rows against a 1,000-row response cap, so filtering after
+   * the fetch would drop played games out of an arbitrary truncation of the
+   * week and silently show the wrong players. See `lib/core/kickoff.ts`.
+   *
+   * Undefined means no cut, which is what the player detail read wants — a
+   * player's own page is history and must keep the games this hides.
+   */
+  kickoffCutoff?: Date;
 
   sort?: BoardSort;
   limit?: number;
@@ -146,6 +164,11 @@ function buildBoardQuery(
   // could from a caller building filters by hand, and `.in` on an empty list
   // correctly returns nothing rather than everything.
   if (filters.gameIds) query = query.in("game_id", filters.gameIds);
+  // A settled prop is not a bet. Applied before the conference narrowing so it
+  // is part of every count the page prints, not just the rows it lists.
+  if (filters.kickoffCutoff) {
+    query = query.or(upcomingOnly(filters.kickoffCutoff));
+  }
   if (filters.conferenceName) {
     query = query.eq("conference_name", filters.conferenceName);
   } else if (filters.displayedConferencesOnly !== false) {
@@ -488,19 +511,27 @@ export async function getBoardCounts(
   season: number,
   week: number,
   edgeThreshold: number,
-  { displayedConferencesOnly = true }: { displayedConferencesOnly?: boolean } = {},
+  {
+    displayedConferencesOnly = true,
+    kickoffCutoff,
+  }: { displayedConferencesOnly?: boolean; kickoffCutoff?: Date } = {},
 ): Promise<BoardCounts> {
   const supabase = createServerSupabaseClient();
 
   const base = () => {
-    const query = supabase
+    let query = supabase
       .from("v_board_rows")
       .select("projection_id", { count: "exact", head: true })
       .eq("season", season)
       .eq("week", week);
-    return displayedConferencesOnly
-      ? query.eq("conference_is_displayed", true)
-      : query;
+    if (displayedConferencesOnly) {
+      query = query.eq("conference_is_displayed", true);
+    }
+    // Counted under the same cut the board lists under. These numbers feed the
+    // pricing banners, and a banner counting settled rows would describe a
+    // market the reader cannot see.
+    if (kickoffCutoff) query = query.or(upcomingOnly(kickoffCutoff));
+    return query;
   };
 
   const [all, withCall, withBookLine, withDevLine, withEvenBookPrice, overThreshold] =

@@ -24,15 +24,20 @@ import {
 import { DEFAULT_SPORT } from "@/lib/core/sport";
 import type { HomeCounts } from "@/lib/core/home-view";
 import { SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
+import { upcomingOnly } from "@/lib/data/query";
 
 export async function getHomeCounts(
   season: number,
   week: number,
   edgeThreshold: number,
   games: number,
+  kickoffCutoff: Date,
 ): Promise<HomeCounts> {
   const supabase = createServerSupabaseClient();
 
+  // Every tile promises what its destination shows, and the destination hides
+  // games that have kicked off — so these count under the same cut or the tile
+  // lies. On 2026 week 1 the difference is 247 rows.
   const base = () =>
     supabase
       .from("v_board_rows")
@@ -40,7 +45,8 @@ export async function getHomeCounts(
       .eq("sport", DEFAULT_SPORT)
       .eq("season", season)
       .eq("week", week)
-      .eq("conference_is_displayed", true);
+      .eq("conference_is_displayed", true)
+      .or(upcomingOnly(kickoffCutoff));
 
   /**
    * The cheat-sheet tile's number, counted exactly as `getCheatSheet` selects
@@ -64,7 +70,8 @@ export async function getHomeCounts(
     .eq("conference_is_displayed", true)
     .gte("hit_rate", CHEAT_TIERS[CHEAT_TIERS.length - 1].min)
     .gte("decided", minDecidedFor(DEFAULT_CHEAT_WINDOW))
-    .or("is_binary.eq.false,hit_side.eq.over");
+    .or("is_binary.eq.false,hit_side.eq.over")
+    .or(upcomingOnly(kickoffCutoff));
 
   const [props, calls, edges, developmentLine, bookLine, sheet] = await Promise.all(
     [

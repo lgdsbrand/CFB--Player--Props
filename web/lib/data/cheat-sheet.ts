@@ -21,7 +21,13 @@
 import { minDecidedFor, type CheatSheetRow } from "@/lib/core/cheat-sheet";
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { BetSide, PositionGroup } from "@/lib/core/types";
-import { type DbRow, MAX_ROWS_PER_REQUEST, num, unwrap } from "@/lib/data/query";
+import {
+  type DbRow,
+  MAX_ROWS_PER_REQUEST,
+  num,
+  unwrap,
+  upcomingOnly,
+} from "@/lib/data/query";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 const COLUMNS =
@@ -61,6 +67,8 @@ export type CheatSheetFilters = {
   positionGroup?: PositionGroup;
   /** The floor to read at. Defaults to the lowest tier the page shows. */
   minHitRate?: number;
+  /** Hide entries whose game has kicked off. See `lib/core/kickoff.ts`. */
+  kickoffCutoff?: Date;
 };
 
 export async function getCheatSheet(
@@ -87,6 +95,13 @@ export async function getCheatSheet(
     // is not a play. Stated in `qualifies`; this is the same rule as a
     // predicate, because the row cap makes it wrong to apply it afterwards.
     .or("is_binary.eq.false,hit_side.eq.over");
+
+  // A streak against a line that has already been settled is a result, not a
+  // play. Same cut as the board, so a sheet entry always has a board row behind
+  // it — see `lib/core/kickoff.ts`.
+  if (filters.kickoffCutoff) {
+    query = query.or(upcomingOnly(filters.kickoffCutoff));
+  }
 
   if (filters.positionGroup) {
     query = query.eq("position_group", filters.positionGroup);
@@ -130,6 +145,7 @@ export async function getCheatSheet(
 export async function getCheatSheetContext(
   season: number,
   week: number,
+  kickoffCutoff: Date,
 ): Promise<{ pricedProps: number; playedGames: number }> {
   const supabase = createServerSupabaseClient();
 
@@ -141,7 +157,8 @@ export async function getCheatSheetContext(
       .eq("season", season)
       .eq("week", week)
       .eq("conference_is_displayed", true)
-      .not("line", "is", null),
+      .not("line", "is", null)
+      .or(upcomingOnly(kickoffCutoff)),
     // Strictly earlier weeks, matching what the grading may look at. A box
     // score from the week being predicted is not material a hit rate may use.
     supabase

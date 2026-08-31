@@ -24,6 +24,7 @@ import { getDefenseRatings } from "@/lib/data/defense";
 import { getSlateGames } from "@/lib/data/games";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
 import { getTeamDirectory } from "@/lib/data/teams";
+import { kickoffCutoff, playedCount, upcomingGames } from "@/lib/core/kickoff";
 import { getSlateConditions } from "@/lib/data/weather";
 
 /**
@@ -99,11 +100,17 @@ export default async function Games({
   // concludes the DATA is missing rather than the filter. Either side
   // qualifying is enough — a game with one displayed team still shows that
   // team's players.
-  const inConference = games.filter(
+  // AND STILL TO KICK. A game that has been played carries a final score and
+  // a settled set of props, so listing it here offers the reader a card whose
+  // every number is a result rather than a prediction. See `lib/core/kickoff.ts`
+  // for why this is keyed on kickoff and not on `completed`.
+  const cutoff = kickoffCutoff();
+  const inConference = upcomingGames(games, cutoff).filter(
     (game) =>
       offenseOnBoard(teamDirectory.get(game.homeTeamId), params.conference) ||
       offenseOnBoard(teamDirectory.get(game.awayTeamId), params.conference),
   );
+  const played = playedCount(games, cutoff);
 
   // THE DAYS COME FROM THE GAMES THAT SURVIVED THE CONFERENCE FILTER, not from
   // the whole slate — the one decision in this block that could have gone the
@@ -188,8 +195,30 @@ export default async function Games({
         ))}
       </div>
 
+      {played > 0 ? (
+        <p className="text-dim border-border-subtle rounded-xl border px-3 py-2 text-xs">
+          <span className="text-muted font-bold uppercase tracking-label">
+            Already played
+          </span>{" "}
+          — {formatCount(played)}{" "}
+          {played === 1 ? "game has" : "games have"} kicked off this week and{" "}
+          {played === 1 ? "is" : "are"}{" "}
+          {/* Explicit, not a literal space. A space that follows an expression
+              OPENING a line is dropped by the JSX transform — the same defect
+              that once rendered "confidenceis" on the home page. */}
+          no longer listed. Those props are settled, so they are results rather
+          than plays; a player&rsquo;s own page still shows how each one
+          finished.
+        </p>
+      ) : null}
+
       <p className="text-muted text-xs">
-        {formatCount(shown.length)} of {formatCount(games.length)} games —{" "}
+        {/* Denominator is the games STILL TO KICK, not the whole week. Against
+            the full slate this line would read "6 of 99" while the strip beside
+            it offered only the days those 6 fall on, which reads as an
+            off-by-one rather than as a filter. */}
+        {formatCount(shown.length)} of {formatCount(games.length - played)}{" "}
+        games —{" "}
         {narrowings.length === 0
           ? "the whole slate"
           : `those ${narrowings.join(" ")}`}

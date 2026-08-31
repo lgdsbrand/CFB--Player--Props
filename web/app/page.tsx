@@ -13,6 +13,7 @@ import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount, formatDateRange } from "@/lib/core/format";
 import { homeTiles, pricingNote, type HomeTile } from "@/lib/core/home-view";
 import { getAppConfig } from "@/lib/data/config";
+import { kickoffCutoff, upcomingGames } from "@/lib/core/kickoff";
 import { getSlateGames } from "@/lib/data/games";
 import { getHomeCounts } from "@/lib/data/home";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
@@ -74,7 +75,13 @@ export default async function Home({
     );
   }
 
-  const games = await getSlateGames(active.season, active.week);
+  const cutoff = kickoffCutoff();
+  // Counted over the games still to kick, matching every destination these
+  // tiles link to.
+  const games = upcomingGames(
+    await getSlateGames(active.season, active.week),
+    cutoff,
+  );
   const teamDirectory = await getTeamDirectory(
     active.season,
     games.flatMap((game) => [game.homeTeamId, game.awayTeamId]),
@@ -93,6 +100,7 @@ export default async function Home({
     active.week,
     config.edgeThreshold,
     listedGames,
+    cutoff,
   );
 
   const tiles = homeTiles(counts, {

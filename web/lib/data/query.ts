@@ -72,3 +72,24 @@ export function requireNum(value: unknown, column: string): number {
   }
   return parsed;
 }
+
+/**
+ * The PostgREST predicate for "this game has not kicked off yet".
+ *
+ * A STRING RATHER THAN A WRAPPER because the Supabase query builder's type
+ * changes with every chained call, so a helper taking and returning one either
+ * loses the row type or needs a generic per call site. The predicate itself is
+ * the thing worth writing once — see `lib/core/kickoff.ts` for why the rule is
+ * kickoff time and not `completed`.
+ *
+ * BOTH BRANCHES ARE LOAD-BEARING. `start_date.gte.X` alone would also drop
+ * every row whose kickoff is NULL, because SQL comparisons against null are
+ * never true — so a week's TBD games would silently vanish from the board, and
+ * the gap would look like an ingest fault rather than a filter.
+ *
+ * The timestamp is quoted: an ISO instant contains `:` and `+`, and PostgREST
+ * splits an `or` list on unquoted punctuation.
+ */
+export function upcomingOnly(cutoff: Date): string {
+  return `start_date.gte."${cutoff.toISOString()}",start_date.is.null`;
+}

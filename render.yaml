@@ -207,6 +207,45 @@ services:
     envVars:
       - fromGroup: cfb-props-worker
 
+  # Daily 12:30 UTC. THE SECOND HALF OF THE ODDS PIPELINE — without it the cron
+  # above captures lines that nobody ever sees.
+  #
+  # `ingest_odds` writes `player_prop_lines` and nothing else. The board reads
+  # the line, the two-way price and the edge from `picks`, which only
+  # `run_projections` writes, and `v_board_rows` takes those columns off the
+  # PICK rather than joining the line table (migration 0043). So a captured line
+  # is invisible until projections run again.
+  #
+  # Until 2026-09-04 the only scheduled run was the Tuesday `--all-weeks` below,
+  # and the gap was measured that morning: 8,989 of week 1's 10,866 captured
+  # lines had no pick attached, and the live board on the Friday before a
+  # Saturday slate was quoting a capture 23 hours old. College books post props
+  # Thursday or Friday (CLAUDE.md §7) — precisely the days the weekly schedule
+  # could not reach.
+  #
+  # `--current-week`, not `--all-weeks`: the weekly run projects every week the
+  # schedule contains, which is far too much to repeat daily and mostly weeks
+  # nobody can bet yet. This one narrows to weeks with a game kicking off in the
+  # next 8 days, and exits 0 — recording the run — when nothing is live.
+  #
+  # WHY 12:30 AND NOT EARLIER. It must land after an odds capture (00/06/12/18)
+  # and after the days that ingest ahead of it. Worst observed durations on
+  # production: ingest_odds 157s, ingest_weather 2,486s, run_projections 197s.
+  # 12:30 is 30 minutes after the 12:00 capture — 11x the worst case — and sits
+  # after Sunday's 09:00 ingest-week, the 10:00 game lines and the 11:00
+  # weather, while still finishing comfortably before the 13:00 audit reads it.
+  # On a Saturday that is 08:30 Eastern, hours before any kickoff.
+  - type: cron
+    name: cfb-props-project-current
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "30 12 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.run_projections --current-week
+    envVars:
+      - fromGroup: cfb-props-worker
+
   # Daily 10:00 UTC. Game spreads and totals for the card (CLAUDE.md §7), from
   # CFBD rather than the metered odds provider — this costs ZERO Odds API
   # credits and must not be confused with `cfb-props-odds-refresh` above, which

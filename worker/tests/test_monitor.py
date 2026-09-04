@@ -50,6 +50,15 @@ def _scheduled_jobs() -> dict[str, str]:
     dependency, and CLAUDE.md §0 requires a justification for adding one. The
     file is ours and its shape is stable, and a parse that finds nothing fails
     the tests below rather than passing vacuously.
+
+    A MODULE MAY BE SCHEDULED MORE THAN ONCE, and the FREQUENT one is the one
+    that matters here. `run_projections` runs weekly as `--all-weeks` and daily
+    as `--current-week`; a plain `found[module] = ...` would keep whichever
+    block happened to come last in the file, so reordering two services — a
+    cosmetic edit — would silently change what the staleness assertions check.
+    Keeping the shortest period makes the check independent of file order, and
+    it is the correct one to test `max_age_hours` against: the monitor should
+    notice when the *most frequent* run stops.
     """
     text = RENDER_YAML.read_text(encoding="utf-8")
     blocks = text.split("- type: cron")[1:]
@@ -58,8 +67,13 @@ def _scheduled_jobs() -> dict[str, str]:
     for block in blocks:
         schedule = re.search(r'^\s*schedule:\s*"([^"]+)"', block, re.MULTILINE)
         assert schedule, "a cron service in render.yaml has no schedule"
+        expression = schedule.group(1)
         for module in re.findall(r"python -m worker\.jobs\.(\w+)", block):
-            found[module] = schedule.group(1)
+            existing = found.get(module)
+            if existing is None or _cron_period_hours(expression) < _cron_period_hours(
+                existing
+            ):
+                found[module] = expression
     return found
 
 

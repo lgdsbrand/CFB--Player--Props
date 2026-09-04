@@ -34,7 +34,11 @@ psycopg = pytest.importorskip("psycopg")
 from psycopg.rows import dict_row  # noqa: E402
 
 from worker.config import ConfigError, get_settings  # noqa: E402
-from worker.jobs.run_projections import projectable_weeks  # noqa: E402
+from worker.jobs.run_projections import (  # noqa: E402
+    LIVE_WEEK_HORIZON_DAYS,
+    live_weeks,
+    projectable_weeks,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -140,3 +144,101 @@ def test_every_scheduled_regular_week_is_offered(conn, season_with_a_schedule):
         ).fetchall()
     }
     assert set(projectable_weeks(season_with_a_schedule)) == expected
+
+
+# -----------------------------------------------------------------------------
+# live_weeks — what the daily cron re-prices
+# -----------------------------------------------------------------------------
+# These derive their expectation from `games` rather than restating the query,
+# for the same reason the tests above do. The property that matters is not "the
+# SQL is the SQL" but "a week nobody can still bet never gets re-priced, and a
+# week they can always does".
+
+
+@pytest.fixture
+def season_with_upcoming_games(conn):
+    row = conn.execute(
+        """
+        select season from games
+         where season_type = 'regular' and start_date > now()
+         group by season
+         order by season desc
+         limit 1
+        """
+    ).fetchone()
+    if not row:
+        pytest.skip("no unplayed regular-season games — nothing is live")
+    return int(row["season"])
+
+
+def test_live_weeks_are_a_subset_of_projectable_weeks(season_with_upcoming_games):
+    """The daily run must never publish something the weekly run would not.
+
+    `--current-week` narrows the population; it does not widen it. If this ever
+    fails, the two crons disagree about what belongs on the board and which one
+    ran last decides what a reader sees.
+    """
+    season = season_with_upcoming_games
+    assert set(live_weeks(season)) <= set(projectable_weeks(season))
+
+
+def test_every_live_week_still_has_a_game_to_play(conn, season_with_upcoming_games):
+    """A week whose games have all kicked is finished, and re-pricing it would
+    put closed markets back on the board."""
+    season = season_with_upcoming_games
+    for week in live_weeks(season):
+        row = conn.execute(
+            """
+            select count(*) as n from games
+             where season = %(season)s and week = %(week)s
+               and season_type = 'regular' and start_date > now()
+            """,
+            {"season": season, "week": week},
+        ).fetchone()
+        assert int(row["n"]) > 0, f"week {week} is live but has no unplayed game"
+
+
+def test_live_weeks_excludes_games_beyond_the_horizon(conn, season_with_upcoming_games):
+    """The horizon is the point of the flag — without it this is --all-weeks.
+
+    Derived from the data rather than asserted as a week number, because which
+    weeks are near depends entirely on when the suite runs.
+    """
+    season = season_with_upcoming_games
+    beyond = {
+        int(r["week"])
+        for r in conn.execute(
+            """
+            select distinct week from games
+             where season = %(season)s and season_type = 'regular'
+             group by week
+            having min(start_date) > now() + make_interval(days => %(days)s)
+            """,
+            {"season": season, "days": LIVE_WEEK_HORIZON_DAYS},
+        ).fetchall()
+    }
+    assert set(live_weeks(season)).isdisjoint(beyond), (
+        "a week whose earliest game is past the horizon was returned"
+    )
+
+
+def test_a_wider_horizon_never_returns_less(season_with_upcoming_games):
+    """Monotonicity — cheap, and it catches an inverted comparison.
+
+    A `>` written where `<` belonged would still return plausible-looking weeks
+    on any single run, and this is the property that notices.
+    """
+    season = season_with_upcoming_games
+    near = set(live_weeks(season, horizon_days=1))
+    far = set(live_weeks(season, horizon_days=60))
+    assert near <= far
+
+
+def test_the_horizon_covers_the_following_weekend(season_with_upcoming_games):
+    """Eight days, not seven, and the reason is the late-line behaviour.
+
+    College books post props Thursday or Friday (CLAUDE.md §7). A seven-day
+    window evaluated on a Friday ends the following Friday, dropping the next
+    weekend on the very day its lines first appear.
+    """
+    assert LIVE_WEEK_HORIZON_DAYS >= 8

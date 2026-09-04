@@ -2,6 +2,7 @@
 
     python -m worker.jobs.run_projections --season 2025 --weeks 10
     python -m worker.jobs.run_projections --season 2025 --all-weeks
+    python -m worker.jobs.run_projections --current-week
     python -m worker.jobs.run_projections --season 2025 --weeks 10 --dry-run
 
 Phase 3 produced a validated model and never persisted a single projection —
@@ -148,6 +149,58 @@ def projectable_weeks(season: int) -> list[int]:
             " where season = %s and season_type = 'regular' "
             " order by week",
             (season,),
+        )
+    ]
+
+
+# How far ahead --current-week looks. Eight days rather than seven so the run
+# always covers the coming Saturday AND the one after it starts being priced:
+# college books post props Thursday or Friday (CLAUDE.md §7), and a seven-day
+# window run on a Friday would drop the following weekend on the day its lines
+# first appear.
+LIVE_WEEK_HORIZON_DAYS = 8
+
+
+def live_weeks(season: int, horizon_days: int = LIVE_WEEK_HORIZON_DAYS) -> list[int]:
+    """Regular-season weeks with a game that has not kicked off yet, near-term.
+
+    THIS EXISTS BECAUSE A CAPTURED LINE IS NOT A BOARD ROW. `ingest_odds` writes
+    `player_prop_lines` and nothing else; `picks` — which is where the board
+    actually reads the line, the price and the edge from — is written only here.
+    Until 2026-09-04 the only scheduled run was `--all-weeks` on Tuesdays, so
+    every line a book posted Wednesday through Monday sat unpriced until the
+    following Tuesday. Measured that morning: 8,989 of week 1's 10,866 lines had
+    no pick attached, and the live board was quoting a capture 23 hours old on
+    the Friday before a Saturday slate.
+
+    `--all-weeks` cannot just be moved to a daily schedule — it projects every
+    week the schedule contains, most of which nobody can bet yet. This narrows
+    the daily run to the weeks a reader can actually act on, and the Tuesday
+    `--all-weeks` still does the full refresh.
+
+    AN EMPTY RESULT IS NORMAL, NOT A FAILURE. In the off-season, and in any gap
+    longer than the horizon, there is legitimately nothing live. The caller must
+    exit 0 on empty — a daily cron that goes red all through February trains
+    everyone to ignore the alert that matters (`monitor_pipeline` forwards
+    failures).
+    """
+    return [
+        int(r["week"])
+        for r in fetch_all(
+            # Regular season only, matching `projectable_weeks` — bowls are a
+            # different regime and are deliberately off the board.
+            #
+            # `start_date > now()` and not "the current week": a CFBD week spans
+            # 9-10 days and its games do not all kick together, so a week is
+            # live while ANY of it is unplayed. Weeks whose games have all
+            # kicked drop out on their own, which is the same rule the board
+            # uses to stop showing played games.
+            "select distinct week from games "
+            " where season = %s and season_type = 'regular' "
+            "   and start_date > now() "
+            "   and start_date < now() + make_interval(days => %s) "
+            " order by week",
+            (season, horizon_days),
         )
     ]
 
@@ -783,6 +836,13 @@ def main(argv: list[str] | None = None) -> int:
         "--all-weeks", action="store_true", help="Every projectable week of the season."
     )
     parser.add_argument(
+        "--current-week", action="store_true",
+        help=f"Only weeks with a game kicking off in the next "
+             f"{LIVE_WEEK_HORIZON_DAYS} days. For the daily cron that keeps the "
+             f"live board's lines and prices fresh between the weekly "
+             f"--all-weeks run. Exits 0 when nothing is live.",
+    )
+    parser.add_argument(
         "--backtest-id",
         help="Take calibration from a specific backtest instead of the latest.",
     )
@@ -865,10 +925,33 @@ def main(argv: list[str] | None = None) -> int:
         season = resolve_season(args.season)
         if args.all_weeks:
             weeks = projectable_weeks(season)
+        elif args.current_week:
+            weeks = live_weeks(season)
+            if not weeks:
+                # NOT an error. See `live_weeks` — a schedule gap longer than
+                # the horizon legitimately has nothing live, and a daily cron
+                # that fails every day until August is an alert nobody reads by
+                # the time it matters.
+                #
+                # BUT IT IS STILL RECORDED. `monitor_pipeline` measures
+                # staleness from the last SUCCEEDED run, so returning here
+                # without a row would make a job that is working perfectly look
+                # like one that has stopped — the same false signal in the
+                # other direction. A run that correctly did nothing did run.
+                with pipeline_run(
+                    JOB_NAME,
+                    metadata={"season": season, "weeks": [], "skipped": "no live week"},
+                ):
+                    log.info(
+                        "%s: no game kicks off in the next %d days, so there is "
+                        "no live week to re-price. Nothing to do.",
+                        season, LIVE_WEEK_HORIZON_DAYS,
+                    )
+                return 0
         elif args.weeks:
             weeks = sorted(args.weeks)
         else:
-            log.error("Give --weeks N [N ...] or --all-weeks.")
+            log.error("Give --weeks N [N ...], --current-week or --all-weeks.")
             return 2
         if not weeks:
             log.error("No projectable weeks in %s.", season)

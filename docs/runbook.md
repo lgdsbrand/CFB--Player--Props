@@ -353,13 +353,31 @@ forecast.
 panel its detail and the model a small feature, while the board, the calls and
 the confidences all stand without it.
 
-#### `run_projections` — Tuesday 09:00 UTC
+#### `run_projections` — daily 12:30 UTC, and Tuesday 09:00 UTC
 
 ```bash
-python -m worker.jobs.run_projections --all-weeks              # what the cron runs
+python -m worker.jobs.run_projections --current-week            # the daily cron
+python -m worker.jobs.run_projections --all-weeks               # the Tuesday cron
 python -m worker.jobs.run_projections --season 2025 --weeks 10
 python -m worker.jobs.run_projections --season 2025 --weeks 10 --dry-run
 ```
+
+**Two schedules, and the daily one is half of the odds pipeline.** `ingest_odds`
+writes `player_prop_lines` and nothing else; the board reads the line, the price
+and the edge from `picks`, which only this job writes, and `v_board_rows` takes
+those columns off the pick rather than joining the line table. **A captured line
+is invisible until this runs again.** Until 2026-09-04 the Tuesday run was the
+only one, and the gap was measured that morning: 8,989 of week 1's 10,866
+captured lines had no pick attached, and the Friday board before a Saturday slate
+was quoting a 23-hour-old capture. College books post props Thursday or Friday,
+which is exactly what a weekly schedule cannot reach.
+
+`--current-week` projects only weeks with a game kicking off in the next 8 days
+(`LIVE_WEEK_HORIZON_DAYS`), because `--all-weeks` covers weeks nobody can bet yet
+and is too heavy to repeat daily. When nothing is live it logs, records a
+succeeded `pipeline_runs` row with `skipped: no live week`, and exits 0 — the row
+matters, because `monitor_pipeline` measures staleness from the last success and
+would otherwise read a correctly idle job as a stopped one.
 
 Writes `projections` (one distribution per player-market, **always**) and `picks`
 (the over/under call, **only where a line exists to call against**). Also writes
@@ -1003,11 +1021,17 @@ Nothing here needs a human when it is working. The sequence a normal week runs:
 | When (UTC) | What | Result |
 |---|---|---|
 | Sun 09:00 | reference → stats → ratings → splits | last week's games ingested, splits rebuilt |
-| Tue 09:00 | `run_projections --all-weeks` | the board has this week's rows, most without calls |
+| Tue 09:00 | `run_projections --all-weeks` | every week of the season re-projected |
 | Wed 14:00 | `generate_ai_reads` | one cached read per player |
-| daily, every 6h | `ingest_odds` | calls and edges fill in as books post |
+| every 6h (00/06/12/18) | `ingest_odds` | book lines captured into `player_prop_lines` — **no calls or edges yet** |
+| daily 12:30 | `run_projections --current-week` | the captured lines become priced picks; calls and edges appear on the board |
 | daily 12:00 / 13:00 | `healthcheck`, `audit_data` | canaries |
 | every 6h | `monitor_pipeline` | says something when the above stops |
+
+**The odds pair is one pipeline in two halves.** Capturing a line and pricing it
+are different jobs on different schedules, and the board only ever shows the
+second one's output. If lines are landing but the board looks stale, check
+`run_projections` before suspecting the odds provider.
 
 The one thing a human still does deliberately is re-run `run_backtest` when the
 model changes — and then `run_projections`, in that order.

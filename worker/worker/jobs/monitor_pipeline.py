@@ -121,9 +121,13 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
     ),
     JobExpectation(
         name="run_projections",
-        max_age_hours=200,
+        max_age_hours=36,
         severity="critical",
-        note="Tuesday 09:00 UTC — without this the board has nothing on it",
+        note="daily 12:30 UTC (--current-week) plus Tuesday 09:00 (--all-weeks) "
+             "— without this the board has nothing on it, and since 2026-09-04 "
+             "it is also the only thing that turns a captured line into a "
+             "priced pick. Was 200h when the Tuesday run was the only one; 36h "
+             "allows one missed daily run and no more.",
     ),
     JobExpectation(
         name="ingest_odds",

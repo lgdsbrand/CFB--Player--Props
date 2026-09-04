@@ -338,7 +338,9 @@ class TestMissingKeyDiagnosis:
 
     def _raise(self, monkeypatch):
         monkeypatch.setattr(
-            ingest_odds, "get_settings", lambda: _settings_free(odds_api_key=None, odds_api_key_free=None)
+            ingest_odds,
+            "get_settings",
+            lambda: _settings_free(odds_api_key=None, odds_api_key_free=None),
         )
         with pytest.raises(ConfigError) as excinfo:
             ingest_odds.run(

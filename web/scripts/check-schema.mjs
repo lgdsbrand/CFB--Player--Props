@@ -124,6 +124,28 @@ const EXPECTED = {
     "conference_name", "conference_is_displayed", "window_size", "decided",
     "pushes", "hits", "hit_side", "hit_rate",
   ],
+  // The no-vig page (migration 0048). Book grain: one row per quote, so the
+  // comparison columns (books_at_line, consensus_delta_abs, is_best_*) are as
+  // load-bearing as the prices and are all listed.
+  v_no_vig_rows: [
+    "line_id", "sport", "season", "week", "game_id", "start_date", "player_id",
+    "player_name", "position_group", "team_id", "team_school",
+    "team_abbreviation", "team_color", "team_alt_color", "is_home",
+    "opponent_school", "opponent_abbreviation", "conference_name",
+    "conference_is_displayed", "market_key", "market_label", "market_emoji",
+    "line", "sportsbook_key", "sportsbook_name", "over_price", "under_price",
+    "hold", "fair_prob_over", "fair_prob_under", "fair_price_over",
+    "fair_price_under", "books_at_line", "books_on_market", "lines_on_market",
+    "consensus_prob_over", "line_prob_over_min", "line_prob_over_max",
+    "consensus_delta_abs", "is_best_over", "is_best_under", "captured_at",
+  ],
+  // The market filter's counts. `is_upcoming` and `conference_is_displayed` are
+  // filtered on, never selected — a predicate on a column anon cannot see fails
+  // exactly like a missing select column.
+  v_no_vig_markets: [
+    "market_key", "market_label", "quotes",
+    "sport", "season", "week", "conference_is_displayed", "is_upcoming",
+  ],
   v_slate_games: [
     "game_id", "sport", "season", "week", "start_date", "start_time_tbd",
     "neutral_site", "completed", "home_points", "away_points",

@@ -23,6 +23,7 @@ export function SiteHeader({ activeHref = "/" }: { activeHref?: string }) {
     { href: BOARD_PATH, label: "Props" },
     { href: "/games", label: "Games" },
     { href: "/cheat-sheets", label: "Sheets" },
+    { href: "/no-vig", label: "No-Vig" },
   ];
 
   return (

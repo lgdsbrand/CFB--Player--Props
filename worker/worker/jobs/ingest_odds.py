@@ -54,7 +54,7 @@ from worker.adapters.odds import (
 from worker.adapters.odds.markets import OUR_KEY_TO_PROVIDER
 from worker.adapters.odds.null import ADAPTER_NAME as NULL_ADAPTER_NAME
 from worker.adapters.odds.theoddsapi import ADAPTER_NAME as THEODDSAPI_ADAPTER_NAME
-from worker.config import ConfigError, get_settings
+from worker.config import ConfigError, env_names_containing, get_settings
 from worker.core.name_match import (
     PlayerMatch,
     PlayerResolver,
@@ -448,10 +448,42 @@ def run(
         prefer_free = prefer_free or settings.odds_prefer_free
         key = settings.odds_key(prefer_free=prefer_free)
         if not key:
+            # SAY WHAT THE PROCESS CAN SEE, not only what it wanted. The bare
+            # message reads as "you never added the key" and is equally true
+            # when the key was added under the wrong name -- which is what
+            # actually happened on 2026-09-03 (`ODDS_API_VARIABLE`). Names
+            # only; see env_names_containing() for why that matters.
+            visible = env_names_containing("ODDS")
+            if "ODDS_API_KEY" in visible:
+                # `_optional` returns None for absent OR empty, so an empty
+                # value arrives here looking exactly like a missing one — while
+                # the dashboard shows a variable that is present and correct.
+                # Saying "misnamed" here would be actively false.
+                diagnosis = (
+                    " ODDS_API_KEY IS present in this environment, so its value "
+                    "must be empty or blank — an empty variable reads as unset. "
+                    "Re-enter the value rather than looking for a missing name."
+                )
+            elif visible:
+                diagnosis = (
+                    " Environment variables with 'ODDS' in the name that this "
+                    f"process CAN see: {', '.join(visible)}. None of them is "
+                    "ODDS_API_KEY, so the value is most likely set under the "
+                    "wrong name (names shown, never values)."
+                )
+            else:
+                diagnosis = (
+                    " No environment variable with 'ODDS' in the name is "
+                    "visible to this process at all, so the key is absent from "
+                    "this run's environment rather than misnamed. On Render a "
+                    "dashboard change reaches a SCHEDULED run only once the "
+                    "service redeploys; check render_git_commit in this row's "
+                    "metadata against the deploy you expect."
+                )
             raise ConfigError(
                 "ODDS_API_KEY is not set, but app_config.odds_adapter selects "
                 f"{adapter_name!r}. Set the key, or set the adapter to "
-                f"{NULL_ADAPTER_NAME!r} to run without lines."
+                f"{NULL_ADAPTER_NAME!r} to run without lines." + diagnosis
             )
         # Name the pool this run will bill. odds_key() falls back to the paid
         # key when --free is asked for and no free key is configured, so the

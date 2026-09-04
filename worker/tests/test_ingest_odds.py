@@ -11,12 +11,15 @@ No network, no database.
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from worker.config import ConfigError, Settings
+from worker.config import ConfigError, Settings, env_names_containing
 from worker.core.name_match import TeamResolver
+from worker.db import _deploy_marker
+from worker.jobs import ingest_odds
 from worker.jobs.ingest_odds import (
     KICKOFF_TOLERANCE_HOURS,
     IngestReport,
@@ -274,3 +277,137 @@ class TestFlagParsing:
         monkeypatch.setenv("ODDS_PREFER_FREE", raw)
         with pytest.raises(ConfigError):
             _flag("ODDS_PREFER_FREE")
+
+
+def _clear_odds_env(monkeypatch) -> None:
+    """Remove every ODDS-ish variable the ambient environment may hold.
+
+    `get_settings()` loads `.env`, so a developer's real ODDS_API_KEY can be in
+    `os.environ` by the time these run. Without this the "absent" case passes
+    or fails depending on whose machine it is.
+    """
+    for name in list(os.environ):
+        if "ODDS" in name.upper():
+            monkeypatch.delenv(name, raising=False)
+
+
+class TestEnvNearMissDetector:
+    """`env_names_containing` — names only, and that is the security property.
+
+    The failed-run error text is copied into the monitor's alert body and sent
+    to a webhook, so a value leaking through here leaves the system.
+    """
+
+    def test_finds_a_misnamed_variable(self, monkeypatch):
+        _clear_odds_env(monkeypatch)
+        monkeypatch.setenv("ODDS_API_VARIABLE", "super-secret-value")
+        assert env_names_containing("ODDS") == ["ODDS_API_VARIABLE"]
+
+    def test_never_returns_a_value(self, monkeypatch):
+        _clear_odds_env(monkeypatch)
+        monkeypatch.setenv("ODDS_API_VARIABLE", "super-secret-value")
+        assert "super-secret-value" not in " ".join(env_names_containing("ODDS"))
+
+    def test_a_lowercase_fragment_still_matches_and_results_are_sorted(
+        self, monkeypatch
+    ):
+        """Case-insensitivity is asserted on the FRAGMENT, not the name.
+
+        Windows upper-cases `os.environ` keys and Linux does not, so a test
+        that set `ZZ_odds_trailing` and expected it back verbatim passed on
+        Render and failed here. The names are echoed exactly as the platform
+        holds them; only the match is case-folded.
+        """
+        _clear_odds_env(monkeypatch)
+        monkeypatch.setenv("ZZ_ODDS_TRAILING", "x")
+        monkeypatch.setenv("AA_ODDS_LEADING", "x")
+        assert env_names_containing("odds") == ["AA_ODDS_LEADING", "ZZ_ODDS_TRAILING"]
+
+    def test_empty_when_nothing_matches(self, monkeypatch):
+        _clear_odds_env(monkeypatch)
+        assert env_names_containing("ODDS") == []
+
+
+class TestMissingKeyDiagnosis:
+    """The message must distinguish ABSENT from MISNAMED.
+
+    Nine consecutive scheduled runs on 2026-09-03 reported only "ODDS_API_KEY
+    is not set" while the key sat in Render as `ODDS_API_VARIABLE`. The bare
+    message is equally true in both cases, which is exactly why it cost days.
+    """
+
+    def _raise(self, monkeypatch):
+        monkeypatch.setattr(
+            ingest_odds, "get_settings", lambda: _settings_free(odds_api_key=None, odds_api_key_free=None)
+        )
+        with pytest.raises(ConfigError) as excinfo:
+            ingest_odds.run(
+                season=2026,
+                week=1,
+                adapter_name="theoddsapi",
+                dry_run=True,
+                event_limit=None,
+            )
+        return str(excinfo.value)
+
+    def test_names_the_misnamed_variable(self, monkeypatch):
+        _clear_odds_env(monkeypatch)
+        monkeypatch.setenv("ODDS_API_VARIABLE", "super-secret-value")
+        message = self._raise(monkeypatch)
+        assert "ODDS_API_VARIABLE" in message
+        assert "wrong name" in message
+
+    def test_does_not_leak_the_value(self, monkeypatch):
+        _clear_odds_env(monkeypatch)
+        monkeypatch.setenv("ODDS_API_VARIABLE", "super-secret-value")
+        assert "super-secret-value" not in self._raise(monkeypatch)
+
+    def test_absent_says_absent_and_points_at_the_deploy(self, monkeypatch):
+        _clear_odds_env(monkeypatch)
+        message = self._raise(monkeypatch)
+        assert "absent" in message
+        assert "redeploys" in message
+
+    def test_an_empty_value_is_not_reported_as_misnamed(self, monkeypatch):
+        """Present-but-blank is a third case, and the one that reads worst.
+
+        `_optional` returns None for absent OR empty, so a blank value reaches
+        this code looking identical to a missing one — while the dashboard
+        shows the variable present and correctly named. Calling that "wrong
+        name" sends the reader hunting for something that is not there.
+        """
+        _clear_odds_env(monkeypatch)
+        monkeypatch.setenv("ODDS_API_KEY", "")
+        message = self._raise(monkeypatch)
+        assert "must be empty or blank" in message
+        assert "wrong name" not in message
+
+    def test_still_says_the_original_thing(self, monkeypatch):
+        """The first sentence is what the runbook quotes; keep it intact."""
+        _clear_odds_env(monkeypatch)
+        assert self._raise(monkeypatch).startswith("ODDS_API_KEY is not set")
+
+
+class TestDeployMarker:
+    """`pipeline_runs.metadata` should say which deploy produced the row."""
+
+    def test_empty_off_render(self, monkeypatch):
+        for name in ("RENDER_SERVICE_NAME", "RENDER_GIT_COMMIT", "RENDER_INSTANCE_ID"):
+            monkeypatch.delenv(name, raising=False)
+        assert _deploy_marker() == {}
+
+    def test_records_the_deploy_on_render(self, monkeypatch):
+        monkeypatch.setenv("RENDER_SERVICE_NAME", "cfb-props-odds-refresh")
+        monkeypatch.setenv("RENDER_GIT_COMMIT", "dd174dd")
+        monkeypatch.delenv("RENDER_INSTANCE_ID", raising=False)
+        assert _deploy_marker() == {
+            "render_service_name": "cfb-props-odds-refresh",
+            "render_git_commit": "dd174dd",
+        }
+
+    def test_a_jobs_own_metadata_wins(self, monkeypatch):
+        """The marker must never mask the more specific fact a job records."""
+        monkeypatch.setenv("RENDER_SERVICE_NAME", "cfb-props-odds-refresh")
+        merged = {**_deploy_marker(), **{"season": 2026, "render_service_name": "override"}}
+        assert merged["render_service_name"] == "override"
+        assert merged["season"] == 2026

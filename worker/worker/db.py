@@ -7,6 +7,7 @@ enters Supabase (CLAUDE.md §2).
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -342,6 +343,34 @@ def resolve_seasons(explicit: Sequence[int] | None, *, current: bool = False) ->
     return sorted(int(s) for s in configured)
 
 
+# Render injects these into every service it runs. They are identifiers, not
+# credentials, and none of them is secret.
+#
+# WHY THEY ARE WORTH A COLUMN: on 2026-09-03 nine scheduled `ingest_odds` runs
+# failed on a stale deploy's environment while a manual Trigger Run -- which
+# reads current config -- succeeded, and NOTHING in pipeline_runs distinguished
+# the two. Which deploy a run executed on had to be inferred from commit dates
+# and a screenshot. Recording it makes that a lookup.
+_DEPLOY_MARKER_ENV_VARS = (
+    "RENDER_SERVICE_NAME",
+    "RENDER_GIT_COMMIT",
+    "RENDER_INSTANCE_ID",
+)
+
+
+def _deploy_marker() -> dict[str, str]:
+    """Identify the deploy a run executed on, or nothing when not on Render.
+
+    Empty off Render by construction, so a local run records exactly what it
+    recorded before this existed and no caller has to care where it is running.
+    """
+    return {
+        name.lower(): value
+        for name in _DEPLOY_MARKER_ENV_VARS
+        if (value := os.environ.get(name))
+    }
+
+
 def record_failed_run(
     job_name: str, error: str, metadata: dict[str, Any] | None = None
 ) -> None:
@@ -374,7 +403,7 @@ def record_failed_run(
                     uuid.uuid4(),
                     job_name,
                     redact_secrets(error),
-                    psycopg.types.json.Json(metadata or {}),
+                    psycopg.types.json.Json({**_deploy_marker(), **(metadata or {})}),
                 ),
             )
     except Exception as exc:  # noqa: BLE001 — diagnosis must not mask diagnosis
@@ -401,7 +430,13 @@ def pipeline_run(job_name: str, metadata: dict[str, Any] | None = None) -> Itera
                 insert into pipeline_runs (id, job_name, status, metadata)
                 values (%s, %s, 'running', %s::jsonb)
                 """,
-                (run_id, job_name, psycopg.types.json.Json(metadata or {})),
+                (
+                    run_id,
+                    job_name,
+                    # Caller keys win: a job's own metadata is the more specific
+                    # fact, and the marker must never mask it.
+                    psycopg.types.json.Json({**_deploy_marker(), **(metadata or {})}),
+                ),
             )
         log.info("pipeline_run %s started (%s)", run_id, job_name)
 

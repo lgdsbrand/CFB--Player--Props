@@ -144,6 +144,26 @@ def _optional(name: str, default: str | None = None) -> str | None:
     return value if value else default
 
 
+def env_names_containing(fragment: str) -> list[str]:
+    """NAMES — never values — of environment variables containing `fragment`.
+
+    A near-miss detector for credential handover. "ODDS_API_KEY is not set"
+    cannot distinguish *absent* from *present under the wrong name*, and on
+    2026-09-03 that ambiguity cost six days: the client had added the key to
+    Render as `ODDS_API_VARIABLE`, and nine consecutive failed runs reported
+    only that `ODDS_API_KEY` was missing. Listing what the process CAN see
+    turns a guess into a reading.
+
+    NAMES ONLY, AND THAT IS LOAD-BEARING. `monitor_pipeline` copies the error
+    text of a failed run into the alert body, and the webhook alert adapter
+    sends that body to a third party — so a value here would leave the system.
+    `redact_secrets` would not save us: it strips DSNs and their passwords, not
+    API keys.
+    """
+    needle = fragment.upper()
+    return sorted(name for name in os.environ if needle in name.upper())
+
+
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off", ""})
 

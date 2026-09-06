@@ -535,6 +535,33 @@ not being `"none"`.
 
 None of these is scheduled, and none should be. Two of them spend money.
 
+### `nfl_ingest_reference`
+
+```bash
+python -m worker.jobs.nfl_ingest_reference --seasons 2026 --dry-run
+python -m worker.jobs.nfl_ingest_reference --seasons 2026
+```
+
+NFL conferences, teams, schedule and rosters from nflverse. Free — no key, no
+quota, no rate limit — so the dry run really reads the sources rather than
+stopping at a preflight, because "does the source have what we expect" is the
+only question a preview here can answer.
+
+**Unscheduled on purpose, for now.** Nothing downstream consumes these rows yet:
+there are no NFL stats, projections or picks, so `v_board_rows` returns zero NFL
+rows and the college board is unaffected. It gets a cron when the NFL pipeline
+it feeds exists — adding one now would refresh a schedule nothing reads.
+
+**No `--current` flag, deliberately.** On the college jobs `--current` is
+load-bearing: omitting it falls through to `app_config.backfill_seasons` and
+silently refreshes *last* season, which shipped once and ran green for days.
+This job requires `--seasons`, so the same mistake is an error rather than a
+successful run against the wrong year.
+
+Expected for 2026: 2 conferences, 32 teams, 32 team_seasons, 272 games over 18
+weeks, 2,945 players and 2,945 memberships. One roster row is skipped for having
+no `gsis_id`, which is the source's own gap and is reported rather than hidden.
+
 ### `run_backtest`
 
 ```bash

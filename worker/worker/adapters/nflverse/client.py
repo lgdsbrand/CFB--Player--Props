@@ -38,7 +38,7 @@ import polars as pl
 
 from worker.adapters.nflverse.assets import (
     REQUIRE_SEASON_PRESENT,
-    SEASONLESS,
+    SEASON_IN_URL,
     asset_url,
 )
 from worker.config import REPO_ROOT
@@ -78,8 +78,13 @@ class NflverseClient:
     # -- plumbing ------------------------------------------------------------
 
     def _cache_path(self, asset: str, season: int | None) -> Path:
-        name = f"{asset}.csv" if season is None else f"{asset}_{season}.csv"
-        return self.cache_dir / name
+        # Keyed on what the URL actually varies by. An all-seasons file asked
+        # for 2025 and then 2026 is ONE download, and caching it twice under two
+        # names would serve the second read a copy that is a season out of date
+        # the moment the first one goes stale.
+        if asset in SEASON_IN_URL and season is not None:
+            return self.cache_dir / f"{asset}_{season}.csv"
+        return self.cache_dir / f"{asset}.csv"
 
     def _download(self, url: str, dest: Path) -> bytes:
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -146,7 +151,7 @@ class NflverseClient:
         2024. Nothing about that response is malformed; it is simply two seasons
         stale. Without this, a 2026 model would train on it and look fine.
         """
-        if asset in SEASONLESS or asset not in REQUIRE_SEASON_PRESENT:
+        if asset not in REQUIRE_SEASON_PRESENT:
             return
         if season is None or "season" not in frame.columns:
             return

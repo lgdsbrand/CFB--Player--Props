@@ -162,6 +162,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Bypass the free-tier storage guard.",
     )
     parser.add_argument(
+        "--incremental", action="store_true",
+        help="Fetch play stats only for COMPLETED games that have none yet. "
+             "What the daily in-season cron passes: the per-game /plays/stats "
+             "fan-out is 888 calls for a full 2026 season, which is affordable "
+             "weekly and is 27,000 calls a month daily. Leave it off for a "
+             "backfill or a repair re-run, which must refetch everything.",
+    )
+    parser.add_argument(
         "--box-scores-only", action="store_true",
         help="Load player_game_stats and stop — no play-by-play, no attribution. "
              "For PRIOR-SEASON seasons, whose only job is to supply prior-year "
@@ -218,7 +226,11 @@ def main(argv: list[str] | None = None) -> int:
             warn_on_missing_features(status)
 
             estimated = sum(
-                estimate_calls(s, box_scores_only=args.box_scores_only)
+                estimate_calls(
+                    s,
+                    box_scores_only=args.box_scores_only,
+                    incremental=args.incremental,
+                )
                 for s in seasons
             )
             log.info("Seasons %s: estimated %d API calls", seasons, estimated)
@@ -242,7 +254,9 @@ def main(argv: list[str] | None = None) -> int:
                     JOB_NAME, metadata={"season": season}
                 ) as run_id:
                     counts = run_stats_ingest(
-                        client, season, box_scores_only=args.box_scores_only
+                        client, season,
+                        box_scores_only=args.box_scores_only,
+                        incremental=args.incremental,
                     )
                     set_rows_written(run_id, counts.total())
 

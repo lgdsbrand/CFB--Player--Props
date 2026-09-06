@@ -99,14 +99,14 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
     ),
     JobExpectation(
         name="ingest_reference",
-        max_age_hours=200,
-        note="Sunday 09:00 UTC, chained ahead of ingest_stats",
+        max_age_hours=36,
+        note="daily 08:00 UTC, chained ahead of ingest_stats (also Sunday 09:00)",
     ),
     JobExpectation(
         name="ingest_stats",
-        max_age_hours=200,
+        max_age_hours=36,
         severity="critical",
-        note="Sunday 09:00 UTC — everything downstream is built from these rows",
+        note="daily 08:00 UTC — everything downstream is built from these rows",
     ),
     JobExpectation(
         name="ingest_ratings",
@@ -115,9 +115,9 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
     ),
     JobExpectation(
         name="build_splits",
-        max_age_hours=200,
+        max_age_hours=36,
         severity="critical",
-        note="Sunday 09:00 UTC — the position-split engine, CLAUDE.md §5",
+        note="daily 08:00 UTC — the position-split engine, CLAUDE.md §5",
     ),
     JobExpectation(
         name="run_projections",

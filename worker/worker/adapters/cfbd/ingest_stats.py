@@ -74,6 +74,14 @@ log = get_logger(__name__)
 
 IMMUTABLE = None
 
+# How long a week slice may be served from the on-disk cache while its games are
+# still being played. `IMMUTABLE` is right for a finished week and WRONG for the
+# current one: a week-1 slice fetched on Sunday, when 8 of 99 games had been
+# played, would otherwise be replayed all week and the other 91 games would
+# never land. Render's filesystem is ephemeral so a scheduled run always starts
+# cold, but a by-hand run does not, and this job is now run daily.
+LIVE_SLICE_MAX_AGE = 900.0
+
 # Columns COPYed into plays, in order.
 PLAY_COLUMNS = (
     "cfbd_id", "game_id", "season", "week",
@@ -183,6 +191,57 @@ def week_slices(season: int) -> list[tuple[str, int]]:
     ]
 
 
+def unsettled_slices(season: int) -> set[tuple[str, int]]:
+    """Week slices that still hold an unplayed game, in CFBD's numbering.
+
+    A week is settled once every game in it is `completed`. Only settled weeks
+    may be cached forever; an unsettled one has to be re-asked, because the
+    answer changes every Saturday.
+    """
+    rows = fetch_all(
+        """
+        select distinct season_type::text as season_type, week
+          from games
+         where season = %s and not completed
+        """,
+        (season,),
+    )
+    return {
+        (r["season_type"], week_for_api(r["week"], r["season_type"])) for r in rows
+    }
+
+
+def games_missing_play_stats(season: int) -> list[int]:
+    """CFBD ids of COMPLETED games with no `play_player_stats` rows yet.
+
+    This is what makes a DAILY results ingest affordable. The per-game
+    `/plays/stats` fan-out is the whole cost of this job — 888 calls for 2026
+    against a 30,000/month CFBD quota, which is fine weekly and 27,000 a month
+    daily. Asking only for games we are missing turns that into roughly the
+    number of games played since yesterday.
+
+    COMPLETED IS THE LOAD-BEARING WORD, and it is why no "already loaded" flag
+    is needed. A game in progress is not fetched at all, so anything we did
+    fetch was final when we fetched it, so having rows means having all of them.
+    Skipping on rows alone would freeze a game that was mid-play when it landed.
+    """
+    rows = fetch_all(
+        """
+        select g.cfbd_id
+          from games g
+         where g.season = %s
+           and g.completed
+           and g.cfbd_id is not null
+           and not exists (
+                 select 1 from play_player_stats p where p.game_id = g.id
+               )
+         order by g.week, g.cfbd_id
+        """,
+        (season,),
+    )
+    return [r["cfbd_id"] for r in rows]
+
+
 # -----------------------------------------------------------------------------
 # player_game_stats
 # -----------------------------------------------------------------------------
@@ -191,12 +250,18 @@ def ingest_player_game_stats(
 ) -> None:
     parser = BoxScoreParser()
     payload: list[dict[str, Any]] = []
+    unsettled = unsettled_slices(ctx.season)
 
     for season_type, week in week_slices(ctx.season):
         games = client.fetch(
             "/games/players", cfbd.GamesApi, "get_game_player_stats",
             year=ctx.season, week=week, season_type=season_type,
-            classification="fbs", max_age=IMMUTABLE,
+            classification="fbs",
+            max_age=(
+                LIVE_SLICE_MAX_AGE
+                if (season_type, week) in unsettled
+                else IMMUTABLE
+            ),
         )
 
         for game_payload in games:
@@ -265,19 +330,56 @@ def _clock_seconds(clock: Any) -> int | None:
 
 
 def ingest_plays(
-    client: CfbdClient, ctx: SeasonContext, counts: StatsCounts
+    client: CfbdClient, ctx: SeasonContext, counts: StatsCounts,
+    *, only_games: list[int] | None = None,
 ) -> None:
+    """Load a season's plays. `only_games` restricts it to those CFBD ids.
+
+    THE RESTRICTION IS NOT AN OPTIMISATION, IT IS A CORRECTNESS REQUIREMENT.
+    `plays.id` is `generated always as identity` and `play_player_stats.play_id`
+    references it `on delete cascade`. Clearing the season therefore silently
+    takes every attribution row with it, and the re-COPY hands the same plays
+    brand-new ids. That is harmless only when the very next step rewrites
+    attribution for the WHOLE season, which is what the weekly full run does.
+    A daily incremental run does not, so it has to leave the plays it is not
+    reloading — and their ids — exactly where they are.
+    """
     rows_out: list[tuple[Any, ...]] = []
+    unsettled = unsettled_slices(ctx.season)
+    wanted = set(only_games) if only_games is not None else None
+
+    # The week slices are fetched in full either way. They are 2 calls a week —
+    # 28 for a whole season — against a per-game fan-out of 888, so restricting
+    # them saves almost nothing and would reintroduce the numbering trap
+    # `week_slices` exists to handle. The saving is in the fan-out; the
+    # correctness is in the DELETE below.
+    if wanted is not None:
+        if not wanted:
+            # Nothing to reload, so do not spend the 28 week-slice calls
+            # filtering every play in the season down to none.
+            log.info("plays %d: incremental — nothing to reload", ctx.season)
+            return
+        log.info(
+            "plays %d: incremental — keeping %d game(s)", ctx.season, len(wanted)
+        )
 
     for season_type, week in week_slices(ctx.season):
         plays = client.fetch(
             "/plays", cfbd.PlaysApi, "get_plays",
             year=ctx.season, week=week, season_type=season_type,
-            classification="fbs", max_age=IMMUTABLE,
+            classification="fbs",
+            max_age=(
+                LIVE_SLICE_MAX_AGE
+                if (season_type, week) in unsettled
+                else IMMUTABLE
+            ),
         )
 
         for p in plays:
-            game = ctx.games_by_cfbd.get(bigint_or_none(p.get("gameId")))
+            cfbd_game_id = bigint_or_none(p.get("gameId"))
+            if wanted is not None and cfbd_game_id not in wanted:
+                continue
+            game = ctx.games_by_cfbd.get(cfbd_game_id)
             if game is None:
                 counts.skip("play: unknown game")
                 continue
@@ -306,7 +408,18 @@ def ingest_plays(
             )
 
     # Delete-then-COPY makes the re-run exactly idempotent without upsert cost.
-    deleted = execute("delete from plays where season = %s", (ctx.season,))
+    # Scoped to the games being reloaded when incremental — see the docstring:
+    # a season-wide delete cascades through play_player_stats and reissues every
+    # plays.id, which only the full run is in a position to repair.
+    if wanted is None:
+        deleted = execute("delete from plays where season = %s", (ctx.season,))
+    elif wanted:
+        deleted = execute(
+            "delete from plays where season = %s and game_id = any(%s)",
+            (ctx.season, [ctx.game_id_by_cfbd[c] for c in sorted(wanted)]),
+        )
+    else:
+        deleted = 0
     if deleted:
         log.info("plays %d: cleared %d existing rows", ctx.season, deleted)
 
@@ -319,9 +432,17 @@ def ingest_plays(
 # play_player_stats
 # -----------------------------------------------------------------------------
 def ingest_play_player_stats(
-    client: CfbdClient, ctx: SeasonContext, counts: StatsCounts
+    client: CfbdClient, ctx: SeasonContext, counts: StatsCounts,
+    *, only_games: list[int] | None = None,
 ) -> None:
-    """Per-GAME fetch. See the module docstring: week-level responses truncate."""
+    """Per-GAME fetch. See the module docstring: week-level responses truncate.
+
+    `only_games` restricts the fan-out to those CFBD ids, and MUST be the same
+    set `ingest_plays` was given — the two write one graph across a foreign key,
+    and a game whose plays were reloaded but whose attribution was not is a game
+    with no attribution at all. `run_stats_ingest` computes the set once and
+    passes it to both, which is the only reason they cannot drift.
+    """
     play_id_by_cfbd = {
         r["cfbd_id"]: r["id"]
         for r in fetch_all(
@@ -338,6 +459,21 @@ def ingest_play_player_stats(
     games = sorted(
         ctx.games_by_cfbd.values(), key=lambda g: (g["week"], g["cfbd_id"])
     )
+
+    wanted = set(only_games) if only_games is not None else None
+    if wanted is not None and not wanted:
+        log.info(
+            "play_player_stats %d: incremental — nothing to reload", ctx.season
+        )
+        return
+    if wanted is not None:
+        skipped = len(games) - len([g for g in games if g["cfbd_id"] in wanted])
+        games = [g for g in games if g["cfbd_id"] in wanted]
+        log.info(
+            "play_player_stats %d: incremental — fetching %d game(s), "
+            "skipping %d already loaded or not yet final",
+            ctx.season, len(games), skipped,
+        )
 
     for i, game in enumerate(games, start=1):
         stats = client.fetch(
@@ -406,9 +542,19 @@ def ingest_play_player_stats(
                 ctx.season, i, len(games), len(rows_out),
             )
 
-    deleted = execute(
-        "delete from play_player_stats where season = %s", (ctx.season,)
-    )
+    # Scoped exactly as the plays delete above, and for the same reason: an
+    # incremental run must leave the games it did not reload untouched.
+    if wanted is None:
+        deleted = execute(
+            "delete from play_player_stats where season = %s", (ctx.season,)
+        )
+    elif wanted:
+        deleted = execute(
+            "delete from play_player_stats where season = %s and game_id = any(%s)",
+            (ctx.season, [ctx.game_id_by_cfbd[c] for c in sorted(wanted)]),
+        )
+    else:
+        deleted = 0
     if deleted:
         log.info(
             "play_player_stats %d: cleared %d existing rows", ctx.season, deleted
@@ -537,22 +683,32 @@ def backfill_targets(season: int) -> int:
 # -----------------------------------------------------------------------------
 # Orchestration
 # -----------------------------------------------------------------------------
-def estimate_calls(season: int, *, box_scores_only: bool = False) -> int:
+def estimate_calls(
+    season: int, *, box_scores_only: bool = False, incremental: bool = False
+) -> int:
     """Per season: 1 call per week slice for plays and box scores, 1 per game.
 
     Box scores alone need only the week slices — the per-game calls are the
     play-stats fan-out, which /plays/stats forces on us by capping responses at
     2,000 rows and truncating silently.
+
+    `incremental` must match what the run will actually do. The estimate feeds
+    `require_capacity`, so an estimate of 888 games against a run that fetches
+    14 would refuse to start on a quota it was never going to spend.
     """
     slices = len(week_slices(season))
     if box_scores_only:
         return slices
-    games = len(fetch_all("select id from games where season = %s", (season,)))
+    if incremental:
+        games = len(games_missing_play_stats(season))
+    else:
+        games = len(fetch_all("select id from games where season = %s", (season,)))
     return slices * 2 + games
 
 
 def run_stats_ingest(
-    client: CfbdClient, season: int, *, box_scores_only: bool = False
+    client: CfbdClient, season: int, *,
+    box_scores_only: bool = False, incremental: bool = False,
 ) -> StatsCounts:
     """Ingest a season's actuals.
 
@@ -585,8 +741,17 @@ def run_stats_ingest(
     ingest_player_game_stats(client, ctx, counts)
 
     if not box_scores_only:
-        ingest_plays(client, ctx, counts)
-        ingest_play_player_stats(client, ctx, counts)
+        # COMPUTED ONCE AND SHARED. plays and play_player_stats write one graph
+        # across a foreign key; handing them two separately-derived game lists
+        # is how they would silently drift apart.
+        only_games = games_missing_play_stats(season) if incremental else None
+        if only_games is not None and not only_games:
+            log.info(
+                "season %d: no completed game is missing play stats — nothing "
+                "to reload", season,
+            )
+        ingest_plays(client, ctx, counts, only_games=only_games)
+        ingest_play_player_stats(client, ctx, counts, only_games=only_games)
 
         # Must run before targets: a swapped play hides a reception, and targets
         # are derived from receptions.

@@ -144,6 +144,41 @@ services:
     envVars:
       - fromGroup: cfb-props-worker
 
+  # DAILY 08:00 UTC — results. The chain above is weekly because rosters, SP+
+  # and the polls move weekly. RESULTS DO NOT: college plays Tuesday through
+  # Saturday, and on 2026-09-05 this pipeline was holding 8 games' worth of
+  # stats while 22 had been played, because the only job that ingests them runs
+  # on Sundays. Everything downstream was reading a five-day-old picture of the
+  # season — hit rates, game logs, defense splits, and the grading that cannot
+  # start until a week's actuals exist.
+  #
+  # Same split as cfb-props-project-current: the weekly job keeps its full
+  # chain, and a daily job runs the part that has a daily cadence. Duplication
+  # on Sunday is intentional and now nearly free, see --incremental below.
+  #
+  # `ingest_reference` first, and it is load-bearing: `completed` and the final
+  # score come from there, and `--incremental` only fetches games marked
+  # completed. Without it a Saturday game stays unfinished in our table and its
+  # stats are never asked for. `build_splits` last, because splits are computed
+  # from the stats the middle step just wrote.
+  #
+  # 08:00 UTC is 04:00 ET — after the latest west-coast game has settled, and
+  # ahead of the 10:00/11:00/12:00 jobs and the 12:30 pricing run, so the board
+  # is priced from stats ingested the same morning.
+  - type: cron
+    name: cfb-props-ingest-results
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 8 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      python -m worker.jobs.ingest_reference --current &&
+      python -m worker.jobs.ingest_stats --current --incremental &&
+      python -m worker.jobs.build_splits --current
+    envVars:
+      - fromGroup: cfb-props-worker
+
   # Tuesday 09:00 UTC. Runs on all projected starters and high-usage skill
   # players regardless of whether a book has posted a line, so the tool is
   # useful early in the week (CLAUDE.md §7). Season and weeks resolve from the

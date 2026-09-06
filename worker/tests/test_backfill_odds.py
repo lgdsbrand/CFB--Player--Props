@@ -562,3 +562,104 @@ class TestAdapterCapability:
         # This is what makes the job refuse with an explanation instead of
         # reporting an empty backfill as "no lines found".
         assert not isinstance(NullOddsAdapter(), SupportsHistorical)
+
+
+class TestGamesNotYetKicked:
+    """A snapshot of a moment that has not happened bills and answers nothing.
+
+    Run mid-week on a college slate this is the normal case, not an edge case:
+    on 2026-09-05, 17 of week 1's 37 kickoff clusters were still ahead, holding
+    55 of its 99 games. Asking about them costs a credit each and returns an
+    empty or partial slate, which reads downstream as "carried no props" — the
+    absence-of-evidence mistake this whole job is built around.
+    """
+
+    @staticmethod
+    def _run(monkeypatch, kickoff: datetime) -> tuple[RecordingAdapter, BackfillReport]:
+        from worker.jobs import backfill_odds as job
+
+        adapter = RecordingAdapter()
+        report = job.BackfillReport()
+
+        monkeypatch.setattr(job, "load_teams", lambda conn: object())
+        monkeypatch.setattr(
+            job, "load_games", lambda conn, season, week: [game(1, kickoff)]
+        )
+        monkeypatch.setattr(
+            job, "already_bought", lambda conn, season, week, adapter: set()
+        )
+        monkeypatch.setattr(
+            job,
+            "match_event_to_game_for",
+            lambda g, events, teams: job.OddsEvent(
+                event_id="evt-1",
+                sport_key="americanfootball_ncaaf",
+                commence_time=kickoff,
+                home_team="Home",
+                away_team="Away",
+            ),
+        )
+
+        job.backfill_week(
+            conn=None,
+            adapter=adapter,
+            season=2026,
+            week=1,
+            lead_minutes=60,
+            budget=job.CreditBudget(max_credits=10_000, min_remaining=0),
+            report=report,
+            dry_run=False,
+        )
+        return adapter, report
+
+    def test_a_future_kickoff_costs_no_event_list_call(self, monkeypatch):
+        future = datetime.now(UTC) + timedelta(days=2)
+        adapter, _ = self._run(monkeypatch, future)
+
+        assert adapter.event_list_calls == []
+        assert adapter.props_calls == []
+
+    def test_a_future_kickoff_is_counted_as_deferred_not_as_empty(self, monkeypatch):
+        # The distinction that matters: "we did not ask" must never be stored
+        # or reported as "there was nothing there".
+        future = datetime.now(UTC) + timedelta(days=2)
+        _, report = self._run(monkeypatch, future)
+
+        assert report.games_not_kicked == 1
+        assert report.games_empty == 0
+        assert report.games_matched == 0
+
+    def test_a_past_kickoff_is_still_bought(self, monkeypatch):
+        # Guards against "fixing" the above by deferring everything.
+        past = datetime.now(UTC) - timedelta(days=2)
+        adapter, report = self._run(monkeypatch, past)
+
+        assert adapter.props_calls == ["evt-1"]
+        assert report.games_not_kicked == 0
+
+    def test_a_partial_run_says_so_in_the_report(self, monkeypatch):
+        future = datetime.now(UTC) + timedelta(days=2)
+        _, report = self._run(monkeypatch, future)
+
+        assert "NOT YET KICKED" in report.render()
+        assert "PARTIAL" in report.render()
+
+
+class TestWorstCaseRespectsExclusions:
+    """The projected spend must describe the run being previewed.
+
+    `--exclude-markets anytime_td` is the single biggest lever on cost — it was
+    1,802 of 2,709 prices bought over 20 games of 2025 week 8, and none of them
+    two-way. A worst case computed from the full market list overstated the one
+    number the spend decision is actually made on.
+    """
+
+    def test_the_projection_uses_the_markets_actually_requested(self):
+        report = BackfillReport(dry_run=True, games_matched=81, markets_requested=8)
+
+        assert "6,480" in report.render()
+
+    def test_the_default_is_the_full_market_list(self):
+        report = BackfillReport(dry_run=True, games_matched=81)
+
+        assert report.markets_requested == len(OUR_KEY_TO_PROVIDER)

@@ -122,6 +122,16 @@ def _iso(moment: datetime) -> str:
     )
 
 
+def _parse_iso(stamp: str) -> datetime:
+    """Read back what `_iso` wrote, as an aware UTC datetime.
+
+    The bucket keys are the only form the snapshot moment survives in — the
+    datetime is discarded when the bucket is built — so comparing "is this
+    moment in the past" means parsing the key back.
+    """
+    return datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+
+
 @dataclass
 class BackfillReport:
     """What the run bought, and what it learned about what is buyable.
@@ -140,6 +150,13 @@ class BackfillReport:
     games_total: int = 0
     games_matched: int = 0
     games_skipped: int = 0
+    games_not_kicked: int = 0
+    # How many markets the run actually asks for. Set from the run rather than
+    # read off OUR_KEY_TO_PROVIDER, because `--exclude-markets` is the single
+    # biggest lever on spend — dropping anytime_td removes about two thirds of
+    # the prices bought — and a worst case that ignored the exclusion
+    # overstated exactly the number the spend decision is made on.
+    markets_requested: int = len(OUR_KEY_TO_PROVIDER)
     games_priced: int = 0
     games_empty: int = 0
     credits_spent: int = 0
@@ -166,16 +183,26 @@ class BackfillReport:
             f"provider event",
         ]
 
+        if self.games_not_kicked:
+            # Stated before anything else that could be read as coverage: the
+            # denominator above includes these, and they were never asked about.
+            lines.append(
+                f"  NOT YET KICKED: {self.games_not_kicked} game(s) deferred — "
+                f"their closing lines do not exist yet, so this run is PARTIAL. "
+                f"Re-run after they finish to buy them."
+            )
+
         if self.dry_run:
             # State the projection, not a measurement. The worst case is every
             # matched game carrying every market we ask for.
-            worst = self.games_matched * CREDITS_PER_MARKET * len(OUR_KEY_TO_PROVIDER)
+            worst = self.games_matched * CREDITS_PER_MARKET * self.markets_requested
             lines.append(
                 "  carry rate: NOT MEASURED — a dry run never asks for props"
             )
             lines.append(
                 f"  credits spent: {self.credits_spent} (event lists only); a real "
-                f"run costs up to {worst:,} more if every game carries every market"
+                f"run costs up to {worst:,} more if every one of "
+                f"{self.markets_requested} market(s) comes back for every game"
             )
             return "\n".join(lines)
 
@@ -405,6 +432,7 @@ def backfill_week(
 
     report.games_total += len(games)
     market_keys = sorted(set(OUR_KEY_TO_PROVIDER) - set(exclude_markets or ()))
+    report.markets_requested = len(market_keys)
 
     bought = set() if refresh else already_bought(
         conn, season, week, THEODDSAPI_ADAPTER_NAME
@@ -422,6 +450,22 @@ def backfill_week(
     props_worst_case = CREDITS_PER_MARKET * len(market_keys)
 
     for iso_timestamp, cluster in group_by_snapshot(games, lead_minutes).items():
+        # A SNAPSHOT OF A MOMENT THAT HAS NOT HAPPENED COSTS A CREDIT AND
+        # ANSWERS NOTHING. The historical endpoint reports what was posted at
+        # time T; asked about a future T it bills the event list and returns an
+        # empty or partial slate, which then reads as "this game carried no
+        # props" — the same absence-of-evidence mistake that put "historical
+        # player props: FAIL" into a memo and shaped Phase 3. Run mid-week on a
+        # college slate this is not an edge case: on 2026-09-05, 17 of week 1's
+        # 37 kickoff clusters were still ahead.
+        if _parse_iso(iso_timestamp) > datetime.now(UTC):
+            report.games_not_kicked += len(cluster)
+            log.info(
+                "%s week %s @ %s: not reached yet, %d game(s) deferred",
+                season, week, iso_timestamp, len(cluster),
+            )
+            continue
+
         if budget.exhausted(adapter.quota, EVENT_LIST_COST):
             report.stopped_early = budget.stopped
             return

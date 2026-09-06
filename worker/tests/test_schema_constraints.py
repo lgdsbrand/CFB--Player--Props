@@ -563,6 +563,83 @@ class TestSportDimension:
                 )
         assert excinfo.value.diag.constraint_name == "teams_nfl_requires_abbr"
 
+    def test_an_nfl_playoff_game_may_sit_at_week_19(self, conn):
+        """Migration 0050. The boundary is the sport's last regular week.
+
+        CFBD restarts postseason numbering at 1, which put bowl games in week 1
+        and leaked December results into every "through week N" aggregation --
+        hence `week > 20` for college. nflverse does not restart: its postseason
+        continues 18 -> 19, 20, 21, 22. Under the old constant the wild-card and
+        divisional rounds were rejected for a hazard that does not exist here.
+        """
+        with conn.transaction():
+            team_a = conn.execute(
+                "insert into teams (school, sport, nfl_abbr) "
+                "values ('Test AFC', 'nfl', 'TAF') returning id"
+            ).fetchone()["id"]
+            team_b = conn.execute(
+                "insert into teams (school, sport, nfl_abbr) "
+                "values ('Test NFC', 'nfl', 'TNF') returning id"
+            ).fetchone()["id"]
+            row = conn.execute(
+                "insert into games (nflverse_id, season, week, season_type, "
+                "sport, home_team_id, away_team_id) "
+                "values ('2025_19_TST_TST', 2025, 19, 'postseason', 'nfl', %s, %s) "
+                "returning week, season_type",
+                (team_a, team_b),
+            ).fetchone()
+        assert row["week"] == 19
+        assert row["season_type"] == "postseason"
+
+    def test_an_nfl_playoff_game_may_not_sit_in_the_regular_season(self, conn):
+        # 18 is the NFL's last regular-season week, so a postseason game there
+        # would occupy a slot a regular-season game can occupy -- the exact
+        # collision the constraint exists to prevent.
+        with pytest.raises(pg_errors.CheckViolation) as excinfo:
+            with conn.transaction():
+                team_a = conn.execute(
+                    "insert into teams (school, sport, nfl_abbr) "
+                    "values ('Test AFC2', 'nfl', 'TA2') returning id"
+                ).fetchone()["id"]
+                team_b = conn.execute(
+                    "insert into teams (school, sport, nfl_abbr) "
+                    "values ('Test NFC2', 'nfl', 'TN2') returning id"
+                ).fetchone()["id"]
+                conn.execute(
+                    "insert into games (nflverse_id, season, week, season_type, "
+                    "sport, home_team_id, away_team_id) "
+                    "values ('2025_18_TST_TST', 2025, 18, 'postseason', 'nfl', %s, %s)",
+                    (team_a, team_b),
+                )
+        assert excinfo.value.diag.constraint_name == "games_postseason_week_offset"
+
+    def test_the_college_rule_is_unchanged_at_nineteen(self, conn, base):
+        """The half of 0050 that must NOT have moved.
+
+        Lowering the boundary to 18 for everyone would hand the college side
+        back the hole that produced the bowl-game bug -- which was invisible to
+        every test in the project until it was found in the data.
+        """
+        with pytest.raises(pg_errors.CheckViolation) as excinfo:
+            with conn.transaction():
+                conn.execute(
+                    "insert into games (cfbd_id, season, week, season_type, "
+                    "home_team_id, away_team_id) "
+                    "values (-991, 2024, 19, 'postseason', %s, %s)",
+                    (base["offense"], base["defense"]),
+                )
+        assert excinfo.value.diag.constraint_name == "games_postseason_week_offset"
+
+    def test_the_college_rule_still_accepts_an_offset_bowl(self, conn, base):
+        with conn.transaction():
+            row = conn.execute(
+                "insert into games (cfbd_id, season, week, season_type, "
+                "home_team_id, away_team_id) "
+                "values (-992, 2024, 21, 'postseason', %s, %s) returning week",
+                (base["offense"], base["defense"]),
+            ).fetchone()
+        assert row["week"] == 21
+
     def test_two_teams_may_not_share_an_nfl_abbreviation(self, conn):
         """What makes `nfl_abbr` a key rather than a label.
 

@@ -535,14 +535,51 @@ class TestSportDimension:
         CFBD has never heard of the Bengals. Before 0035 an NFL team could only
         be inserted by inventing a CFBD id for it, which would then collide with
         a real college team's the moment CFBD issued that id.
+
+        `nfl_abbr` is supplied because migration 0049 requires it of NFL rows —
+        the assertion here is about `cfbd_id`, and it is unchanged.
         """
         with conn.transaction():
             row = conn.execute(
-                "insert into teams (school, sport) values ('Test NFL', 'nfl') "
-                "returning sport, cfbd_id"
+                "insert into teams (school, sport, nfl_abbr) "
+                "values ('Test NFL', 'nfl', 'TST') returning sport, cfbd_id"
             ).fetchone()
         assert row["sport"] == "nfl"
         assert row["cfbd_id"] is None
+
+    def test_an_nfl_team_cannot_omit_its_abbreviation(self, conn):
+        """The mirror of `teams_cfb_requires_cfbd_id`, added in 0049.
+
+        `nfl_abbr` is the NFL join key and is unique, so a row without one is
+        not a team with a missing label — it is a team nothing can join to.
+        All 32 franchises carry an abbreviation in every source, so unlike
+        `gsis_id` and `games.nflverse_id` there is no legitimate blank to
+        accommodate.
+        """
+        with pytest.raises(pg_errors.CheckViolation) as excinfo:
+            with conn.transaction():
+                conn.execute(
+                    "insert into teams (school, sport) values ('Test NFL 2', 'nfl')"
+                )
+        assert excinfo.value.diag.constraint_name == "teams_nfl_requires_abbr"
+
+    def test_two_teams_may_not_share_an_nfl_abbreviation(self, conn):
+        """What makes `nfl_abbr` a key rather than a label.
+
+        `canonical_team()` returns None for an unrecognised code rather than
+        passing it through, precisely so a typo cannot reach this constraint —
+        but the constraint is what makes that discipline enforceable.
+        """
+        with pytest.raises(pg_errors.UniqueViolation):
+            with conn.transaction():
+                conn.execute(
+                    "insert into teams (school, sport, nfl_abbr) "
+                    "values ('Test Dup A', 'nfl', 'DUP')"
+                )
+                conn.execute(
+                    "insert into teams (school, sport, nfl_abbr) "
+                    "values ('Test Dup B', 'nfl', 'DUP')"
+                )
 
     def test_a_cfb_team_still_cannot_omit_its_cfbd_id(self, conn):
         """And this is what makes `default 'cfb'` safe rather than a trap.

@@ -99,11 +99,11 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 | Table | Notes |
 |---|---|
 | `conferences` | `is_displayed` is a **display filter only** — ingest always covers all FBS |
-| `teams` | Identity + chip colours. No logo assets anywhere (trademarked) |
+| `teams` | Identity + chip colours. No logo assets anywhere (trademarked). `nfl_abbr` is the NFL join key, deliberately not `abbreviation` |
 | `team_seasons` | Conference/classification per season — realignment makes these season-scoped |
-| `venues` | `is_dome`, lat/lon for the Open-Meteo weather fallback |
+| `venues` | `is_dome`, lat/lon for the Open-Meteo weather fallback. **Unscoped by sport** — a stadium is a place, and both codes play in some of them |
 | `games` | `week` is the time axis for every cutoff in the schema — monotone in time, postseason offset past week 20 |
-| `players` | Identity across schools |
+| `players` | Identity across schools. `gsis_id` is the NFL key — league-owned, so it survives a change of NFL provider |
 | `player_team_seasons` | Roster membership per season — the transfer-portal table |
 
 ### Facts
@@ -150,6 +150,31 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 | `american_to_implied_probability`, `devig_two_way`, `edge_on_side` | Odds math |
 | `devig_two_way_proportional` / `_additive` / `_shin` | The three selectable de-vig methods (migration 0013) |
 | `devig_shin_z` | Shin's *z*, the implied informed-money share — a market-quality diagnostic, not used in pricing |
+
+### The sport dimension, and the identifiers each sport is keyed by
+
+`sport` (enum `cfb`/`nfl`) sits on exactly four tables — `conferences`, `teams`,
+`games`, `players` — and everything downstream inherits it through a foreign
+key. Migration 0035 has the full reasoning, including why `venues`, `markets`
+and `sportsbooks` deliberately have no such column.
+
+Each sport carries its own external identifier rather than sharing a generic
+one, and all of them are nullable so the other sport can leave them empty:
+
+| Column | Sport | Example | Required? |
+|---|---|---|---|
+| `teams.cfbd_id`, `games.cfbd_id` | cfb | `333` | **Yes**, via a conditional CHECK |
+| `players.cfbd_athlete_id` | cfb | `4429084` | No — CFBD omits it for some players |
+| `teams.nfl_abbr` | nfl | `KC` | **Yes**, via `teams_nfl_requires_abbr` |
+| `players.gsis_id` | nfl | `00-0023459` | No — blank on 1 of 2,946 in the 2026 roster |
+| `games.nflverse_id` | nfl | `2025_01_PIT_NYJ` | No — the schedule may come from The Odds API instead |
+
+The two CHECKs on the cfb side are not data-quality assertions; they are the
+interlock that makes `sport not null default 'cfb'` safe. An NFL row that
+forgets to set `sport` has no `cfbd_id` and is rejected, rather than quietly
+joining the college board. That interlock protects the NFL direction too, which
+is why only `nfl_abbr` — guaranteed by every source, on all 32 franchises —
+gets a mirror CHECK. See migration 0049 for why the other two would be traps.
 
 ### Why the board is driven by projections, not picks
 

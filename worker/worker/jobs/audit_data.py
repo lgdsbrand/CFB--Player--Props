@@ -492,14 +492,25 @@ check(G, "games.week orders games by TIME, not by source label", """
            min(a.week)   as week
       from games a
       join games b
-        on b.season = a.season and b.week < a.week
+        -- WITHIN ONE SPORT. Two sports share (season, week) and play on
+        -- different calendars: NFL 2026 week 1 kicks on 9 September, college
+        -- 2026 week 2 on 12 September. Compared across sports every such pair
+        -- reads as a time-ordering violation, and this check reported 48,453
+        -- of them the day NFL data landed -- all of them noise, which is the
+        -- fastest way to make a real one invisible.
+        on b.sport = a.sport and b.season = a.season and b.week < a.week
      where a.start_date is not null and b.start_date is not null
        and a.start_date < b.start_date
 """, lambda r: r["violations"] == 0)
 
+# The boundary is the sport's own last regular-season week, exactly as
+# `games_postseason_week_offset` states it since migration 0050. College
+# postseason is stored offset past week 20 because CFBD restarts its numbering
+# at 1; the NFL's already continues 18 -> 19-22, so 18 is its boundary.
 check(G, "postseason weeks sit past any regular-season week", """
     select count(*) as bad from games
-     where season_type = 'postseason' and week <= 20
+     where season_type = 'postseason'
+       and week <= case when sport = 'nfl' then 18 else 20 end
 """, lambda r: r["bad"] == 0)
 
 check(G, "denormalized week copies agree with games.week", """
@@ -595,23 +606,34 @@ G = "P2 completeness"
 # decision, not a gap — but a fully-loaded season missing play-by-play still is
 # a gap, so the check identifies full seasons by whether they have any plays at
 # all rather than by hardcoding a list.
+# "Full-ingest season" IS A PER-SPORT IDEA, and joining on season alone made it
+# a cross-sport one. `plays` is populated for college 2023-2025, so every NFL
+# game in those same years was pulled in as belonging to a full-ingest season
+# and counted missing -- 622 of them, none of them a gap, because NFL
+# play-by-play is a later phase and no NFL play has been ingested at all.
 check(G, "every completed game in a full-ingest season has play-by-play", """
     with full_seasons as (
-      select distinct season from plays
+      select distinct g.sport, p.season
+        from plays p join games g on g.id = p.game_id
     )
     select count(*) as missing from games g
-     join full_seasons f on f.season = g.season
+     join full_seasons f on f.season = g.season and f.sport = g.sport
      where g.completed and not exists (select 1 from plays p where p.game_id=g.id)
 """, lambda r: r["missing"] <= 2, ["missing"])
 
 check(G, "box-score-only seasons are complete on their own terms", """
     with box_only as (
-      select distinct s.season from player_game_stats s
-       where not exists (select 1 from plays p where p.season = s.season)
+      select distinct g.sport, s.season
+        from player_game_stats s
+        join games g on g.id = s.game_id
+       where not exists (
+         select 1 from plays p join games pg on pg.id = p.game_id
+          where p.season = s.season and pg.sport = g.sport
+       )
     )
     select coalesce(count(*), 0) as missing
       from games g
-      join box_only b on b.season = g.season
+      join box_only b on b.season = g.season and b.sport = g.sport
      where g.completed
        and not exists (select 1 from player_game_stats s where s.game_id = g.id)
 """, lambda r: r["missing"] <= 2, ["missing"])
@@ -648,9 +670,16 @@ check(G, "every FBS team has ratings at the final cutoff", """
      where season=2024 and as_of_week=16 and position_group='RB'
 """, lambda r: r["teams"] == 134)
 
+# PER SPORT. Five is the college list (CLAUDE.md §4); the NFL's two are the
+# whole league rather than a filter across it, so an unscoped count of 7 is two
+# different decisions added together.
 check(G, "displayed conferences still flagged", """
-    select count(*) as n from conferences where is_displayed
+    select count(*) as n from conferences where is_displayed and sport = 'cfb'
 """, lambda r: r["n"] == 5)
+
+check(G, "both NFL conferences are displayed", """
+    select count(*) as n from conferences where is_displayed and sport = 'nfl'
+""", lambda r: r["n"] == 2)
 
 # Weather is ingested per season alongside play-by-play, so a box-score-only
 # prior season legitimately has none. Scoped to the seasons that were loaded in
@@ -661,10 +690,13 @@ check(G, "displayed conferences still flagged", """
 # calendar rather than the ingest. When 2026 joined `plays` with 8 games played
 # and 880 still to come, this read 20.7% against a pipeline that had not changed.
 check(G, "weather covers >95% of completed full-ingest games", """
-    with full_seasons as (select distinct season from plays)
+    with full_seasons as (
+      select distinct g.sport, p.season
+        from plays p join games g on g.id = p.game_id
+    )
     select round(100.0*count(distinct w.game_id)/count(distinct g.id),1) as pct
       from games g
-      join full_seasons f on f.season = g.season
+      join full_seasons f on f.season = g.season and f.sport = g.sport
       left join game_weather w on w.game_id=g.id
      where g.completed
 """, lambda r: float(r["pct"]) > 95, ["pct"])
@@ -713,10 +745,24 @@ check(G, "regular-season weeks are within a plausible range", """
      where season_type = 'regular'
 """, lambda r: r["min_wk"] >= 1 and r["max_wk"] <= 20)
 
+check(G, "NFL regular season stops at week 18", """
+    select coalesce(max(week), 18) as max_wk from games
+     where season_type = 'regular' and sport = 'nfl'
+""", lambda r: r["max_wk"] <= 18)
+
+# PER SPORT, because the plausible band is per sport. College postseason is
+# offset past week 20 and lands at 21; the NFL's runs 19-22 as its source
+# numbers it (migration 0050). A single band admitting both would have to span
+# 19-25 and would stop catching a college bowl stored at 19.
 check(G, "postseason weeks are offset but not absurd", """
     select coalesce(min(week), 21) as min_wk, coalesce(max(week), 21) as max_wk
-      from games where season_type = 'postseason'
+      from games where season_type = 'postseason' and sport = 'cfb'
 """, lambda r: r["min_wk"] >= 21 and r["max_wk"] <= 25)
+
+check(G, "NFL postseason weeks run 19-22", """
+    select coalesce(min(week), 19) as min_wk, coalesce(max(week), 22) as max_wk
+      from games where season_type = 'postseason' and sport = 'nfl'
+""", lambda r: r["min_wk"] >= 19 and r["max_wk"] <= 22)
 
 check(G, "Elo ratings are in a plausible band", """
     select min(rating) as lo, max(rating) as hi from team_rating_snapshots
@@ -855,8 +901,14 @@ check(G, "QB rushing reconciles once sacks are subtracted (>65%)", """
      where pgs.season=2024 and pgs.position_group='QB' and pgs.rush_yards is not null
 """, lambda r: float(r["pct"]) > 65)
 
+# RECONCILES A BOX SCORE AGAINST PLAY ATTRIBUTION, so it can only run where
+# both exist. nflverse serves `targets` as a column and this project has
+# ingested no NFL play-by-play at all, so every NFL row here compares a real
+# target count against zero attributed targets -- 2,803 false failures, and a
+# check that fails for a reason unrelated to what it tests is worse than none.
 check(G, "targets = receptions + incompletion targets", """
     select count(*) as bad from player_game_stats pgs
+      join players pl on pl.id = pgs.player_id and pl.sport = 'cfb'
      where pgs.season=2024 and pgs.targets is not null
        and pgs.targets <> coalesce(pgs.receptions,0) + coalesce((
              select count(*) from play_player_stats pps

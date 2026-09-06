@@ -233,14 +233,21 @@ class TestNoLookaheadInRealQueries:
         from worker.core.features import player_usage
 
         rows = {r["player_id"]: r for r in player_usage(populated_week)}
+        # SCOPED TO THE SAME SPORT the cutoff names. `player_game_stats` has no
+        # sport column by design -- it inherits one through player_id -- so an
+        # unscoped independent count reaches NFL rows that `player_usage`
+        # correctly excludes, and the lookup below raises KeyError on the first
+        # NFL player it meets. That is the check working: the two sides really
+        # did disagree about the population.
         sample = conn.execute(
             """
-            select player_id, count(*) as n
-              from player_game_stats
-             where season = %(season)s
-               and week   < %(week)s
-               and position_group = any(%(positions)s::position_group[])
-             group by player_id
+            select s.player_id, count(*) as n
+              from player_game_stats s
+              join players pl on pl.id = s.player_id and pl.sport = %(sport)s
+             where s.season = %(season)s
+               and s.week   < %(week)s
+               and s.position_group = any(%(positions)s::position_group[])
+             group by s.player_id
              order by n desc
              limit 25
             """,
@@ -248,10 +255,15 @@ class TestNoLookaheadInRealQueries:
                 "season": populated_week.season,
                 "week": populated_week.week,
                 "positions": list(SKILL_POSITIONS),
+                "sport": populated_week.sport,
             },
         ).fetchall()
         assert sample
         for row in sample:
+            assert row["player_id"] in rows, (
+                f"player {row['player_id']} has games in the window but no "
+                f"usage row -- the two sides disagree about the population"
+            )
             assert rows[row["player_id"]]["games_played"] == row["n"]
 
     def test_team_context_never_touches_the_prediction_week(self, populated_week):

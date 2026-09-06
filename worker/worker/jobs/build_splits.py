@@ -2,10 +2,16 @@
 
     python -m worker.jobs.build_splits
     python -m worker.jobs.build_splits --seasons 2024
+    python -m worker.jobs.build_splits --sport nfl --seasons 2025
 
 Reads only from the database — no API calls, so this can be re-run freely while
 the attribution logic is refined. That is the whole reason the response cache
 exists.
+
+ONE SPORT PER RUN, and the flag is not cosmetic. The opponent adjustment fits a
+league mean, so a run that saw both sports would express every college rating
+relative to a mean that is part NFL. `--sport` is threaded all the way into the
+SQL rather than filtered afterwards; see core/splits.py.
 """
 
 from __future__ import annotations
@@ -39,6 +45,11 @@ def main(argv: list[str] | None = None) -> int:
              "cron passes; without it the job falls through to backfill_seasons, "
              "which scopes the historical backfill and lags a season behind.",
     )
+    parser.add_argument(
+        "--sport", choices=("cfb", "nfl"), default="cfb",
+        help="Which league to fit. One per run — the adjustment's league mean "
+             "is meaningless across two.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -59,14 +70,19 @@ def main(argv: list[str] | None = None) -> int:
     # The goal-line threshold is runtime config, not a constant: it defines what
     # counts as a scoring opportunity for the anytime-TD model (CLAUDE.md §6).
     goal_line = int(get_config_value("goal_line_yards_to_goal") or 10)
-    log.info("Seasons %s, goal-line threshold %d yards", seasons, goal_line)
+    log.info(
+        "Sport %s, seasons %s, goal-line threshold %d yards",
+        args.sport, seasons, goal_line,
+    )
 
     before = {t: count_rows(t) for t in REPORTED_TABLES}
 
     try:
         for season in seasons:
-            with pipeline_run(JOB_NAME, metadata={"season": season}) as run_id:
-                counts = run_split_engine(season, goal_line)
+            with pipeline_run(
+                JOB_NAME, metadata={"season": season, "sport": args.sport}
+            ) as run_id:
+                counts = run_split_engine(season, goal_line, args.sport)
                 set_rows_written(run_id, sum(counts.values()))
     except Exception as exc:
         log.error("Split build failed: %s", exc, exc_info=True)

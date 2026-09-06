@@ -414,6 +414,45 @@ check(G, "no projection crosses sports", """
      where p.sport <> g.sport or t.sport <> g.sport
 """, lambda r: r["n"] == 0)
 
+check(G, "no attribution row crosses sports", """
+    select count(*) as n from play_player_stats pps
+      join games g   on g.id = pps.game_id
+      join players p on p.id = pps.player_id
+      join teams t   on t.id = pps.team_id
+      join teams o   on o.id = pps.opponent_team_id
+     where p.sport <> g.sport or t.sport <> g.sport or o.sport <> g.sport
+""", lambda r: r["n"] == 0)
+
+# THE SYMPTOM OF A REBUILD THAT DELETED THE OTHER LEAGUE, which is the failure
+# this check exists for and it is not hypothetical: `compute_ratings` replaces a
+# season wholesale, and while that DELETE was scoped to `season` alone a single
+# `build_splits --sport nfl` removed 13,764 college ratings and reported
+# success. Caught on the dev database before it reached production, 2026-09-06.
+#
+# Stated as an implication rather than a count, because the row counts are not
+# comparable -- 32 NFL defenses against 136 college ones -- and because the only
+# thing worth asserting is that having the raw material implies having the
+# derived rows. A sport that has splits for a season and no ratings for it has
+# either never been fitted or been deleted by the other sport's run.
+check(G, "a sport with splits for a season has ratings for it", """
+    with have_splits as (
+      select distinct t.sport, s.season
+        from defense_position_game_splits s
+        join teams t on t.id = s.defense_team_id
+    ),
+    have_ratings as (
+      select distinct t.sport, r.season
+        from defense_position_ratings r
+        join teams t on t.id = r.defense_team_id
+    )
+    select count(*) as missing
+      from have_splits s
+     where not exists (
+       select 1 from have_ratings r
+        where r.sport = s.sport and r.season = s.season
+     )
+""", lambda r: r["missing"] == 0, ["missing"])
+
 check(G, "denormalized season matches games.season everywhere", """
     select
       (select count(*) from plays p join games g on g.id=p.game_id where p.season<>g.season)
@@ -621,14 +660,30 @@ check(G, "every completed game in a full-ingest season has play-by-play", """
      where g.completed and not exists (select 1 from plays p where p.game_id=g.id)
 """, lambda r: r["missing"] <= 2, ["missing"])
 
+# THE SET DIFFERENCE IS COMPUTED ONCE, not per row, and that is a fix rather
+# than a preference. The correlated `not exists` this replaced re-ran a join
+# over `plays` for every one of ~112,000 box-score rows, and once N4 added
+# 107,000 NFL plays it stopped finishing at all -- the check reported
+# `canceling statement due to statement timeout`, which is a red canary that
+# says nothing about the data. Both halves collapse to a handful of
+# (sport, season) pairs before anything is compared.
 check(G, "box-score-only seasons are complete on their own terms", """
-    with box_only as (
+    with box_seasons as (
       select distinct g.sport, s.season
         from player_game_stats s
         join games g on g.id = s.game_id
+    ),
+    play_seasons as (
+      select distinct g.sport, p.season
+        from plays p
+        join games g on g.id = p.game_id
+    ),
+    box_only as (
+      select b.sport, b.season
+        from box_seasons b
        where not exists (
-         select 1 from plays p join games pg on pg.id = p.game_id
-          where p.season = s.season and pg.sport = g.sport
+         select 1 from play_seasons ps
+          where ps.sport = b.sport and ps.season = b.season
        )
     )
     select coalesce(count(*), 0) as missing
@@ -652,11 +707,31 @@ check(G, "at least two full-ingest seasons present", """
     select count(distinct season) as seasons from plays
 """, lambda r: r["seasons"] >= 2, ["seasons"])
 
-check(G, "at least one prior season supplies prior-year features", """
-    select count(distinct s.season) as seasons
-      from player_game_stats s
-     where not exists (select 1 from plays p where p.season = s.season)
-""", lambda r: r["seasons"] >= 1, ["seasons"])
+# RESTATED PER SPORT, AND THE OLD WORDING WAS A COLLEGE ARTIFACT.
+#
+# It used to ask for a season carrying box scores and NO play-by-play, because
+# that is how the college backfill was scoped: 2023 was loaded box-score-only,
+# since prior-year features are box-score aggregates and play-by-play only ever
+# feeds the split engine for the season being predicted.
+#
+# The NFL load has no such season -- nflverse ships one file per season and N4
+# took play-by-play for all three that N3 took box scores for -- so the old
+# question returned 0 for NFL and, worse, returned 0 for COLLEGE too: 2023 stopped
+# looking box-score-only the moment NFL 2023 plays existed, because the subquery
+# matched on season alone across both sports.
+#
+# What the check was ever protecting is that a prior year is available to draw
+# features from. That is what it now asks, per sport.
+check(G, "every sport has a prior season to draw features from", """
+    select count(*) as sports_with_one_season
+      from (
+        select p.sport, count(distinct s.season) as seasons
+          from player_game_stats s
+          join players p on p.id = s.player_id
+         group by p.sport
+      ) x
+     where seasons < 2
+""", lambda r: r["sports_with_one_season"] == 0, ["sports_with_one_season"])
 
 check(G, "FBS team counts are right (134 in 2024, 136 in 2025)", """
     select
@@ -664,11 +739,23 @@ check(G, "FBS team counts are right (134 in 2024, 136 in 2025)", """
       (select count(*) from team_seasons where season=2025 and classification='fbs') as y25
 """, lambda r: r["y24"] == 134 and r["y25"] == 136)
 
+# SCOPED TO COLLEGE BY ITS OWN TERMS: 134 is the 2024 FBS count. Without the
+# sport filter this counted 166 once NFL ratings existed -- 134 college defenses
+# plus 32 NFL ones, at the same season and cutoff, in a table that has no sport
+# column of its own.
 check(G, "every FBS team has ratings at the final cutoff", """
-    select count(distinct defense_team_id) as teams
-      from defense_position_ratings
-     where season=2024 and as_of_week=16 and position_group='RB'
+    select count(distinct r.defense_team_id) as teams
+      from defense_position_ratings r
+      join teams t on t.id = r.defense_team_id and t.sport = 'cfb'
+     where r.season=2024 and r.as_of_week=16 and r.position_group='RB'
 """, lambda r: r["teams"] == 134)
+
+check(G, "every NFL defense has ratings at the final cutoff", """
+    select count(distinct r.defense_team_id) as teams
+      from defense_position_ratings r
+      join teams t on t.id = r.defense_team_id and t.sport = 'nfl'
+     where r.season=2025 and r.position_group='RB'
+""", lambda r: r["teams"] == 32, ["teams"])
 
 # PER SPORT. Five is the college list (CLAUDE.md §4); the NFL's two are the
 # whole league rather than a filter across it, so an unscoped count of 7 is two
@@ -689,16 +776,25 @@ check(G, "both NFL conferences are displayed", """
 # may sit beyond Open-Meteo's ~15-day forecast horizon, so counting it scores the
 # calendar rather than the ingest. When 2026 joined `plays` with 8 games played
 # and 880 still to come, this read 20.7% against a pipeline that had not changed.
-check(G, "weather covers >95% of completed full-ingest games", """
+#
+# COLLEGE ONLY, and this is a scope statement rather than an exemption.
+# `ingest_weather` reads Open-Meteo for college venues; no NFL weather is
+# ingested at all. Grouping the sports made this a single pooled percentage, and
+# when N4 turned NFL 2023-2025 into full-ingest seasons it fell to 66.9% -- a
+# red canary describing a job that had not run and was never scheduled to.
+# When NFL weather is ingested, this gets a second check beside it rather than
+# a widened one, so that the two coverage numbers stay separately readable.
+check(G, "weather covers >95% of completed full-ingest college games", """
     with full_seasons as (
       select distinct g.sport, p.season
         from plays p join games g on g.id = p.game_id
+       where g.sport = 'cfb'
     )
     select round(100.0*count(distinct w.game_id)/count(distinct g.id),1) as pct
       from games g
       join full_seasons f on f.season = g.season and f.sport = g.sport
       left join game_weather w on w.game_id=g.id
-     where g.completed
+     where g.completed and g.sport = 'cfb'
 """, lambda r: float(r["pct"]) > 95, ["pct"])
 
 # =============================================================================
@@ -783,12 +879,19 @@ check(G, "shrinkage weight is a valid proportion", """
      where shrinkage_weight <= 0 or shrinkage_weight > 1
 """, lambda r: r["bad"] == 0)
 
-check(G, "ranks are dense 1..N per cutoff with no gaps or ties", """
+# PER SPORT, because a rank IS per sport. `compute_ratings` fits one league at a
+# time and numbers it 1..N within that league, so college produces 1..136 and
+# the NFL 1..32 for the same (season, cutoff, position). Grouped without sport
+# this saw 168 teams sharing 136 distinct ranks and reported 168 broken cutoffs
+# -- every one of them correctly numbered.
+check(G, "ranks are dense 1..N per cutoff per sport, no gaps or ties", """
     select count(*) as bad from (
-      select season, as_of_week, position_group,
-             count(*) as teams, count(distinct rank_vs_position) as ranks,
-             min(rank_vs_position) as lo, max(rank_vs_position) as hi
-        from defense_position_ratings group by 1,2,3
+      select t.sport, r.season, r.as_of_week, r.position_group,
+             count(*) as teams, count(distinct r.rank_vs_position) as ranks,
+             min(r.rank_vs_position) as lo, max(r.rank_vs_position) as hi
+        from defense_position_ratings r
+        join teams t on t.id = r.defense_team_id
+       group by 1,2,3,4
     ) x where teams <> ranks or lo <> 1 or hi <> teams
 """, lambda r: r["bad"] == 0)
 
@@ -805,18 +908,46 @@ check(G, "ranks are dense 1..N per cutoff with no gaps or ties", """
 #
 # So the property is stated twice, from both directions.
 
+# STATED AS MONOTONICITY, NOT AS AN EXPECTED PERMUTATION, and the rewrite is a
+# correctness fix rather than a tidy-up.
+#
+# It used to recompute `row_number()` over the metric and demand the stored rank
+# equal it. That is only well-defined when the metric has no ties -- and it does
+# have ties: 204 tied college groups and 54 NFL ones on the dev database. Where
+# two defenses have identical adjusted figures, the engine and the check each
+# break the tie in their own arbitrary order, so the comparison reports a
+# mismatch that means nothing. It read 197 college mismatches after a routine
+# rebuild of ratings that were entirely correct.
+#
+# A check that fails on data it agrees with is worse than no check: this is the
+# same nondeterminism trap the board's hit rate hit. So the property is stated
+# as what "ordered by the metric" actually means -- walking the stored ranks
+# upward, the metric never goes DOWN. Ties are admitted, a wrong ordering
+# column is still caught, and there is nothing arbitrary left to disagree about.
+#
+# `ranks are dense 1..N per cutoff per sport` above independently guarantees the
+# stored ranks are a permutation, so the two together still pin the full
+# property.
 check(G, "rank_vs_position orders by the metric that position is measured on", """
-    with ranked as (
-      select rank_vs_position as stored,
-             row_number() over (
-               partition by season, as_of_week, position_group
-               order by case when position_group in ('QB','RB')
-                             then adj_rush_yards_allowed_pg
-                             else adj_rec_yards_allowed_pg end asc
-             ) as expected
-        from defense_position_ratings
+    with m as (
+      select t.sport, r.season, r.as_of_week, r.position_group,
+             r.rank_vs_position as stored,
+             case when r.position_group in ('QB','RB')
+                  then r.adj_rush_yards_allowed_pg
+                  else r.adj_rec_yards_allowed_pg end as metric
+        from defense_position_ratings r
+        join teams t on t.id = r.defense_team_id
+    ),
+    seq as (
+      select metric,
+             lag(metric) over (
+               partition by sport, season, as_of_week, position_group
+               order by stored
+             ) as prev_metric
+        from m
     )
-    select count(*) as bad from ranked where stored <> expected
+    select count(*) as bad from seq
+     where prev_metric is not null and metric < prev_metric
 """, lambda r: r["bad"] == 0)
 
 # THE DIRECTION, stated independently of the ordering check above.
@@ -1216,11 +1347,18 @@ check(G, "no run is stranded in 'running'", """
 # could not exist. `current_season` is the single source of truth for which one
 # that is; rolling it forward at season's end makes that season required here,
 # which is exactly when the walk should be re-run.
+# COLLEGE PLAYS ONLY. `backtests.seasons` records which seasons a walk covered,
+# and every backtest this project has run is a college one -- the NFL model has
+# no walk yet. Reading `plays` unscoped made the expected list [2023, 2024,
+# 2025] the moment N4 landed NFL play-by-play, so no college backtest could ever
+# match it again. The check would have gone red for as long as the NFL model
+# went unbacktested, which is precisely when it has nothing to say.
 check(G, "a backtest covered every finished play-by-play season", """
     with ingested as (
-      select array_agg(distinct season order by season)::smallint[] as seasons
-        from plays
-       where season <> (select (value #>> '{}')::smallint
+      select array_agg(distinct p.season order by p.season)::smallint[] as seasons
+        from plays p
+        join games g on g.id = p.game_id and g.sport = 'cfb'
+       where p.season <> (select (value #>> '{}')::smallint
                           from app_config where key = 'current_season'))
     select (select seasons from ingested) as ingested,
            (select max(created_at) from backtests b, ingested i

@@ -695,14 +695,23 @@ def opponent_defense(as_of: AsOf) -> list[dict[str, Any]]:
                receptions_allowed_pg,
                shrinkage_weight,
                rank_vs_position
-          from defense_position_ratings
-         where season     = %(season)s
-           and as_of_week = %(week)s
-           and position_group = any(%(positions)s::position_group[])
+          from defense_position_ratings r
+          -- SPORT, through the defense. `defense_position_ratings` carries no
+          -- sport column (migration 0035) and (season, as_of_week) stops
+          -- identifying a league once a second one is rated: college and the
+          -- NFL both have a 2025 week 8. The ids would not have collided, so
+          -- this returned 32 extra rows that simply never joined -- harmless
+          -- today and exactly the shape of leak that stops being harmless the
+          -- first time something aggregates over the set.
+          join teams t on t.id = r.defense_team_id and t.sport = %(sport)s
+         where r.season     = %(season)s
+           and r.as_of_week = %(week)s
+           and r.position_group = any(%(positions)s::position_group[])
         """,
         {
             "season": as_of.season,
             "week": as_of.week,
+            "sport": as_of.sport,
             "positions": list(SKILL_POSITIONS),
         },
     )

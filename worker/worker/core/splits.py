@@ -1,8 +1,20 @@
 """The position-split engine — what each defense allows to each position.
 
 SPORT-AGNOSTIC CORE (CLAUDE.md §3). This reads `play_player_stats` and `plays`,
-both of which the NFL adapter will populate with the same shape, so nothing here
-is college-specific. The CFBD ingest is upstream of it.
+both of which the NFL adapter populates with the same shape, so nothing here is
+college-specific. The CFBD ingest is upstream of it.
+
+AGNOSTIC IS NOT SPORT-BLIND, and this module was the last place in the core that
+confused the two (`AsOf` in core/features.py carries the same warning). Every
+query below used to be scoped by `season` alone. Neither `plays`,
+`play_player_stats` nor `defense_position_game_splits` carries a `sport` column
+-- deliberately, since all three inherit it through their foreign keys
+(migration 0035) -- so `season` on its own stopped identifying a league the
+moment NFL play-by-play landed. What that would have produced is worth stating,
+because none of it raises: one league mean fitted across 136 college defenses
+and 32 NFL ones, every college rating pulled toward NFL scoring rates, and a
+`rank_vs_position` ordering two leagues in a single list. The sport is therefore
+threaded from the job down, defaulted to 'cfb' exactly as the column is.
 
 This is the primary defensive signal (CLAUDE.md §5). No provider serves "what
 this defense allows to RBs", so it is built here in two stages that the schema
@@ -159,6 +171,9 @@ with per_play as (
         bool_or(pps.stat_type = 'Reception')                as has_reception
       from play_player_stats pps
       join plays pl on pl.id = pps.play_id
+      -- The sport filter. `play_player_stats` has no sport of its own; it
+      -- inherits one through the game, which is the only place it is stored.
+      join games g on g.id = pps.game_id and g.sport = %(sport)s
      where pps.season = %(season)s
        and pps.position_group = any(%(positions)s)
      group by pps.play_id, pps.game_id, pps.opponent_team_id, pps.team_id,
@@ -215,19 +230,22 @@ on conflict (game_id, defense_team_id, position_group) do update set
 """
 
 
-def compute_game_splits(season: int, goal_line_yards: int = 10) -> int:
+def compute_game_splits(
+    season: int, goal_line_yards: int = 10, sport: str = "cfb"
+) -> int:
     """Build raw per-game defensive splits for a season. Returns rows written."""
     n = execute(
         SPLIT_SQL,
         {
             "season": season,
+            "sport": sport,
             "positions": list(SKILL_POSITIONS),
             "explosive_rush": EXPLOSIVE_RUSH_YARDS,
             "explosive_rec": EXPLOSIVE_REC_YARDS,
             "goal_line": goal_line_yards,
         },
     )
-    log.info("defense_position_game_splits %d: %d rows", season, n)
+    log.info("defense_position_game_splits %s %d: %d rows", sport, season, n)
     return n
 
 
@@ -291,17 +309,24 @@ def _fit_additive(
     return league_mean, dict(defense_effect), dict(offense_effect)
 
 
-def _load_observations(season: int) -> dict[str, list[Observation]]:
-    """Read raw splits, grouped by position."""
+def _load_observations(season: int, sport: str = "cfb") -> dict[str, list[Observation]]:
+    """Read raw splits, grouped by position.
+
+    Joined to `teams` for the sport alone. `defense_position_game_splits` has no
+    sport column and inherits one through either team, so filtering on the
+    defense is sufficient: a game between two sports cannot exist -- `no game
+    joins a team of another sport` in audit_data asserts exactly that.
+    """
     rows = fetch_all(
         """
-        select defense_team_id, offense_team_id, week, position_group,
-               rush_yards_allowed, rec_yards_allowed, receptions_allowed,
-               rush_tds_allowed, rec_tds_allowed, ppa_allowed
-          from defense_position_game_splits
-         where season = %s
+        select s.defense_team_id, s.offense_team_id, s.week, s.position_group,
+               s.rush_yards_allowed, s.rec_yards_allowed, s.receptions_allowed,
+               s.rush_tds_allowed, s.rec_tds_allowed, s.ppa_allowed
+          from defense_position_game_splits s
+          join teams t on t.id = s.defense_team_id and t.sport = %s
+         where s.season = %s
         """,
-        (season,),
+        (sport, season),
     )
 
     by_position: dict[str, list[Observation]] = defaultdict(list)
@@ -322,32 +347,61 @@ def _load_observations(season: int) -> dict[str, list[Observation]]:
     return by_position
 
 
-def _fbs_team_ids(season: int) -> set[int]:
+def _rated_team_ids(season: int, sport: str = "cfb") -> set[int]:
+    """The defenses a rating is published for -- the league being ranked against.
+
+    WAS `_fbs_team_ids`, AND THE RENAME IS THE POINT. 'FBS' is a college idea
+    with no NFL counterpart: `team_seasons.classification` is NULL for all 32
+    NFL rows, so the old query returned the empty set for NFL and every NFL
+    defense would have been dropped from `compute_ratings` -- silently, since
+    the loop `continue`s rather than raising, and the job would have reported a
+    successful run that wrote no NFL ratings at all.
+
+    The college rule is preserved exactly rather than relaxed: ranking an FCS
+    defense against FBS ones is still meaningless, and splits are still computed
+    for every defense so FBS-vs-FCS games are not lost. The condition simply
+    says which league a sport's ranked population is, in one query rather than a
+    branch, so a third sport answers it by adding a row's worth of predicate.
+    """
     return {
         r["team_id"]
         for r in fetch_all(
             """
-            select team_id from team_seasons
-             where season = %s and classification = 'fbs'
+            select ts.team_id
+              from team_seasons ts
+              join teams t on t.id = ts.team_id
+             where ts.season = %s
+               and t.sport = %s
+               and (t.sport <> 'cfb' or ts.classification = 'fbs')
             """,
-            (season,),
+            (season, sport),
         )
     }
 
 
-def compute_ratings(season: int, max_week: int | None = None) -> int:
+def compute_ratings(
+    season: int, max_week: int | None = None, sport: str = "cfb"
+) -> int:
     """Fit opponent-adjusted ratings for every (position, as_of_week).
 
     One fit per cutoff. A rating at as_of_week = N is fitted ONLY on games with
     week < N, which is what makes it usable as a week-N feature — the strict
     inequality is the entire point and is asserted in the tests.
+
+    ONE SPORT PER CALL, never both. The fit's league mean is the quantity every
+    adjusted rating is expressed relative to, so pooling two leagues into it
+    does not merely add rows — it moves every number this function has ever
+    written.
     """
-    by_position = _load_observations(season)
+    by_position = _load_observations(season, sport)
     if not by_position:
-        log.warning("No splits found for %d; run compute_game_splits first.", season)
+        log.warning(
+            "No splits found for %s %d; run compute_game_splits first.",
+            sport, season,
+        )
         return 0
 
-    fbs = _fbs_team_ids(season)
+    rated = _rated_team_ids(season, sport)
     weeks = sorted({o.week for obs in by_position.values() for o in obs})
     if not weeks:
         return 0
@@ -379,10 +433,11 @@ def compute_ratings(season: int, max_week: int | None = None) -> int:
 
             rows_this_cut: list[dict[str, Any]] = []
             for defense_id, n_games in games_by_defense.items():
-                if defense_id not in fbs:
+                if defense_id not in rated:
                     # Splits are computed for every defense so FBS-vs-FCS games
                     # are not lost, but ranking an FCS defense against FBS ones
-                    # would be meaningless.
+                    # would be meaningless. See `_rated_team_ids` for what this
+                    # set means in a sport that has no such tier.
                     continue
 
                 shrink = n_games / (n_games + SHRINKAGE_GAMES)
@@ -444,13 +499,28 @@ def compute_ratings(season: int, max_week: int | None = None) -> int:
     # previous run survived the rebuild with games_included = 1 against zero
     # games. Ratings are derived, so a rebuild for a season has to be the whole
     # truth for that season and version.
+    #
+    # SCOPED TO THE SPORT, AND THIS IS THE SECOND HALF OF THE SEAM FIX. Making
+    # the FIT sport-aware while leaving this delete on `season` alone was worse
+    # than doing nothing: the NFL run then rebuilt its own ratings correctly and
+    # deleted every college rating for the same season on its way past. Measured
+    # when it happened -- one `build_splits --sport nfl` over 2023-2025 removed
+    # 13,764 college rows and reported success. "Replace the whole truth for
+    # this season" has to mean this season OF THIS LEAGUE.
     stale = execute(
-        "delete from defense_position_ratings "
-        " where season = %s and adjustment_version = %s",
-        (season, ADJUSTMENT_VERSION),
+        "delete from defense_position_ratings r"
+        " using teams t"
+        " where t.id = r.defense_team_id"
+        "   and t.sport = %s"
+        "   and r.season = %s"
+        "   and r.adjustment_version = %s",
+        (sport, season, ADJUSTMENT_VERSION),
     )
     if stale:
-        log.info("defense_position_ratings %d: cleared %d prior rows", season, stale)
+        log.info(
+            "defense_position_ratings %s %d: cleared %d prior rows",
+            sport, season, stale,
+        )
 
     n = upsert(
         "defense_position_ratings",
@@ -467,11 +537,15 @@ def compute_ratings(season: int, max_week: int | None = None) -> int:
     return n
 
 
-def run_split_engine(season: int, goal_line_yards: int = 10) -> dict[str, int]:
+def run_split_engine(
+    season: int, goal_line_yards: int = 10, sport: str = "cfb"
+) -> dict[str, int]:
     counts = {
-        "defense_position_game_splits": compute_game_splits(season, goal_line_yards),
+        "defense_position_game_splits": compute_game_splits(
+            season, goal_line_yards, sport
+        ),
     }
-    counts["defense_position_ratings"] = compute_ratings(season)
+    counts["defense_position_ratings"] = compute_ratings(season, sport=sport)
     return counts
 
 

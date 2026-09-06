@@ -74,10 +74,19 @@ def populated_week(conn):
         select g.season, g.week, count(*) as games
           from games g
          where g.week >= 4
+           and g.sport = 'cfb'
            -- full-ingest seasons only. EXISTS, not a join: joining games to
            -- plays on season alone multiplies each game by every play in that
            -- season, which is 300k+ rows of cartesian product.
-           and exists (select 1 from plays p where p.season = g.season)
+           --
+           -- THE EXISTS IS SCOPED TO THE SPORT TOO. `plays` has no sport column
+           -- and matching on season alone made an NFL-only season look like a
+           -- full-ingest college one the moment N4 landed NFL play-by-play.
+           and exists (
+             select 1 from plays p
+               join games pg on pg.id = p.game_id and pg.sport = g.sport
+              where p.season = g.season
+           )
          group by g.season, g.week
          order by count(*) desc, g.season desc
          limit 1
@@ -407,10 +416,22 @@ class TestFeatureFrame:
         # them. That is not schema drift, it is a season we never project: it
         # exists to supply prior-year features to the season after it. The
         # guarantee that matters is across the seasons the backtest walks.
+        # SCOPED TO THE SPORT THE FRAMES ARE BUILT FOR. `AsOf` below defaults to
+        # college, so a season list drawn from `plays` across both sports asked
+        # for a COLLEGE frame for a season only the NFL had play-by-play in.
+        # That is how this failed when N4 loaded NFL 2023: dev holds college
+        # 2023 box scores and no college 2023 plays, so the 2023 college frame
+        # legitimately had 155 columns against 163 for 2024 and 2025, and the
+        # test reported schema drift in code that had not changed.
         seasons = [
             int(r["season"])
             for r in conn.execute(
-                "select distinct season from plays order by season"
+                """
+                select distinct p.season
+                  from plays p
+                  join games g on g.id = p.game_id and g.sport = 'cfb'
+                 order by p.season
+                """
             ).fetchall()
         ]
         if len(seasons) < 2:
@@ -587,7 +608,14 @@ class TestPriorScoringRecord:
             """
             select g.season
               from games g
-             where exists (select 1 from plays p where p.season = g.season - 1)
+             where g.sport = 'cfb'
+               -- Same sport on both sides of the season-1 lookup, for the
+               -- reason spelled out in the schema-drift test above.
+               and exists (
+                 select 1 from plays p
+                   join games pg on pg.id = p.game_id and pg.sport = g.sport
+                  where p.season = g.season - 1
+               )
              group by g.season
              order by g.season desc
              limit 1

@@ -25,6 +25,7 @@ import type {
 } from "@/lib/core/types";
 import { type DbRow, MAX_ROWS_PER_REQUEST, unwrap } from "@/lib/data/query";
 import { cachedRead } from "@/lib/data/cache";
+import { DEFAULT_SPORT } from "@/lib/core/sport";
 
 /**
  * Cumulative raw allowances to each position, through weeks BEFORE `week`.
@@ -162,10 +163,15 @@ async function readDefenseRatings(
       "defense_team_id, position_group, as_of_week, games_included, " +
         "adj_rush_yards_allowed_pg, adj_rec_yards_allowed_pg, " +
         "adj_receptions_allowed_pg, adj_rush_tds_allowed_pg, " +
-        "adj_rec_tds_allowed_pg, rank_vs_position, shrinkage_weight",
+        "adj_rec_tds_allowed_pg, rank_vs_position, shrinkage_weight, " +
+        // THE SPORT FILTER, as an inner join because this table has no sport
+        // column of its own — it inherits one through the defense (migration
+        // 0035). `!inner` makes the embed a filter rather than a nested read.
+        "teams!inner(sport)",
     )
     .eq("season", season)
     .eq("as_of_week", week)
+    .eq("teams.sport", DEFAULT_SPORT)
     .order("rank_vs_position", { nullsFirst: false });
 
   if (positionGroup) query = query.eq("position_group", positionGroup);
@@ -176,6 +182,12 @@ async function readDefenseRatings(
   // under the cap — but a truncated read is indistinguishable from a short one,
   // and the failure would be a targets list quietly missing a position. Cheaper
   // to fail loudly than to page a query that should never need it.
+  //
+  // WITHOUT THE SPORT FILTER THIS WOULD HAVE GONE WRONG QUIETLY RATHER THAN
+  // LOUDLY. N4 rates 32 NFL defenses per (season, cutoff, position), so the
+  // count would have become 672 — still under the cap, so no error, just NFL
+  // teams sitting in the college "who to target" list and the defense ranks.
+  // The trigger is dated: NFL 2026 play-by-play publishes at kickoff.
   if (rows.length >= MAX_ROWS_PER_REQUEST) {
     throw new Error(
       `defense_position_ratings returned ${rows.length} rows, at or past ` +

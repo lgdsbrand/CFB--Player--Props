@@ -591,6 +591,46 @@ is the first thing to add when the NFL projection step needs a usage floor
 (N5). Inventing them from `carries + targets` would make a usage filter that
 silently means something different per sport.
 
+### `nfl_ingest_plays`
+
+```bash
+python -m worker.jobs.nfl_ingest_plays --seasons 2023 2024 2025 --dry-run
+python -m worker.jobs.nfl_ingest_plays --seasons 2023 2024 2025
+python -m worker.jobs.nfl_ingest_plays --seasons 2026 --current-season 2026
+```
+
+NFL play-by-play into `plays` and its attribution into `play_player_stats`.
+Requires `nfl_ingest_reference` for the same seasons. **Run
+`build_splits --sport nfl` afterwards** — this job writes only the raw material.
+
+Measured 2023–2025: 36,129 / 35,563 / 35,166 plays and 56,625 / 55,608 / 54,950
+attribution rows, 285 games and weeks 1–22 each, no skipped rows. About 70 MB of
+database for the three seasons together.
+
+**`plays` is stored FILTERED for the NFL and complete for college.** Only plays
+carrying a rusher, receiver or passer id are kept — 72% of the file; kickoffs,
+punts, field goals, timeouts and period markers are dropped. Every read of
+`plays` in this project joins it to `play_player_stats`, so nothing consumes
+what is dropped, but a future consumer wanting a complete NFL play log
+(special-teams modelling, drive charts) must reload rather than assume.
+
+**A season that has not started 404s**, and that is correct rather than a
+failure to handle: nflverse publishes `play_by_play_{season}` once the season
+begins. 2026 will 404 until kickoff on 10 September.
+
+**`stat_type` uses CFBD's vocabulary** — 'Rush', 'Reception', 'Target',
+'Touchdown', 'Completion', 'Incompletion' — because `core/splits.py` and
+`core/features.py` filter on those literals. 'Target' is emitted on
+incompletions only, since the split engine reads targets as receptions plus
+Target rows.
+
+**NFL targets are complete and college ones are not.** `core/features.py`
+documents a distortion in the college goal-line decomposition caused by CFBD
+emitting `Target` on only some incompletions. That distortion does not exist
+here (implied catch rate 66.8%, which is the real one), so any comparison of a
+college conversion rate against an NFL one compares an artifact with a
+measurement.
+
 ### `run_backtest`
 
 ```bash

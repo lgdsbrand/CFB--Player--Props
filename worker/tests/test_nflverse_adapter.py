@@ -175,3 +175,53 @@ class TestScalars:
 
     def test_junk_is_absence_rather_than_an_exception(self):
         assert int_or_none("abc") is None
+
+
+class TestThePositionMapIsComplete:
+    """Every position string the sources use must map, or it becomes OTHER.
+
+    `PositionMapper` counts what it cannot place rather than raising, which is
+    right -- an unrecognised position is a data-quality signal, not a stop
+    condition. The cost of that choice is that a gap surfaces as a WARNING in a
+    log nobody is reading during a bulk load.
+
+    That is exactly what happened: the weekly-stats asset spells safety `SAF`
+    while the roster spells it `S`, and 3,920 rows were bucketed as OTHER
+    before anyone enumerated the strings. This pins the vocabulary so the next
+    disagreement between two assets fails here instead.
+    """
+
+    #: Every distinct position string across roster_2023..2026 and
+    #: stats_player_week_2023..2025, enumerated 2026-09-05. 27 in total.
+    OBSERVED = frozenset({
+        "QB", "RB", "FB", "HB", "WR", "TE",
+        "OL", "T", "OT", "G", "OG", "C", "LS",
+        "DL", "DE", "DT", "NT", "EDGE",
+        "LB", "ILB", "OLB", "MLB",
+        "DB", "CB", "S", "SAF", "FS", "SS",
+        "K", "P",
+    })
+
+    def test_every_observed_position_maps(self):
+        from worker.adapters.nflverse.mapping import POSITION_MAP
+
+        missing = sorted(self.OBSERVED - set(POSITION_MAP))
+        assert not missing, (
+            f"nflverse uses {missing} and the map does not; those rows would "
+            f"be silently bucketed as OTHER"
+        )
+
+    def test_safety_maps_the_same_from_either_asset(self):
+        # The specific disagreement that motivated this.
+        mapper = PositionMapper()
+        assert mapper.group_for("S") == "DB"
+        assert mapper.group_for("SAF") == "DB"
+        assert not mapper.unmapped
+
+    def test_the_four_modelled_positions_are_unambiguous(self):
+        # A miscategorised skill position is worse than an unmapped one -- it
+        # puts a player on the wrong position tab with the wrong markets.
+        mapper = PositionMapper()
+        for raw, expected in (("QB", "QB"), ("RB", "RB"), ("FB", "RB"),
+                              ("HB", "RB"), ("WR", "WR"), ("TE", "TE")):
+            assert mapper.group_for(raw) == expected

@@ -56,6 +56,13 @@ USER_AGENT = "cfb-props-worker (+https://github.com/lgdsbrand)"
 #: Generous: these are tens-of-megabyte files from a CDN, not an API call.
 TIMEOUT_SECONDS = 180
 
+#: Total attempts per asset, including the first. Transport failures only.
+DOWNLOAD_ATTEMPTS = 4
+
+#: First backoff, doubling. Short, because there is no rate limit to respect
+#: here -- the wait is for a flaky connection, not for a quota to refill.
+RETRY_BASE_SECONDS = 2.0
+
 
 class NflverseError(RuntimeError):
     """A release asset could not be fetched, or was not what it claimed."""
@@ -87,14 +94,48 @@ class NflverseClient:
         return self.cache_dir / f"{asset}.csv"
 
     def _download(self, url: str, dest: Path) -> bytes:
+        """Fetch one asset, retrying transport failures but never HTTP ones.
+
+        NO PACING AND NO QUOTA GUARD -- see the module docstring -- BUT RETRY IS
+        A DIFFERENT THING, and the distinction cost a run to learn. These are
+        tens-of-megabyte files pulled from a public CDN, and a dropped
+        connection partway through is ordinary rather than exceptional: the
+        first real attempt at a three-season load died on
+        `[WinError 10060] connection attempt failed` before writing anything.
+        Nothing about that is a reason not to try again.
+
+        HTTP STATUSES ARE NOT RETRIED, and that is deliberate in the other
+        direction. A 404 means the asset name or the season is wrong -- the
+        frozen-legacy-asset trap in assets.py is exactly this shape -- and
+        retrying it four times just takes four times as long to report the same
+        thing.
+        """
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-                payload = response.read()
-        except urllib.error.HTTPError as exc:
-            raise NflverseError(f"{url} -> HTTP {exc.code}") from None
-        except urllib.error.URLError as exc:
-            raise NflverseError(f"{url} -> {exc.reason}") from None
+        last: Exception | None = None
+
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=TIMEOUT_SECONDS
+                ) as response:
+                    payload = response.read()
+                break
+            except urllib.error.HTTPError as exc:
+                raise NflverseError(f"{url} -> HTTP {exc.code}") from None
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                last = exc
+                if attempt == DOWNLOAD_ATTEMPTS:
+                    raise NflverseError(
+                        f"{url} -> {exc} after {DOWNLOAD_ATTEMPTS} attempts"
+                    ) from None
+                delay = RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+                log.warning(
+                    "nflverse: %s failed (%s); retry %d/%d in %.0fs",
+                    url, exc, attempt, DOWNLOAD_ATTEMPTS - 1, delay,
+                )
+                time.sleep(delay)
+        else:  # pragma: no cover - the loop either breaks or raises
+            raise NflverseError(f"{url} -> {last}")
 
         if cache_enabled():
             dest.parent.mkdir(parents=True, exist_ok=True)

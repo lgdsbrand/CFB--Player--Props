@@ -562,6 +562,35 @@ Expected for 2026: 2 conferences, 32 teams, 32 team_seasons, 272 games over 18
 weeks, 2,945 players and 2,945 memberships. One roster row is skipped for having
 no `gsis_id`, which is the source's own gap and is reported rather than hidden.
 
+### `nfl_ingest_stats`
+
+```bash
+python -m worker.jobs.nfl_ingest_stats --seasons 2023 2024 2025 --dry-run
+python -m worker.jobs.nfl_ingest_stats --seasons 2023 2024 2025
+python -m worker.jobs.nfl_ingest_stats --seasons 2026 --current-season 2026
+```
+
+NFL box scores into `player_game_stats`. Requires `nfl_ingest_reference` for the
+same seasons first — every row joins to a game by nflverse id and to a player by
+`gsis_id`, and a season with no games stored is refused rather than written as
+nothing.
+
+**`--current-season` names the season being played**, and only that one is read
+with a bounded cache age. A completed season is immutable and its file never
+expires. The flag is explicit rather than inferred from the calendar for the
+same reason `NflverseClient.fetch` refuses to default `max_age`: the wrong
+choice is silent in both directions.
+
+Expected for 2023–2025: 18,621 / 18,961 / 19,400 rows, 285 games and weeks 1–22
+each. 66 rows are skipped across the three seasons for a player who appears in a
+box score but on no roster.
+
+**`snaps` and `started` stay NULL.** Neither is in this file; nflverse publishes
+snap counts as a separate release. They feed the college usage filter, so this
+is the first thing to add when the NFL projection step needs a usage floor
+(N5). Inventing them from `carries + targets` would make a usage filter that
+silently means something different per sport.
+
 ### `run_backtest`
 
 ```bash

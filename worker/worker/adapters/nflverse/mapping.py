@@ -70,10 +70,13 @@ POSITION_MAP: dict[str, str] = {
     "ILB": "LB",
     "OLB": "LB",
     "MLB": "LB",
-    # Secondary
+    # Secondary. `SAF` is the weekly-stats spelling and `S` the roster one --
+    # the two assets disagree, and only enumerating every string across both
+    # found it. It was 3,920 rows silently bucketed as OTHER.
     "DB": "DB",
     "CB": "DB",
     "S": "DB",
+    "SAF": "DB",
     "SS": "DB",
     "FS": "DB",
     # Specialists

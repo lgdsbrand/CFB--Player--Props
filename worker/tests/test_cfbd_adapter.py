@@ -587,3 +587,62 @@ def test_summary_reports_tier_and_remaining():
     assert "Tier 2" in text
     assert "29,990" in text
     assert "30,000" in text
+
+
+class TestVendorEnumWidening:
+    """CFBD serves enum values the pinned client rejects, and pydantic then
+    fails the WHOLE response rather than the one row carrying it.
+
+    Found 2026-09-05: `/conferences` started returning `classification:
+    "ii/iii"` on 76 of 256 rows — defunct conferences with no members, none of
+    them modelled here. `ingest_reference` leads the Sunday chain under `&&`,
+    so that one unmodelled value would have taken down every job behind it.
+
+    It stayed invisible because the on-disk cache was replaying a response
+    captured before the change: a cache hit is not evidence the call still
+    works.
+    """
+
+    def test_the_new_classification_parses(self):
+        from cfbd.models.conference import Conference
+
+        from worker.adapters.cfbd.client import widen_vendor_enums
+
+        widen_vendor_enums()
+        parsed = Conference.parse_obj({
+            "id": 226,
+            "name": "Big Four",
+            "shortName": "Big Four Conference",
+            "abbreviation": None,
+            "classification": "ii/iii",
+            "memberCount": 0,
+        })
+
+        assert parsed.classification.value == "ii/iii"
+
+    def test_the_values_that_already_worked_still_do(self):
+        # Widening must only ever ADD. An fbs conference is the one this
+        # project actually reads.
+        from cfbd.models.conference import Conference
+
+        from worker.adapters.cfbd.client import widen_vendor_enums
+
+        widen_vendor_enums()
+        parsed = Conference.parse_obj({
+            "id": 1, "name": "SEC", "shortName": "Southeastern Conference",
+            "abbreviation": "SEC", "classification": "fbs", "memberCount": 16,
+        })
+
+        assert parsed.classification.value == "fbs"
+
+    def test_widening_is_idempotent(self):
+        # It runs at import and may run again; a duplicate member would raise.
+        import cfbd
+
+        from worker.adapters.cfbd.client import widen_vendor_enums
+
+        widen_vendor_enums()
+        widen_vendor_enums()
+        values = [m.value for m in cfbd.DivisionClassification]
+
+        assert values.count("ii/iii") == 1

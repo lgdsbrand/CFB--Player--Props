@@ -39,6 +39,68 @@ from worker.logging_setup import get_logger
 
 log = get_logger(__name__)
 
+# CFBD SERVES ENUM VALUES THE PINNED CLIENT DOES NOT KNOW, AND PYDANTIC REJECTS
+# THE WHOLE RESPONSE WHEN IT MEETS ONE.
+#
+# Found 2026-09-05: `/conferences` began returning `classification: "ii/iii"` on
+# 76 of its 256 rows — defunct conferences, all `memberCount: 0`, none of them
+# anything this project models. The pinned client's `DivisionClassification`
+# permits only fbs/fcs/ii/iii, so `Conference.parse_obj` raised and the ENTIRE
+# call failed. `ingest_reference` leads the Sunday chain under `&&`, so one
+# unmodelled historical conference would have taken down every job behind it.
+#
+# It was invisible until then because the on-disk cache was replaying a response
+# fetched before the change. That is the same staleness trap as the week slices
+# in `ingest_stats`: a cache hit is not evidence the call still works.
+#
+# The vendor's enums are `aenum`, which unlike stdlib `enum` can be extended at
+# runtime, so the fix is to widen the enum rather than to pin a new client
+# version mid-season or to fork the model. Adding a member cannot break parsing
+# of values that already worked; it only stops a new one being fatal.
+VENDOR_ENUM_ADDITIONS: tuple[tuple[str, str, str], ...] = (
+    ("DivisionClassification", "II_III", "ii/iii"),
+)
+
+
+def widen_vendor_enums() -> None:
+    """Teach the pinned cfbd models the values CFBD has started serving.
+
+    Idempotent, and silent when the installed client already knows a value —
+    which is what makes it safe to leave in place across a client upgrade.
+
+    `aenum` is imported here rather than at module scope, and its absence is a
+    warning rather than an error: it is not a dependency this project declares,
+    it is one `cfbd` declares and we are borrowing. If a future client drops it,
+    this should degrade to the old behaviour, not stop the worker booting.
+    """
+    try:
+        import aenum
+    except ImportError:  # pragma: no cover - aenum ships with cfbd
+        log.warning(
+            "aenum unavailable; cannot widen vendor enums. A response carrying "
+            "an unmodelled value will fail to parse."
+        )
+        return
+
+    for enum_name, member, value in VENDOR_ENUM_ADDITIONS:
+        enum_cls = getattr(cfbd, enum_name, None)
+        if enum_cls is None:
+            continue
+        if any(m.value == value for m in enum_cls):
+            continue
+        try:
+            aenum.extend_enum(enum_cls, member, value)
+        except Exception:  # pragma: no cover - defensive
+            log.warning(
+                "Could not widen %s with %r; a response carrying it will fail "
+                "to parse.", enum_name, value,
+            )
+        else:
+            log.debug("Widened %s with %r", enum_name, value)
+
+
+widen_vendor_enums()
+
 # Retry on transient conditions only. A 401/403/404 will never succeed on retry
 # and must surface immediately rather than being masked by a slow retry loop.
 RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})

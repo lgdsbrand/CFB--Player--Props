@@ -73,11 +73,29 @@
 -- the ones to widen."
 --
 -- NFL data lands this week, so `games_season_week_idx` is widened to lead with
--- sport. It is replaced rather than supplemented: `(sport, season, week)` serves
--- every query the old `(season, week)` did, because a two-column prefix of a
--- three-column index is still usable, and every read that touches this table
--- filters on sport (web/lib/core/sport.ts). Keeping both would pay for two
--- indexes to answer one question.
+-- sport, and replaced rather than supplemented.
+--
+-- BE PRECISE ABOUT WHY THAT IS SAFE, BECAUSE THE OBVIOUS REASON IS WRONG.
+-- `(season, week)` is NOT a prefix of `(sport, season, week)` -- the prefixes
+-- are `(sport)`, `(sport, season)` and `(sport, season, week)` -- so the usual
+-- "a prefix still serves the old query" argument does not apply here, and the
+-- worker does query this table without a sport filter (`SeasonContext.build`,
+-- `week_slices`, `load_games`).
+--
+-- What makes it safe is cardinality, not prefixes. `sport` has one distinct
+-- value today and will have two, so the planner can scan the leading column's
+-- handful of ranges and still use the index. Measured on production before
+-- shipping this, with EXPLAIN ANALYZE on 3,652 rows:
+--
+--   select ... where season = 2026                      -> Index Scan, cost 88.94
+--   select ... where season = 2026 and week = 1         -> Index Scan, cost 73.44
+--   select ... where sport = 'cfb' and season and week  -> Index Scan, cost 32.61
+--
+-- All three use the index; the sport-filtered read is simply cheaper, and that
+-- is the read that matters, since every web query filters on sport
+-- (web/lib/core/sport.ts) and the board is the surface with a measured
+-- concurrency ceiling. Keeping both indexes would buy a little worker-side cost
+-- back on a table small enough for the difference to be noise.
 --
 -- Its siblings are left alone on purpose. `games_home_team_idx` and
 -- `games_away_team_idx` lead with a team id, which already implies a sport --

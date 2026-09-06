@@ -113,7 +113,7 @@ def resolve_season(explicit: int | None) -> int:
     return int(row["season"])
 
 
-def projectable_weeks(season: int) -> list[int]:
+def projectable_weeks(season: int, sport: str = "cfb") -> list[int]:
     """Every regular-season week with a schedule. THE SEASON STARTS AT WEEK 1.
 
     There is no week floor here any more, and its removal is the deliverable of
@@ -145,10 +145,15 @@ def projectable_weeks(season: int) -> list[int]:
             # 6c a mislabelled postseason game sat at week 1 and was excluded by
             # the floor as well. The floor is gone, so this is the only thing
             # keeping bowls off the board.
+            #
+            # SPORT-SCOPED since NFL rows landed. Two sports share (season,
+            # week), so unscoped this returns the union of both schedules and a
+            # college run would project weeks 17-18, which college does not
+            # play.
             "select distinct week from games "
-            " where season = %s and season_type = 'regular' "
+            " where sport = %s and season = %s and season_type = 'regular' "
             " order by week",
-            (season,),
+            (sport, season),
         )
     ]
 
@@ -161,7 +166,11 @@ def projectable_weeks(season: int) -> list[int]:
 LIVE_WEEK_HORIZON_DAYS = 8
 
 
-def live_weeks(season: int, horizon_days: int = LIVE_WEEK_HORIZON_DAYS) -> list[int]:
+def live_weeks(
+    season: int,
+    horizon_days: int = LIVE_WEEK_HORIZON_DAYS,
+    sport: str = "cfb",
+) -> list[int]:
     """Regular-season weeks with a game that has not kicked off yet, near-term.
 
     THIS EXISTS BECAUSE A CAPTURED LINE IS NOT A BOARD ROW. `ingest_odds` writes
@@ -195,12 +204,18 @@ def live_weeks(season: int, horizon_days: int = LIVE_WEEK_HORIZON_DAYS) -> list[
             # live while ANY of it is unplayed. Weeks whose games have all
             # kicked drop out on their own, which is the same rule the board
             # uses to stop showing played games.
+            #
+            # SPORT-SCOPED, and this is the query the daily cron runs. Without
+            # it the NFL schedule puts weeks into a college run's horizon: on
+            # 2026-09-05 the NFL opener was four days out, so an unscoped
+            # eight-day window would have handed the college projection weeks
+            # driven by NFL kickoffs.
             "select distinct week from games "
-            " where season = %s and season_type = 'regular' "
+            " where sport = %s and season = %s and season_type = 'regular' "
             "   and start_date > now() "
             "   and start_date < now() + make_interval(days => %s) "
             " order by week",
-            (season, horizon_days),
+            (sport, season, horizon_days),
         )
     ]
 

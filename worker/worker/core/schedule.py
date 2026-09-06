@@ -132,8 +132,21 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
-def load_slate_weeks() -> list[SlateWeek]:
-    """Read every week's kickoff window from the games table."""
+def load_slate_weeks(sport: str = "cfb") -> list[SlateWeek]:
+    """Read one sport's weekly kickoff windows from the games table.
+
+    SCOPED BY SPORT, AND IT HAS TO BE. This groups by `(season, week)`, and two
+    sports share that tuple: NFL 2026 week 1 kicks on 9 September and college
+    2026 week 1 ran from 29 August to 7 September. Unscoped, the two collapse
+    into one row whose "window" spans both, and `pick_slate` then answers
+    "which week is the pipeline working on" with a week that is half one sport
+    and half the other. `run_projections --current-week` is driven from exactly
+    that answer.
+
+    Defaulted rather than required, matching `AsOf.sport` and the `sport`
+    column itself: every existing caller keeps its behaviour, and the NFL path
+    passes its own.
+    """
     # Imported here so the decision logic above stays importable without a
     # database, which is what makes it testable.
     from worker.db import fetch_all
@@ -153,9 +166,11 @@ def load_slate_weeks() -> list[SlateWeek]:
                    max(start_date) as last_kickoff
               from games
              where start_date is not null
+               and sport = %s
              group by season, week
              order by season, week
-            """
+            """,
+            (sport,),
         )
     ]
 

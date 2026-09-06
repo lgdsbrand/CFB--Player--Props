@@ -611,3 +611,41 @@ class TestPriorScoringRecord:
         rows = prior_goal_line_usage(AsOf(season=season_with_prior_plays, week=1))
         assert rows
         assert set(rows[0]) == {"player_id", *prior_goal_line_column_names()}
+
+
+class TestSportScoping:
+    """`AsOf` carries the sport because (season, week) stopped identifying a slate.
+
+    Measured on the dev database once the NFL schedule and rosters landed, with
+    the predicates removed:
+
+        upcoming_slate(2026w1)   115 games   = 99 college + 16 NFL
+        roster_universe(2026)  5,592 players = 4,674 college + 918 NFL
+
+    Nothing failed. The college projection universe simply grew by 918 players
+    it should never have contained, and the slate by 16 games with no college
+    team in them. These are unit-level guards on the shape of the fix; the
+    counts above were verified against the live database.
+    """
+
+    def test_as_of_defaults_to_college(self):
+        # Every pre-existing caller and every stored feature keeps its meaning.
+        assert AsOf(2026, 1).sport == "cfb"
+
+    def test_as_of_rejects_an_unknown_sport(self):
+        # A typo'd sport would silently filter every query to nothing, which
+        # reads as "no data yet" rather than as a bug.
+        with pytest.raises(ValueError):
+            AsOf(2026, 1, "college")
+
+    def test_the_sport_is_part_of_the_label(self):
+        # The cutoff string appears in every log line and every LookaheadError.
+        # Two sports sharing "2026w1" would make those unreadable.
+        assert str(AsOf(2026, 1, "nfl")) == "nfl:2026w1"
+        assert str(AsOf(2026, 1)) == "cfb:2026w1"
+
+    def test_as_of_is_still_frozen(self):
+        # The cutoff must not be mutable after construction -- that is what
+        # makes it safe to pass down through every query.
+        with pytest.raises(FrozenInstanceError):
+            AsOf(2026, 1).sport = "nfl"  # type: ignore[misc]

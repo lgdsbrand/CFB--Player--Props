@@ -121,3 +121,72 @@ def test_naive_timestamps_are_read_as_utc_rather_than_crashing() -> None:
     slate = pick_slate(naive, _utc(2026, 9, 5, 20))
     assert slate.week == 1
     assert slate.complete is False
+
+
+class TestTwoSportsDoNotShareAWeek:
+    """The failure that made `load_slate_weeks` take a sport.
+
+    `pick_slate` answers "which week is the pipeline working on", and
+    `run_projections --current-week` is driven from that answer. It groups by
+    (season, week) -- a tuple two sports share. Measured on 2026 week 1 once the
+    NFL schedule landed:
+
+        cfb  2026-08-29 16:00Z -> 2026-09-07 23:30Z
+        nfl  2026-09-10 00:20Z -> 2026-09-15 00:15Z
+
+    Unscoped those collapse into ONE row spanning 29 August to 15 September, and
+    every question asked of it -- is the slate underway, is it complete, what
+    week is it -- is then answered about a fortnight that is half college and
+    half NFL.
+    """
+
+    @staticmethod
+    def _merged() -> list[SlateWeek]:
+        """What an unscoped query would have returned: one merged window."""
+        return [
+            SlateWeek(
+                2026, 1,
+                datetime(2026, 8, 29, 16, tzinfo=UTC),
+                datetime(2026, 9, 15, 0, 15, tzinfo=UTC),
+            )
+        ]
+
+    @staticmethod
+    def _college_only() -> list[SlateWeek]:
+        return [
+            SlateWeek(
+                2026, 1,
+                datetime(2026, 8, 29, 16, tzinfo=UTC),
+                datetime(2026, 9, 7, 23, 30, tzinfo=UTC),
+            ),
+            SlateWeek(
+                2026, 2,
+                datetime(2026, 9, 12, 16, tzinfo=UTC),
+                datetime(2026, 9, 13, 3, tzinfo=UTC),
+            ),
+        ]
+
+    def test_the_merged_window_hides_that_college_week_one_is_over(self):
+        # 2026-09-09: every college week-1 game has been played, so the college
+        # slate has moved on to week 2. The merged window still calls it week 1
+        # and still calls it incomplete, because the NFL half has not kicked.
+        moment = datetime(2026, 9, 9, 12, tzinfo=UTC)
+
+        merged = pick_slate(self._merged(), moment)
+        assert merged.week == 1
+        assert merged.complete is False
+
+    def test_scoped_to_college_the_same_moment_reads_correctly(self):
+        moment = datetime(2026, 9, 9, 12, tzinfo=UTC)
+
+        scoped = pick_slate(self._college_only(), moment)
+        assert scoped.week == 2
+
+    def test_the_signature_takes_a_sport(self):
+        # A guard on the fix itself: reverting load_slate_weeks to a no-argument
+        # query is what would reintroduce the merge.
+        import inspect
+
+        from worker.core.schedule import load_slate_weeks
+
+        assert "sport" in inspect.signature(load_slate_weeks).parameters

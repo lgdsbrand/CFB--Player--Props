@@ -152,23 +152,43 @@ class LookaheadError(RuntimeError):
 
 @dataclass(frozen=True)
 class AsOf:
-    """A knowledge cutoff: what was known entering `week` of `season`."""
+    """A knowledge cutoff: what was known entering `week` of `season`.
+
+    CARRIES THE SPORT, AND THAT IS NOT A VIOLATION OF THE SPORT-AGNOSTIC CORE
+    (CLAUDE.md §3). Agnostic means this module must not assume college; it does
+    not mean sport-blind. Every query below is scoped by `(season, week)`, and
+    the moment a second sport shares those tables that tuple stops identifying a
+    slate: 2026 week 1 is 99 college games AND 16 NFL ones.
+
+    FOUND IN THE DATA, NOT BY READING. Loading the NFL schedule made
+    `upcoming_slate` report "2026w1: 115 games" for a college run, and
+    `roster_universe` return 5,592 skill-position players where college alone
+    has 4,674 -- exactly the 918 NFL skill players, silently added to the
+    college projection universe. No test failed; the numbers simply got bigger.
+
+    Defaulted to 'cfb' for the same reason the column is (migration 0035): it
+    keeps every existing caller and every stored feature identical, and the NFL
+    path sets it explicitly rather than relying on the default.
+    """
 
     season: int
     week: int
+    sport: str = "cfb"
 
     def __post_init__(self) -> None:
         if self.week < 1:
             raise ValueError(f"as-of week must be >= 1, got {self.week}")
         if self.season < 1900:
             raise ValueError(f"implausible season {self.season}")
+        if self.sport not in ("cfb", "nfl"):
+            raise ValueError(f"unknown sport {self.sport!r}")
 
     @property
     def prior_season(self) -> int:
         return self.season - 1
 
     def __str__(self) -> str:
-        return f"{self.season}w{self.week}"
+        return f"{self.sport}:{self.season}w{self.week}"
 
 
 def _assert_no_lookahead(
@@ -240,11 +260,12 @@ def upcoming_slate(as_of: AsOf) -> list[dict[str, Any]]:
                v.elevation_m
           from games g
           left join venues v on v.id = g.venue_id
-         where g.season = %(season)s
+         where g.sport  = %(sport)s
+           and g.season = %(season)s
            and g.week   = %(week)s
          order by g.start_date nulls last, g.id
         """,
-        {"season": as_of.season, "week": as_of.week},
+        {"season": as_of.season, "week": as_of.week, "sport": as_of.sport},
     )
 
 
@@ -279,6 +300,11 @@ def player_usage(as_of: AsOf) -> list[dict[str, Any]]:
                    partition by s.player_id order by s.week desc
                  ) as recency_rank
             from player_game_stats s
+            -- `player_game_stats` carries no `sport` column, deliberately
+            -- (migration 0035: downstream tables inherit it through their
+            -- foreign keys rather than holding a copy that can disagree). So
+            -- the scope has to come through the join, not a predicate on s.
+            join players pl on pl.id = s.player_id and pl.sport = %(sport)s
            where s.season = %(season)s
              and s.week   < %(week)s
              and s.position_group = any(%(positions)s::position_group[])
@@ -296,6 +322,7 @@ def player_usage(as_of: AsOf) -> list[dict[str, Any]]:
             "season": as_of.season,
             "week": as_of.week,
             "positions": list(SKILL_POSITIONS),
+            "sport": as_of.sport,
         },
     )
     return _assert_no_lookahead(rows, as_of, "player_usage")
@@ -329,11 +356,16 @@ def roster_universe(as_of: AsOf) -> list[dict[str, Any]]:
                coalesce(pts.position_group, p.position_group)::text as position_group
           from player_team_seasons pts
           join players p on p.id = pts.player_id
-         where pts.season = %(season)s
+         where p.sport = %(sport)s
+           and pts.season = %(season)s
            and coalesce(pts.position_group, p.position_group)
                  = any(%(positions)s::position_group[])
         """,
-        {"season": as_of.season, "positions": list(SKILL_POSITIONS)},
+        {
+            "season": as_of.season,
+            "positions": list(SKILL_POSITIONS),
+            "sport": as_of.sport,
+        },
     )
     log.info("%s: %d skill-position players on a roster", as_of, len(rows))
     return rows
@@ -357,6 +389,7 @@ def prior_season_usage(as_of: AsOf) -> list[dict[str, Any]]:
                    partition by s.player_id order by s.week desc
                  ) as recency_rank
             from player_game_stats s
+            join players pl on pl.id = s.player_id and pl.sport = %(sport)s
            where s.season = %(prior_season)s
              and s.position_group = any(%(positions)s::position_group[])
         )
@@ -372,6 +405,7 @@ def prior_season_usage(as_of: AsOf) -> list[dict[str, Any]]:
         {
             "prior_season": as_of.prior_season,
             "positions": list(SKILL_POSITIONS),
+            "sport": as_of.sport,
         },
     )
     for row in rows:
@@ -722,11 +756,12 @@ def game_weather(as_of: AsOf) -> list[dict[str, Any]]:
                w.source
           from game_weather w
           join games g on g.id = w.game_id
-         where g.season = %(season)s
+         where g.sport  = %(sport)s
+           and g.season = %(season)s
            and g.week   = %(week)s
          order by w.game_id, (w.source = 'cfbd') desc
         """,
-        {"season": as_of.season, "week": as_of.week},
+        {"season": as_of.season, "week": as_of.week, "sport": as_of.sport},
     )
 
 

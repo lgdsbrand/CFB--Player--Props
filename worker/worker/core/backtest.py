@@ -410,6 +410,7 @@ def walk_forward(
     max_week: int | None = None,
     prior_season_weight_max: float = 0.5,
     calibration: Calibration | None = None,
+    sport: str = "cfb",
 ) -> list[Prediction]:
     """Run the whole backtest, one week at a time, in order.
 
@@ -438,18 +439,18 @@ def walk_forward(
             for r in fetch_all(
                 """
                 select distinct week from games
-                 where season = %s and completed and week >= %s
+                 where sport = %s and season = %s and completed and week >= %s
                    and season_type = 'regular'
                  order by week
                 """,
-                (season, MIN_BACKTEST_WEEK),
+                (sport, season, MIN_BACKTEST_WEEK),
             )
         ]
         if max_week is not None:
             weeks = [w for w in weeks if w <= max_week]
 
         for week in weeks:
-            as_of = AsOf(season=season, week=week)
+            as_of = AsOf(season=season, week=week, sport=sport)
             weekly, observations = backtest_week(
                 as_of,
                 catalogue,

@@ -139,11 +139,43 @@ def test_every_scheduled_regular_week_is_offered(conn, season_with_a_schedule):
             """
             select distinct week from games
              where season = %(season)s and season_type = 'regular'
+               and sport = 'cfb'
             """,
             {"season": season_with_a_schedule},
         ).fetchall()
     }
     assert set(projectable_weeks(season_with_a_schedule)) == expected
+
+
+def test_the_two_sports_do_not_pool_their_weeks(conn, season_with_a_schedule):
+    """The scoping in `projectable_weeks` has to actually do something.
+
+    The test above mirrors the production predicate, so on its own it would
+    keep passing if the sport filter were dropped from BOTH. This one asserts
+    the property that filter exists for: college does not play weeks 16-18, and
+    an unscoped query returns them because the NFL does.
+
+    Skips rather than fails when only one sport is loaded -- on a database with
+    no NFL rows there is nothing to pool.
+    """
+    both = {
+        int(r["week"])
+        for r in conn.execute(
+            """
+            select distinct week from games
+             where season = %(season)s and season_type = 'regular'
+            """,
+            {"season": season_with_a_schedule},
+        ).fetchall()
+    }
+    college = set(projectable_weeks(season_with_a_schedule))
+    if both == college:
+        pytest.skip("only one sport is loaded for this season")
+
+    assert college < both, (
+        "an unscoped week list must be a strict superset of the college one; "
+        f"college={sorted(college)} pooled={sorted(both)}"
+    )
 
 
 # -----------------------------------------------------------------------------

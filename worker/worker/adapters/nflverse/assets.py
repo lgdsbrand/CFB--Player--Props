@@ -87,6 +87,7 @@ ASSETS: dict[str, str] = {
     "weekly_stats": f"{RELEASE_BASE}/stats_player/stats_player_week_{{season}}.csv",
     "roster": f"{RELEASE_BASE}/rosters/roster_{{season}}.csv",
     "play_by_play": f"{RELEASE_BASE}/pbp/play_by_play_{{season}}.csv",
+    "snap_counts": f"{RELEASE_BASE}/snap_counts/snap_counts_{{season}}.csv",
     "players": f"{RELEASE_BASE}/players/players.csv",
     "schedule": f"{NFLDATA_BASE}/games.csv",
     "team_seasons": f"{NFLDATA_BASE}/teams.csv",
@@ -95,7 +96,7 @@ ASSETS: dict[str, str] = {
 
 #: Assets whose URL carries the season, so one file is one season.
 SEASON_IN_URL: frozenset[str] = frozenset(
-    {"weekly_stats", "roster", "play_by_play"}
+    {"weekly_stats", "roster", "play_by_play", "snap_counts"}
 )
 
 #: Assets whose contents must include the season asked for.
@@ -107,7 +108,8 @@ SEASON_IN_URL: frozenset[str] = frozenset(
 #: stale read this guard exists for. Coupling the two ideas would have left the
 #: schedule, the most volatile file here, unchecked.
 REQUIRE_SEASON_PRESENT: frozenset[str] = frozenset(
-    {"weekly_stats", "roster", "play_by_play", "schedule", "team_seasons"}
+    {"weekly_stats", "roster", "play_by_play", "schedule", "team_seasons",
+     "snap_counts"}
 )
 
 #: Columns in `team_meta` that must never be ingested — CLAUDE.md §7.

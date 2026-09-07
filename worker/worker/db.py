@@ -72,7 +72,9 @@ def fetch_one(sql: str, params: tuple[Any, ...] | None = None) -> dict[str, Any]
         return cur.fetchone()
 
 
-def fetch_all(sql: str, params: tuple[Any, ...] | None = None) -> list[dict[str, Any]]:
+def fetch_all(
+    sql: str, params: tuple[Any, ...] | Mapping[str, Any] | None = None
+) -> list[dict[str, Any]]:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         return cur.fetchall()

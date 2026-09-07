@@ -1,4 +1,4 @@
-"""N3 job: NFL box scores into `player_game_stats`.
+"""N3 job: NFL box scores into `player_game_stats`. N5a added snap counts.
 
     python -m worker.jobs.nfl_ingest_stats --seasons 2023 2024 2025 --dry-run
     python -m worker.jobs.nfl_ingest_stats --seasons 2023 2024 2025 2026
@@ -22,6 +22,7 @@ import sys
 
 from worker.adapters.nflverse.client import NflverseClient, NflverseError
 from worker.adapters.nflverse.ingest_reference import NflReferenceCounts
+from worker.adapters.nflverse.ingest_snaps import run_nfl_snaps_ingest
 from worker.adapters.nflverse.ingest_stats import run_nfl_stats_ingest
 from worker.adapters.nflverse.mapping import IMMUTABLE, LIVE_MAX_AGE
 from worker.config import ConfigError, get_settings
@@ -42,6 +43,12 @@ def main(argv: list[str] | None = None) -> int:
         "--current-season", type=int,
         help="Which season is being played, and so must not be read from a "
              "stale cache. Omit for a pure historical load.",
+    )
+    parser.add_argument(
+        "--skip-snaps", action="store_true",
+        help="Load box scores only. Snap counts are a SECOND nflverse asset "
+             "and a second pass over the same table; this skips it for a "
+             "quick reload when the box scores are what changed.",
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
@@ -72,6 +79,15 @@ def main(argv: list[str] | None = None) -> int:
                     season, frame.height, frame["week"].n_unique(),
                     frame["player_id"].n_unique(),
                 )
+                if not args.skip_snaps:
+                    snaps = client.fetch(
+                        "snap_counts", season, max_age=max_age_for(season)
+                    )
+                    log.info(
+                        "%d: %d snap row(s), %d player(s)",
+                        season, snaps.height,
+                        snaps["pfr_player_id"].n_unique(),
+                    )
         except NflverseError as exc:
             log.error("%s", exc)
             return 3
@@ -83,9 +99,17 @@ def main(argv: list[str] | None = None) -> int:
         with pipeline_run(JOB_NAME, metadata={"seasons": seasons}) as run_id:
             total = 0
             for season in seasons:
+                # Box scores first, always. Snaps UPDATE rows rather than
+                # insert them, so a snap pass over a season whose box scores
+                # are not loaded yet resolves nothing and reports a clean zero
+                # -- which reads exactly like "this season has no snap data".
                 total += run_nfl_stats_ingest(
                     client, season, counts, max_age=max_age_for(season)
                 )
+                if not args.skip_snaps:
+                    run_nfl_snaps_ingest(
+                        client, season, counts, max_age=max_age_for(season)
+                    )
             set_rows_written(run_id, total)
     except (NflverseError, ValueError) as exc:
         log.error("%s", exc)

@@ -1,0 +1,73 @@
+-- =============================================================================
+-- 0053 -- players.pfr_id: the bridge nflverse's snap counts are keyed on
+--
+-- N5a. Snap counts are the one input the usage floor needs and the one thing
+-- `stats_player_week` does not carry -- nflverse publishes them as a SEPARATE
+-- release asset, keyed on neither identifier this project already stores:
+--
+--   stats_player_week  -> gsis_id        ('00-0023459')   already in players
+--   snap_counts        -> pfr_player_id  ('BankKe01')     nowhere yet
+--
+-- The roster file `nfl_ingest_reference` already downloads carries both columns
+-- on the same row, so the bridge is a column populated from a file we already
+-- read -- not a new source, and not a name match.
+--
+-- DELIBERATELY NOT UNIQUE, AND THAT IS THE WHOLE POINT OF THIS COMMENT.
+-- It was written as `text unique` first, by analogy with gsis_id (0049). That
+-- would have been a trap that fires on ONE ORDERING OF AN ORDINARY COMMAND.
+--
+-- Measured across the 2023-2026 roster files, 2,993 distinct pfr ids:
+--
+--   * TWO DIFFERENT PLAYERS NAMED BYRON YOUNG. The 2023 roster gives both
+--     `YounBy01` -- the DL (gsis 00-0038978) and the LB (gsis 00-0039137).
+--     nflverse CORRECTED this upstream: from 2024 the DL is `YounBy00`. So
+--     ingesting seasons in ascending order overwrites the collision with the
+--     correction, and the database ends up clean -- which is precisely what
+--     makes a UNIQUE constraint here dangerous rather than safe. Verified on
+--     dev 2026-09-07: after loading all four rosters, zero pfr ids cover more
+--     than one player.
+--
+--     But `--seasons 2023` alone is a documented command in the runbook, and a
+--     repair re-run of one historical season is routine. Run that way, both
+--     players carry `YounBy01`, and with a UNIQUE constraint the UPDATE that
+--     writes the second one raises -- failing the whole reference ingest, for a
+--     season that loaded fine the first time. Nothing in typecheck, pytest or
+--     audit_data would have caught it, because the collision is in a file
+--     nobody re-reads once the season is loaded.
+--
+--   * Three gsis_ids carry two pfr ids each across the four files (00-0034270
+--     -> ConkTy00/IzzoRy00, 00-0038978 -> YounBy00/YounBy01, 00-0040317 ->
+--     JoneJa15/JoneJa16), the same upstream-correction phenomenon seen from the
+--     other side. Last roster ingested wins. Their earlier seasons' snaps will
+--     not attach; three players is not worth a second identity table.
+--
+-- So this is an INDEX, not a constraint: a convenience key for one join, whose
+-- ambiguity is real and is handled by the reader. The snap ingest resolves a
+-- pfr id to at most one player and SKIPS an ambiguous one with a count, rather
+-- than attaching a snap total to an arbitrary player of the same id.
+--
+-- MEASURED on the live files, 2026-09-07:
+--   * roster_2025          3,137 rows; gsis_id 99.9%, pfr_id 70.0%
+--   * snap_counts_2025     26,612 rows, weeks 1-22, 2,189 distinct pfr ids
+--   * of the 628 skill-position players with >0 offensive snaps in 2025,
+--     the roster resolves 621 (98.9%); nflverse's all-time players.csv would
+--     resolve 625 (99.5%)
+--
+-- The 30% of roster rows with no pfr_id at all are overwhelmingly players who
+-- never take a snap -- which is exactly the population a snap count has nothing
+-- to say about, and why the headline coverage figure (70%) understates the real
+-- one (98.9%). players.csv was rejected as the source: a 7 MB extra download
+-- and a second write path to resolve four more players out of 628.
+--
+-- NULLABLE and unconstrained for NFL rows, the same judgement 0049 made about
+-- `players.gsis_id`. A NOT NULL here would reject the roster rather than
+-- describe it. Null for every cfb row by construction, as gsis_id and nfl_abbr
+-- are -- Pro-Football-Reference is an NFL source.
+-- =============================================================================
+
+alter table players add column pfr_id text;
+
+create index players_pfr_id_idx on players (pfr_id) where pfr_id is not null;
+
+comment on column players.pfr_id is
+  'Pro-Football-Reference player id (BankKe01), read from the nflverse roster. Stored solely because nflverse keys its snap_counts release on this and nothing else -- stats_player_week uses gsis_id. NOT UNIQUE ON PURPOSE: measured over 2023-2026, one pfr id covers two different players and three players changed pfr id between seasons. It is a convenience key for one join, never an identity -- resolve a player by gsis_id.';

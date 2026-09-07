@@ -55,7 +55,7 @@ from worker.adapters.nflverse.mapping import (
     int_or_none,
     text_or_none,
 )
-from worker.db import fetch_id_map, upsert
+from worker.db import execute, fetch_id_map, upsert
 from worker.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -321,6 +321,42 @@ def ingest_games(
 # -----------------------------------------------------------------------------
 # rosters
 # -----------------------------------------------------------------------------
+def _attach_pfr_ids(
+    pairs: list[tuple[str, str]], counts: NflReferenceCounts
+) -> None:
+    """Write `players.pfr_id` for the roster rows that carried one.
+
+    A separate statement rather than a column in the player upsert, because
+    `upsert` writes NULL for keys a row omits and pfr coverage is partial and
+    varies by season (70.0% of roster_2025, 66.6% of roster_2026). Folding it
+    into the payload would erase an id we already hold whenever a later roster
+    does not list one -- and would do it silently, since a lost identifier only
+    surfaces much later as snap counts that stopped attaching.
+
+    Never writes NULL. An id that disappears from a later roster is kept: a PFR
+    id we have observed is better evidence than its absence from one file.
+    """
+    if not pairs:
+        return
+    # DISTINCT on gsis_id: a player can appear twice in one roster file (a
+    # mid-season team change), and a multi-row UPDATE ... FROM with a repeated
+    # key is not an error -- it just picks one arbitrarily. Collapsing here
+    # makes the choice ours, last occurrence winning, as `upsert` does.
+    by_gsis = {gsis: pfr for gsis, pfr in pairs}
+    n = execute(
+        """
+        update players p
+           set pfr_id = v.pfr_id
+          from (select unnest(%(gsis)s::text[]) as gsis_id,
+                       unnest(%(pfr)s::text[])  as pfr_id) v
+         where p.gsis_id = v.gsis_id
+           and p.pfr_id is distinct from v.pfr_id
+        """,
+        {"gsis": list(by_gsis), "pfr": list(by_gsis.values())},
+    )
+    counts.add("players.pfr_id", n)
+
+
 def ingest_rosters(
     client: NflverseClient, season: int, counts: NflReferenceCounts
 ) -> None:
@@ -331,6 +367,7 @@ def ingest_rosters(
 
     player_payload = []
     memberships: list[dict] = []
+    pfr_pairs: list[tuple[str, str]] = []
     for row in roster.to_dicts():
         gsis = text_or_none(row.get("gsis_id"))
         if gsis is None:
@@ -367,6 +404,16 @@ def ingest_rosters(
             }
         )
 
+        # `pfr_id` is collected separately, NOT put in player_payload, and the
+        # reason is `upsert`'s union semantics: it writes NULL for any key a row
+        # omits. Roster coverage differs by season (70.0% in 2025, 66.6% in
+        # 2026), so carrying it in the payload would null out an id we already
+        # hold every time a later roster happens not to list one. See
+        # `_attach_pfr_ids`.
+        pfr = text_or_none(row.get("pfr_id"))
+        if pfr is not None:
+            pfr_pairs.append((gsis, pfr))
+
         abbr = canonical_team(row.get("team"))
         memberships.append(
             {
@@ -382,6 +429,7 @@ def ingest_rosters(
 
     n = upsert("players", player_payload, conflict_columns=["gsis_id"])
     counts.add("players", n)
+    _attach_pfr_ids(pfr_pairs, counts)
 
     player_ids = fetch_id_map("players", "gsis_id")
 

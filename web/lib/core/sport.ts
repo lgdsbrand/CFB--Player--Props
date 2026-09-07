@@ -13,10 +13,18 @@
  * planner ignores.
  *
  * WHEN THE TOGGLE ARRIVES it becomes a URL parameter resolved once per request
- * and threaded through in place of this constant. The three cached reads that
- * currently close over it (`slate-weeks`, `conferences`, and the game selector)
- * must take the sport into their cache KEY at that point, or the second sport
- * serves the first one's catalogue for the length of the TTL.
+ * and threaded through in place of this constant. The FOUR cached reads that
+ * currently close over it — `slate-weeks`, `conferences`, the game selector and
+ * `defense-ratings` — must take the sport into their cache KEY at that point,
+ * or the second sport serves the first one's catalogue for the length of the
+ * TTL.
+ *
+ * `defense-ratings` joined that list in N4 and is the one worth naming twice.
+ * It reads `defense_position_ratings`, which has no sport column of its own and
+ * inherits one through the defense, so its filter is a PostgREST
+ * `teams!inner(sport)` embed rather than a plain `.eq("sport", …)`. Its
+ * arguments are (season, week, positionGroup) — none of which distinguishes a
+ * league, since college and the NFL share every season and cutoff.
  */
 
 export type Sport = "cfb" | "nfl";

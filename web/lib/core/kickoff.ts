@@ -31,7 +31,30 @@
  * game he has played: history is that page's whole purpose, and the hit-rate
  * chart is built from exactly the games this rule hides. The rule applies where
  * props are OFFERED, not where they are recorded.
+ *
+ * ---------------------------------------------------------------------------
+ * AMENDED 2026-09-06 — STARTED GAMES ARE KEPT FOR THE REST OF THE SLATE DAY
+ * ---------------------------------------------------------------------------
+ * The rule above is now a SORT rather than a filter, for the day being played.
+ * A game that has kicked off stays on the board until the slate day rolls over,
+ * sorted beneath everything still to come; only yesterday's games are dropped.
+ *
+ * `hasKickedOff` is therefore no longer "should this be hidden" — it is "should
+ * this be marked and demoted". Nothing that calls it changed meaning, but the
+ * two questions were the same question until today and will not be again.
+ *
+ * TWO THINGS TO SAY WHEREVER A STARTED ROW IS RENDERED, because both are
+ * invisible and both would otherwise read as bugs:
+ *   * the odds are the LAST SEEN ones, since books pull player props at
+ *     kickoff — they are not live;
+ *   * the projection is the PRE-GAME number held on screen. Nothing in this
+ *     project models a game in progress.
  */
+
+// Relative and extensioned, matching every other value import inside
+// `lib/core`: these modules are run directly by `node --test`, where the `@/`
+// alias does not exist. A type-only import can use it because it is erased.
+import { slateDayStart } from "./slate-days.ts";
 
 /**
  * Has this game kicked off?
@@ -70,17 +93,31 @@ export function playedCount<T extends { startDate: string | null }>(
 }
 
 /**
- * The instant the reads filter against, rounded DOWN to the minute.
+ * The instant the reads filter against: the START OF THE CURRENT SLATE DAY.
  *
- * Rounding keeps the value stable across the several reads one page render
- * fires, so the row count beside the filters cannot be counted against a
- * different instant than the rows themselves — a one-second drift across a
- * kickoff would print a total that the page below it contradicts. It also stops
- * the timestamp behaving as a cache-buster on any read that keys on its
- * arguments.
+ * CHANGED 2026-09-06, at the client's request, and the change is one line with
+ * a long reason. It used to be "now", so a game left the board at its own
+ * kickoff. He wanted the day's projections to stay up until the day's games
+ * were over rather than disappearing one at a time through a Saturday
+ * afternoon.
+ *
+ * WHAT KEEPS THE ORIGINAL DEFECT FROM COMING BACK. Hiding started games was not
+ * arbitrary: before that rule the board carried 402 rows of already-played
+ * games on 2026 week 1, including every one of that week's 66 edges, sorted to
+ * the top because the board orders by edge. Widening the window alone would
+ * reinstate exactly that. It is safe only because `v_board_rows.has_kicked_off`
+ * (migration 0052) now leads the sort chain, so started rows are still on the
+ * board but always beneath the ones a reader can act on.
+ *
+ * WHY NOT ROUNDED-TO-THE-MINUTE ANY MORE. That rounding existed so several
+ * reads in one render could not be counted against different instants, and so
+ * the timestamp would not behave as a cache-buster. A slate-day boundary is far
+ * more stable than a rounded minute — it changes once a day — so it satisfies
+ * both properties by construction.
+ *
+ * The boundary itself is Eastern and rolls over at 04:00, not midnight; see
+ * `lib/core/slate-days.ts` for why a late Pacific kickoff makes that necessary.
  */
 export function kickoffCutoff(now: Date = new Date()): Date {
-  const rounded = new Date(now.getTime());
-  rounded.setSeconds(0, 0);
-  return rounded;
+  return slateDayStart(now);
 }

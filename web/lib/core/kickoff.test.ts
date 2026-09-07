@@ -82,15 +82,60 @@ test("opening weekend drops off the 2026 week 1 slate", () => {
   assert.equal(playedCount(games, NOW), 8);
 });
 
-test("the cutoff is rounded down to the minute", () => {
-  const cutoff = kickoffCutoff(new Date("2026-08-31T15:07:42.913Z"));
-  assert.equal(cutoff.toISOString(), "2026-08-31T15:07:00.000Z");
+// -----------------------------------------------------------------------------
+// The cutoff — the start of the slate day, not "now"
+// -----------------------------------------------------------------------------
+
+test("the cutoff is 04:00 Eastern on the day being played", () => {
+  // Sunday 14:00 EDT. 04:00 EDT is 08:00 UTC.
+  const cutoff = kickoffCutoff(new Date("2026-09-06T18:00:00Z"));
+  assert.equal(cutoff.toISOString(), "2026-09-06T08:00:00.000Z");
 });
 
-test("the rounded cutoff still hides a game that kicked earlier this minute", () => {
-  // Rounding DOWN is the safe direction: it can only ever keep a game one
-  // minute longer, never hide one that has not started.
-  const now = new Date("2026-08-31T15:07:42Z");
-  assert.equal(hasKickedOff("2026-08-31T15:07:10Z", kickoffCutoff(now)), false);
-  assert.equal(hasKickedOff("2026-08-31T15:06:00Z", kickoffCutoff(now)), true);
+test("before 04:00 Eastern the slate is still yesterday's", () => {
+  // Sunday 01:00 EDT — the tail of Saturday night's games.
+  const cutoff = kickoffCutoff(new Date("2026-09-06T05:00:00Z"));
+  assert.equal(cutoff.toISOString(), "2026-09-05T08:00:00.000Z");
+});
+
+test("the cutoff follows the DST shift rather than a fixed offset", () => {
+  // Mid-November is EST, so 04:00 local is 09:00 UTC, not 08:00. The season
+  // crosses this boundary, so a hardcoded -4 would be wrong for a third of it.
+  const cutoff = kickoffCutoff(new Date("2026-11-15T18:00:00Z"));
+  assert.equal(cutoff.toISOString(), "2026-11-15T09:00:00.000Z");
+});
+
+test("a game still being played at 1am is not dropped from the board", () => {
+  // THE CASE THE 04:00 ROLLOVER EXISTS FOR. UNLV at Hawai'i kicked
+  // 2026-09-06T02:00:00Z — Friday 22:00 Eastern — and runs past midnight. At
+  // 01:00 Eastern it is still in progress, and a midnight rollover would have
+  // hidden it mid-game, which is the exact complaint this change answers.
+  const duringTheGame = new Date("2026-09-06T05:00:00Z");
+  const kickoff = "2026-09-06T02:00:00Z";
+
+  assert.equal(hasKickedOff(kickoff, kickoffCutoff(duringTheGame)), false);
+
+  // And it does drop once the slate genuinely rolls over.
+  const nextAfternoon = new Date("2026-09-06T18:00:00Z");
+  assert.equal(hasKickedOff(kickoff, kickoffCutoff(nextAfternoon)), true);
+});
+
+test("yesterday's games drop but today's started ones stay", () => {
+  // Saturday 20:00 EDT: the noon kickoff is over, the evening one is running,
+  // Friday night's is gone.
+  const saturdayEvening = new Date("2026-09-06T00:00:00Z");
+  const cutoff = kickoffCutoff(saturdayEvening);
+
+  const games = [
+    game(1, "2026-09-04T23:00:00Z"), // Friday night — earlier slate day
+    game(2, "2026-09-05T16:00:00Z"), // Saturday noon — played, kept
+    game(3, "2026-09-05T23:30:00Z"), // Saturday night — still to come
+    game(4, null), // TBD — never hidden
+  ];
+
+  assert.deepEqual(
+    upcomingGames(games, cutoff).map((g) => g.gameId),
+    [2, 3, 4],
+  );
+  assert.equal(playedCount(games, cutoff), 1);
 });

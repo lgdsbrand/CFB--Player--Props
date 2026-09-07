@@ -88,6 +88,20 @@ export type BoardRow = {
   isHome: boolean;
 
   /**
+   * Whether this game had started when the query ran.
+   *
+   * FROM THE DATABASE, NOT RECOMPUTED FROM `startDate`. The board sorts on this
+   * column in SQL (migration 0052), so the row's badge and its position have to
+   * come from one answer — recomputing it in the browser against a different
+   * clock is how a row ends up sorted as started and labelled as upcoming.
+   *
+   * A started row keeps its pre-game projection and its last-seen odds. Books
+   * pull player props at kickoff and nothing here models a game in progress, so
+   * both numbers are frozen rather than live and must be labelled as such.
+   */
+  hasKickedOff: boolean;
+
+  /**
    * Where the game is played. Display only — nothing in the model reads these.
    *
    * All three are nullable because `games.venue_id` is: CFBD does not always

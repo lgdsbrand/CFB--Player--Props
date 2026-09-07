@@ -166,7 +166,28 @@ export function boardSortKeys(sort: BoardSort = "edge"): BoardSortKey[] {
         ? [descending("opponent_rank_vs_position")]
         : [descending("edge"), descending("display_confidence")];
 
-  const keys = [...primary];
+  // STARTED GAMES SORT LAST, AHEAD OF EVERY OTHER TERM, and this is what makes
+  // keeping them on the board safe rather than a regression.
+  //
+  // The board used to hide a game at its own kickoff. It now keeps it until the
+  // slate day rolls over (migration 0052, `lib/core/kickoff.ts`), which is what
+  // the client asked for — but the reason it was hidden has not gone away: a
+  // settled prop still carries whatever edge it had, and the board still orders
+  // by edge, so without this term the rows a reader can no longer bet would sit
+  // straight back at the top. That is measured, not feared: 402 such rows and
+  // all 66 of the week's edges, on 2026 week 1.
+  //
+  // ASCENDING, so `false` (not yet kicked off) comes before `true`. It leads
+  // the chain rather than following it, because a demotion that only applies
+  // within an edge tier is not a demotion.
+  //
+  // `nullsFirst: false` is inherited from the shape below but cannot fire: the
+  // column is `coalesce(... , false)` in the view precisely so a TBD kickoff is
+  // a real boolean rather than a null whose position the sort would decide.
+  const keys: BoardSortKey[] = [
+    { column: "has_kicked_off", ascending: true, nullsFirst: false },
+    ...primary,
+  ];
   if (!keys.some((key) => key.column === "opponent_rank_vs_position")) {
     keys.push(descending("opponent_rank_vs_position"));
   }
@@ -265,6 +286,13 @@ export type PlayerCard = {
 
   gameId: number;
   startDate: string | null;
+  /**
+   * Game-level, like the kickoff beside it. Taken from the FIRST row of the
+   * card rather than recomputed: every row of a card is the same game, and the
+   * value came from the same query that ordered the board, so the badge and the
+   * card's position cannot disagree.
+   */
+  hasKickedOff: boolean;
   isHome: boolean;
   neutralSite: boolean;
   conferenceName: string | null;
@@ -356,6 +384,7 @@ export function groupIntoCards(rows: BoardRow[]): PlayerCard[] {
       opponentRankVsPosition: row.opponentRankVsPosition,
       gameId: row.gameId,
       startDate: row.startDate,
+      hasKickedOff: row.hasKickedOff,
       isHome: row.isHome,
       neutralSite: row.neutralSite,
       conferenceName: row.conferenceName,

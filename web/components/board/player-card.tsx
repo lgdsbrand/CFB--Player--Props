@@ -95,6 +95,25 @@ export function PlayerCard({
             {card.neutralSite ? (
               <span className="text-dim">· neutral</span>
             ) : null}
+            {/* STARTED, AND SAYING SO IS NOT DECORATION. The board keeps a game
+                until the slate day rolls over and sorts it beneath everything
+                still to come; without this pill a card sitting low reads as a
+                weak edge rather than a settled one. The tooltip carries the two
+                things that are otherwise invisible — the odds stopped updating
+                at kickoff, and the projection is the pre-game number. */}
+            {card.hasKickedOff ? (
+              <span
+                className="border-border-subtle text-dim rounded-full border px-1.5 py-0.5 text-[0.5625rem] font-bold uppercase tracking-label"
+                title={
+                  "This game has started. The projection is the pre-game " +
+                  "number and the odds are the last seen before kickoff — " +
+                  "books pull player props once a game is under way, and " +
+                  "nothing here models a game in progress."
+                }
+              >
+                Started
+              </span>
+            ) : null}
           </div>
 
           {/*

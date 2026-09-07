@@ -276,17 +276,18 @@ export default async function Home({
       {played > 0 ? (
         <p className="text-dim border-border-subtle rounded-xl border px-3 py-2 text-xs">
           <span className="text-muted font-bold uppercase tracking-label">
-            Already played
+            Earlier days
           </span>{" "}
           — {formatCount(played)}{" "}
-          {played === 1 ? "game has" : "games have"} kicked off this week and{" "}
+          {played === 1 ? "game was" : "games were"} played on an earlier day of
+          this week and{" "}
           {played === 1 ? "is" : "are"}{" "}
           {/* Explicit, not a literal space. A space that follows an expression
               OPENING a line is dropped by the JSX transform — the same defect
               that once rendered "confidenceis" on the home page. */}
-          no longer listed. Those props are settled, so they are results rather
-          than plays; a player&rsquo;s own page still shows how each one
-          finished.
+          no longer listed. Today&rsquo;s games stay on the board once they kick
+          off, marked STARTED and sorted below the ones still to play; a
+          player&rsquo;s own page shows how every settled prop finished.
         </p>
       ) : null}
 

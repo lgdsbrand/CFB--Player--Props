@@ -55,6 +55,92 @@ export type SlateDay = {
 };
 
 /**
+ * The hour, Eastern, at which one slate day gives way to the next.
+ *
+ * FOUR, NOT MIDNIGHT, and the difference is a real game rather than a margin of
+ * comfort. A Hawai'i or late Pacific kickoff goes off around 23:00 Eastern and
+ * finishes near 02:00 the next morning. Rolling the day over at midnight would
+ * hide it from the board while it was still being played — which is the exact
+ * complaint this whole rule exists to answer. By 04:00 Eastern nothing is in
+ * progress anywhere in the country.
+ */
+export const SLATE_DAY_ROLLOVER_HOUR = 4;
+
+/** Wall-clock reading of an instant in `SLATE_TIME_ZONE`. */
+const WALL_CLOCK_FORMAT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: SLATE_TIME_ZONE,
+  hour12: false,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+function wallClockParts(at: Date) {
+  const parts = WALL_CLOCK_FORMAT.formatToParts(at);
+  const value = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value ?? "0");
+  return {
+    year: value("year"),
+    month: value("month"),
+    day: value("day"),
+    // `en-CA` with hour12:false renders midnight as 24, not 00.
+    hour: value("hour") % 24,
+    minute: value("minute"),
+    second: value("second"),
+  };
+}
+
+/**
+ * How far `SLATE_TIME_ZONE` is from UTC at a given instant, in minutes.
+ *
+ * Derived by reading the instant's Eastern wall clock and asking what UTC
+ * instant that reading would be if it were UTC. The gap is the offset. Doing it
+ * this way rather than hardcoding −4/−5 is not pedantry: the season crosses the
+ * November DST boundary, so a fixed offset is wrong for a third of it.
+ */
+function zoneOffsetMinutes(at: Date): number {
+  const p = wallClockParts(at);
+  const asIfUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return (asIfUtc - at.getTime()) / 60_000;
+}
+
+/**
+ * The instant the current slate day began — `SLATE_DAY_ROLLOVER_HOUR` Eastern
+ * on whichever Eastern date the slate is currently on.
+ *
+ * This is the board's "still today" boundary. Everything that kicked off after
+ * it belongs to the day being played, whether or not it has finished.
+ *
+ * TWO PASSES, because converting a wall-clock time back into an instant is not
+ * a subtraction. The offset depends on the instant, and the instant is what we
+ * are solving for — so the first pass uses the offset as it is *now* to get
+ * close, and the second corrects it using the offset at the answer. They differ
+ * only across a DST transition, which is precisely the weekend nobody would
+ * notice the bug on until a Saturday of games sorted wrongly.
+ */
+export function slateDayStart(now: Date = new Date()): Date {
+  const p = wallClockParts(now);
+  // Before the rollover hour we are still on yesterday's slate.
+  const dayShift = p.hour < SLATE_DAY_ROLLOVER_HOUR ? -1 : 0;
+
+  const wallAsUtc = Date.UTC(
+    p.year,
+    p.month - 1,
+    p.day + dayShift,
+    SLATE_DAY_ROLLOVER_HOUR,
+    0,
+    0,
+  );
+
+  let instant = wallAsUtc - zoneOffsetMinutes(now) * 60_000;
+  instant = wallAsUtc - zoneOffsetMinutes(new Date(instant)) * 60_000;
+  return new Date(instant);
+}
+
+/**
  * The Eastern calendar day a kickoff belongs to.
  *
  * Returns undefined for a game with no kickoff time — CFBD publishes those as

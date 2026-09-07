@@ -116,7 +116,11 @@ const COLUMNS =
   "sportsbook_name, projected_median, projected_p10, projected_p90, prior_weight, " +
   "opponent_rank_vs_position, conference_name, conference_is_displayed, " +
   "display_confidence, effective_sample, venue_name, venue_city, venue_state, " +
-  "team_spread, game_total, game_line_providers, team_poll_rank, opponent_poll_rank";
+  "team_spread, game_total, game_line_providers, team_poll_rank, opponent_poll_rank, " +
+  // Computed from now() at read time (migration 0052). Selected as well as
+  // sorted on, because the card has to SAY a game has started — a row that is
+  // merely lower down the board looks like a weak edge, not a settled one.
+  "has_kicked_off";
 
 /**
  * The player-detail column list: everything above, plus the ladder.
@@ -632,6 +636,10 @@ function toBoardRow(row: Record<string, unknown>): BoardRow {
 
     gameId: row.game_id as number,
     startDate: (row.start_date as string | null) ?? null,
+    // Defaults to false, matching the view's own coalesce: a row that somehow
+    // arrives without the column is treated as upcoming, which is the same
+    // shown-not-hidden call `hasKickedOff` makes for a null kickoff.
+    hasKickedOff: (row.has_kicked_off as boolean | null) ?? false,
     neutralSite: row.neutral_site as boolean,
     isHome: row.is_home as boolean,
 

@@ -150,14 +150,22 @@ test("no sort orders on raw confidence", () => {
 });
 
 test("the confidence control sorts on the number the card prints", () => {
-  assert.equal(boardSortKeys("confidence")[0].column, "display_confidence");
+  // [0] is the started-games demotion, which every sort carries; [1] is the
+  // first term that actually ranks a row.
+  assert.equal(boardSortKeys("confidence")[1].column, "display_confidence");
 });
 
 test("every sort still decides something on an unpriced slate", () => {
   for (const sort of SORTS) {
     const keys = boardSortKeys(sort);
     const meaningful = keys.filter(
-      (key) => !PICK_ONLY.has(key.column) && key.column !== "projection_id",
+      (key) =>
+        !PICK_ONLY.has(key.column) &&
+        key.column !== "projection_id" &&
+        // A demotion, not a ranking: it separates started from upcoming and
+        // decides nothing among the rows a reader is actually choosing between,
+        // which is the population this test is about.
+        key.column !== "has_kicked_off",
     );
     assert.ok(
       meaningful.length > 0,
@@ -211,13 +219,27 @@ test("no sort names the same column twice", () => {
   }
 });
 
+test("every sort demotes started games before anything else", () => {
+  // The board keeps a started game until the slate day rolls over, so this term
+  // is the only thing standing between the reader and the defect that rule was
+  // introduced to fix: settled props carry their edge, and the board sorts by
+  // edge. Ascending, so not-yet-kicked-off sorts first.
+  for (const sort of ["edge", "confidence", "opponent_rank"] as const) {
+    const first = boardSortKeys(sort)[0];
+    assert.equal(first.column, "has_kicked_off", `${sort} does not demote first`);
+    assert.equal(first.ascending, true, `${sort} demotes in the wrong direction`);
+  }
+});
+
 test("each sort leads with the column its control names", () => {
-  assert.equal(boardSortKeys("edge")[0].column, "edge");
-  assert.equal(boardSortKeys("confidence")[0].column, "display_confidence");
-  assert.equal(
-    boardSortKeys("opponent_rank")[0].column,
-    "opponent_rank_vs_position",
-  );
+  // "Leads" now means "leads the terms that rank a row" — the started-games
+  // demotion above sits ahead of all of them and is not a ranking choice.
+  const ranking = (sort: Parameters<typeof boardSortKeys>[0]) =>
+    boardSortKeys(sort).filter((key) => key.column !== "has_kicked_off");
+
+  assert.equal(ranking("edge")[0].column, "edge");
+  assert.equal(ranking("confidence")[0].column, "display_confidence");
+  assert.equal(ranking("opponent_rank")[0].column, "opponent_rank_vs_position");
   // The default matches the default the URL parser produces.
   assert.deepEqual(boardSortKeys(), boardSortKeys("edge"));
 });
@@ -250,6 +272,7 @@ function row(overrides: Partial<BoardRow> = {}): BoardRow {
     opponentAbbreviation: "AWAY",
     gameId: 100,
     startDate: "2025-11-15T17:00:00Z",
+    hasKickedOff: false,
     neutralSite: false,
     isHome: true,
     venueName: "Home Stadium",

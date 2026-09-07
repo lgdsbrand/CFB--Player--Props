@@ -301,6 +301,21 @@ function PlayerCell({ row }: { row: BoardRow }) {
           title={row.opponentSchool}
         />
         <span className="truncate">· {formatKickoff(row.startDate)}</span>
+        {/* Same marker as the card, for the same reason: a started row is kept
+            and demoted rather than hidden, so it has to say which it is. Terse
+            here because the table is the dense layout — the tooltip carries the
+            frozen-odds and pre-game-projection caveats. */}
+        {row.hasKickedOff ? (
+          <span
+            className="border-border-subtle text-dim shrink-0 rounded-full border px-1 text-[0.5625rem] font-bold uppercase tracking-label"
+            title={
+              "This game has started. The projection is the pre-game number " +
+              "and the odds are the last seen before kickoff."
+            }
+          >
+            Started
+          </span>
+        ) : null}
       </div>
     </div>
   );

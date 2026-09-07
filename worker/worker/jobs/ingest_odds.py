@@ -175,20 +175,51 @@ def resolve_adapter_name(explicit: str | None) -> str:
     return str(configured) if configured else NULL_ADAPTER_NAME
 
 
-def load_teams(conn: psycopg.Connection) -> TeamResolver:
+def load_teams(conn: psycopg.Connection, sport: str = "cfb") -> TeamResolver:
+    """One sport's teams, because the resolver matches on NAME.
+
+    Sport-agnostic is not sport-blind (CLAUDE.md §3). Measured on production
+    2026-09-07, the two sports do NOT collide on school: NFL rows store the
+    full franchise in `school` ("Buffalo Bills", mascot "Bills"), so there are
+    zero cross-sport school or alt_name matches. **Mascots collide heavily** —
+    22 of the 32 franchises share a mascot with at least one FBS program
+    (Panthers 19, Eagles 17, Bears 13, Cardinals 12) — and the resolver uses
+    the mascot to NARROW candidates before demanding the school half agree.
+
+    So pooling the sports is not a demonstrated break today; it is 32 rows of
+    avoidable noise in the buckets a name resolver disambiguates on, in a
+    function whose failure mode is silent (ambiguity is reported distinctly
+    from absence, and the one-sided match path demands a unique answer). Scope
+    it for the same reason the games read is scoped, and do not rely on the
+    franchise naming convention holding.
+    """
     with conn.cursor() as cur:
-        cur.execute("select id, school, mascot, alt_name from teams")
+        cur.execute(
+            "select id, school, mascot, alt_name from teams where sport = %s",
+            (sport,),
+        )
         return TeamResolver(cur.fetchall())
 
 
 def load_games(
-    conn: psycopg.Connection, season: int, week: int | None
+    conn: psycopg.Connection, season: int, week: int | None, sport: str = "cfb"
 ) -> list[dict]:
+    """One sport's games. `(season, week)` STOPPED being a slate on 2026-08-11.
+
+    Both sports number their weeks from 1 in the same seasons, so `season = 2026
+    and week = 1` selects college week 1 AND NFL week 1 out of one table. The
+    odds adapters are per-sport (`americanfootball_ncaaf`), so the extra games
+    can never match an event — they just get bucketed into kickoff clusters of
+    their own, and every cluster costs a credit for its event list.
+
+    Measured 2026-09-07: a week-1 backfill saw 115 games where production holds
+    99, the other 16 being the NFL opener and first Sunday slate.
+    """
     sql = (
         "select id, season, week, start_date, home_team_id, away_team_id "
-        "  from games where season = %s"
+        "  from games where sport = %s and season = %s"
     )
-    params: list[object] = [season]
+    params: list[object] = [sport, season]
     if week is not None:
         sql += " and week = %s"
         params.append(week)
@@ -507,8 +538,11 @@ def run(
     report.events_seen = len(events)
 
     with connect() as conn:
-        resolver = load_teams(conn)
-        games = load_games(conn, season, week)
+        # CFB explicitly: the adapter's sport key is NCAAF, so an NFL game in
+        # these tables could never match an event it returns. Both are passed
+        # rather than defaulted so an NFL odds adapter has one place to change.
+        resolver = load_teams(conn, sport="cfb")
+        games = load_games(conn, season, week, sport="cfb")
         if not games:
             log.warning(
                 "No games stored for season %s%s. The schedule has to be "

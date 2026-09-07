@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from worker.config import ConfigError, Settings, env_names_containing
-from worker.core.name_match import TeamResolver
+from worker.core.name_match import TeamMatch, TeamResolver
 from worker.db import _deploy_marker
 from worker.jobs import ingest_odds
 from worker.jobs.ingest_odds import (
@@ -413,3 +413,91 @@ class TestDeployMarker:
         merged = {**_deploy_marker(), **{"season": 2026, "render_service_name": "override"}}
         assert merged["render_service_name"] == "override"
         assert merged["season"] == 2026
+
+
+class _Cursor:
+    """Captures the SQL and params a loader issues. No database."""
+
+    def __init__(self, rows: list) -> None:
+        self.rows = rows
+        self.sql: str = ""
+        self.params: tuple = ()
+
+    def execute(self, sql, params=()):
+        self.sql, self.params = sql, tuple(params)
+
+    def fetchall(self):
+        return self.rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _Conn:
+    def __init__(self, rows: list | None = None) -> None:
+        self.cursor_obj = _Cursor(rows or [])
+
+    def cursor(self):
+        return self.cursor_obj
+
+
+class TestLoadersAreScopedToOneSport:
+    """`(season, week)` stopped identifying a slate when NFL joined these tables.
+
+    Both sports number weeks from 1 in the same seasons, so an unscoped read
+    returns both. Measured on production 2026-09-07: a 2026 week-1 backfill saw
+    115 games where college holds 99 — the other 16 were NFL. The odds adapters
+    are per-sport, so those games can never match an event; they only add
+    kickoff clusters, and every cluster costs a credit for its event list.
+    """
+
+    def test_games_are_filtered_by_sport(self):
+        conn = _Conn()
+        ingest_odds.load_games(conn, 2026, 1)
+        assert "sport = %s" in conn.cursor_obj.sql
+        assert conn.cursor_obj.params[0] == "cfb"
+
+    def test_games_default_to_college(self):
+        conn = _Conn()
+        ingest_odds.load_games(conn, 2026, None)
+        assert conn.cursor_obj.params == ("cfb", 2026)
+
+    def test_games_pass_the_sport_through(self):
+        conn = _Conn()
+        ingest_odds.load_games(conn, 2026, 1, sport="nfl")
+        assert conn.cursor_obj.params == ("nfl", 2026, 1)
+
+    def test_teams_are_filtered_by_sport(self):
+        conn = _Conn()
+        ingest_odds.load_teams(conn)
+        assert "sport = %s" in conn.cursor_obj.sql
+        assert conn.cursor_obj.params == ("cfb",)
+
+    def test_scoping_keeps_nfl_rows_out_of_the_mascot_buckets(self):
+        """Why load_teams is scoped, stated as production actually is.
+
+        The sports do NOT collide on school: NFL rows carry the full franchise
+        ("Buffalo Bills"), so there are zero cross-sport school matches. They
+        collide on MASCOT — 22 of 32 franchises share one with an FBS program.
+        The resolver narrows on mascot before demanding the school half agree,
+        so pooling is noise in the disambiguation buckets rather than a
+        demonstrated break. It is still the wrong input to hand a name matcher
+        whose failure mode is silent.
+        """
+        college = {"id": 13, "school": "Baylor", "mascot": "Bears", "alt_name": None}
+        pro = {"id": 99, "school": "Chicago Bears", "mascot": "Bears", "alt_name": None}
+
+        pooled = TeamResolver([college, pro])
+        scoped = TeamResolver([college])
+
+        # Both still resolve the full college name — the school half agrees.
+        for r in (pooled, scoped):
+            assert isinstance(r.resolve("Baylor Bears"), TeamMatch)
+
+        # But the pooled resolver carries a second candidate under "Bears",
+        # which is the bucket a one-sided match has to be unique within.
+        assert len(pooled._by_mascot["bears"]) == 2
+        assert len(scoped._by_mascot["bears"]) == 1

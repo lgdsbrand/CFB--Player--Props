@@ -421,8 +421,10 @@ def backfill_week(
     refresh: bool = False,
 ) -> None:
     """Walk one week's kickoff clusters, buying what the books had posted."""
-    teams = load_teams(conn)
-    games = load_games(conn, season, week)
+    # CFB explicitly — see the note in ingest_odds.load_games. Before this was
+    # scoped, a week-1 backfill pulled 16 NFL games into the kickoff clusters.
+    teams = load_teams(conn, sport="cfb")
+    games = load_games(conn, season, week, sport="cfb")
     if not games:
         log.warning(
             "No games stored for %s week %s — ingest the schedule first.",

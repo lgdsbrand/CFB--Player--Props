@@ -353,9 +353,9 @@ class TestDryRun:
         kickoff = datetime(2025, 10, 18, 19, 0, tzinfo=UTC)
         adapter = RecordingAdapter()
 
-        monkeypatch.setattr(job, "load_teams", lambda conn: object())
+        monkeypatch.setattr(job, "load_teams", lambda conn, sport="cfb": object())
         monkeypatch.setattr(
-            job, "load_games", lambda conn, season, week: [game(1, kickoff)]
+            job, "load_games", lambda conn, season, week, sport="cfb": [game(1, kickoff)]
         )
         monkeypatch.setattr(
             job, "already_bought", lambda conn, season, week, adapter: set()
@@ -434,9 +434,9 @@ class TestExcludedMarkets:
                 asked.append(list(market_keys or []))
                 return {"data": {"id": event_id, "bookmakers": []}}
 
-        monkeypatch.setattr(job, "load_teams", lambda conn: object())
+        monkeypatch.setattr(job, "load_teams", lambda conn, sport="cfb": object())
         monkeypatch.setattr(
-            job, "load_games", lambda conn, season, week: [game(1, kickoff)]
+            job, "load_games", lambda conn, season, week, sport="cfb": [game(1, kickoff)]
         )
         monkeypatch.setattr(
             job, "already_bought", lambda conn, season, week, adapter: set()
@@ -508,9 +508,9 @@ class TestResume:
                 asked.append(event_id)
                 return {"data": {"id": event_id, "bookmakers": []}}
 
-        monkeypatch.setattr(job, "load_teams", lambda conn: object())
+        monkeypatch.setattr(job, "load_teams", lambda conn, sport="cfb": object())
         monkeypatch.setattr(
-            job, "load_games", lambda conn, season, week: [game(1, kickoff)]
+            job, "load_games", lambda conn, season, week, sport="cfb": [game(1, kickoff)]
         )
         monkeypatch.setattr(
             job, "already_bought", lambda conn, season, week, adapter: set()
@@ -581,9 +581,9 @@ class TestGamesNotYetKicked:
         adapter = RecordingAdapter()
         report = job.BackfillReport()
 
-        monkeypatch.setattr(job, "load_teams", lambda conn: object())
+        monkeypatch.setattr(job, "load_teams", lambda conn, sport="cfb": object())
         monkeypatch.setattr(
-            job, "load_games", lambda conn, season, week: [game(1, kickoff)]
+            job, "load_games", lambda conn, season, week, sport="cfb": [game(1, kickoff)]
         )
         monkeypatch.setattr(
             job, "already_bought", lambda conn, season, week, adapter: set()

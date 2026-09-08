@@ -321,6 +321,31 @@ export function parseBoardParams(
  * untouched, which is the behaviour we want: they cost nothing, and dropping
  * them would silently discard state a shared link was carrying.
  */
+/**
+ * The games index, scoped to one game's season, week and sport.
+ *
+ * Its own function rather than `boardHref(..., "/games")` because `/games`
+ * reads three parameters and `boardHref` writes fifteen — a board's position
+ * tab, market, sort and page mean nothing there, and carrying them into a link
+ * makes a URL that looks like it filters something it does not.
+ *
+ * SPORT IS THE POINT OF IT. The back link on a game page read
+ * `/games?season=X&week=Y` and dropped the sport, so leaving an NFL game
+ * returned the reader to the college index — the toggle appearing to flip
+ * itself, which is how it was reported.
+ */
+export function gamesHref(game: {
+  season: number;
+  week: number;
+  sport: Sport;
+}): string {
+  const search = new URLSearchParams();
+  if (game.sport !== DEFAULT_SPORT) search.set("sport", game.sport);
+  search.set("season", String(game.season));
+  search.set("week", String(game.week));
+  return `/games?${search.toString()}`;
+}
+
 export function boardHref(
   current: BoardParams,
   changes: Partial<BoardParams>,

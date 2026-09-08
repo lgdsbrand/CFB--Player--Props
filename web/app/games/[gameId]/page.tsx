@@ -7,7 +7,13 @@ import { PropsTable } from "@/components/games/props-table";
 import { WeatherPanel } from "@/components/games/weather-panel";
 import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
-import { boardHref, parseBoardParams, type RawParams } from "@/lib/core/board-params";
+import {
+  boardHref,
+  gamesHref,
+  parseBoardParams,
+  type RawParams,
+} from "@/lib/core/board-params";
+import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount, formatKickoff, formatVenue } from "@/lib/core/format";
 import { favourite, gameMatchups, groupPropsByTeam } from "@/lib/core/game-view";
@@ -65,7 +71,7 @@ export default async function GamePage({
     // Only for the display order of a player's markets. Cached seed data, so
     // this costs a map lookup rather than a round trip on most requests.
     getMarkets(),
-    getDefenseRatings(game.season, game.week),
+    getDefenseRatings(game.season, game.week, game.sport),
     // Every row for this game across both teams: ~140 on the largest game so
     // far, comfortably inside PostgREST's cap. `total` is checked below rather
     // than assumed, because a truncated read is indistinguishable from a short
@@ -73,6 +79,7 @@ export default async function GamePage({
     getBoardRows({
       season: game.season,
       week: game.week,
+      sport: game.sport,
       gameId,
       displayedConferencesOnly: false,
       limit: 1000,
@@ -102,9 +109,9 @@ export default async function GamePage({
       : { color: game.awayColor, altColor: game.awayAltColor };
 
   return (
-    <Shell>
+    <Shell sport={game.sport}>
       <Link
-        href={`/games?season=${game.season}&week=${game.week}`}
+        href={gamesHref(game)}
         className="text-muted hover:text-ink w-fit text-xs font-semibold transition-colors"
       >
         ← All games
@@ -206,6 +213,11 @@ export default async function GamePage({
         href={boardHref(boardParams, {
           season: game.season,
           week: game.week,
+          // FROM THE GAME, NOT FROM `boardParams`. The index card links here as
+          // a bare `/games/<id>`, so `?sport=` is usually absent and
+          // `parseBoardParams` has already defaulted it to college — which
+          // would send a reader looking at an NFL game to the college board.
+          sport: game.sport,
           game: gameId,
           conference: undefined,
         })}
@@ -264,10 +276,16 @@ function Stat({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({
+  children,
+  sport = DEFAULT_SPORT,
+}: {
+  children: React.ReactNode;
+  sport?: Sport;
+}) {
   return (
     <>
-      <SiteHeader activeHref="/games" />
+      <SiteHeader activeHref="/games" sport={sport} />
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-4 py-6 sm:px-6">
         {children}
       </main>

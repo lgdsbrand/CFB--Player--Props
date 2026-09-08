@@ -19,6 +19,7 @@ import { test } from "node:test";
 
 import {
   boardHref,
+  gamesHref,
   DEFAULT_HIT_RATE_WINDOW,
   parseBoardParams,
   PRESET_ROWS_PER_PAGE,
@@ -322,4 +323,34 @@ test("changing any other filter carries the sport along", () => {
   const href = boardHref(bare("nfl"), { position: "RB" });
   assert.match(href, /sport=nfl/);
   assert.match(href, /position=RB/);
+});
+
+// -----------------------------------------------------------------------------
+// gamesHref — the back link off a game page
+// -----------------------------------------------------------------------------
+// REPORTED FROM THE LIVE SITE, 2026-09-08: opening an NFL game and pressing back
+// returned the reader to the COLLEGE games index, so the toggle appeared to flip
+// itself. The link was a hand-built `/games?season=X&week=Y` that never carried
+// the sport. Nothing could have caught it but looking at the page: it typechecks,
+// it is a valid URL, and it lands on a real index full of real games.
+test("gamesHref carries the sport off a game page", () => {
+  assert.equal(
+    gamesHref({ sport: "nfl", season: 2026, week: 1 }),
+    "/games?sport=nfl&season=2026&week=1",
+  );
+});
+
+test("gamesHref omits the sport for college, like boardHref does", () => {
+  // Not cosmetic. `?sport=cfb` in every college URL would make the default look
+  // like a choice, and the two forms would then have to be kept equivalent
+  // everywhere something compares links.
+  assert.equal(
+    gamesHref({ sport: "cfb", season: 2025, week: 12 }),
+    "/games?season=2025&week=12",
+  );
+});
+
+test("gamesHref puts the sport first, so a truncated link still selects rows", () => {
+  const href = gamesHref({ sport: "nfl", season: 2026, week: 3 });
+  assert.ok(href.indexOf("sport=") < href.indexOf("season="));
 });

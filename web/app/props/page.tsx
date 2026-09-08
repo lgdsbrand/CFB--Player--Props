@@ -164,7 +164,7 @@ export default async function Home({
     getSlateGames(active.season, active.week, sport),
     // Pinned to as_of_week = the week on screen, never "the latest": a rating
     // from a later cutoff knows results the reader is being asked to predict.
-    getDefenseRatings(active.season, active.week),
+    getDefenseRatings(active.season, active.week, sport),
   ]);
 
   // AFTER the fetch, not before: the days of a week are derived from its games,

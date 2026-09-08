@@ -19,6 +19,8 @@
  * silently drifted from its view is worse than no type at all.
  */
 
+import type { Sport } from "@/lib/core/sport";
+
 export type BetSide = "over" | "under";
 
 export type PositionGroup = "QB" | "RB" | "WR" | "TE";
@@ -336,6 +338,15 @@ export type DefenseSplitRow = {
  */
 export type GameSummary = {
   gameId: number;
+  /**
+   * WHICH SPORT THIS GAME BELONGS TO, and the authoritative answer for any page
+   * scoped to one game. A game id determines its sport; `?sport=` in the URL
+   * only claims one, and a link that omits it (`/games/<id>` from the index
+   * card, say) leaves the claim wrong rather than absent. Reading it off the
+   * game is what stops an NFL game being queried with `sport='cfb'` and
+   * rendering zero props.
+   */
+  sport: Sport;
   season: number;
   week: number;
   startDate: string | null;

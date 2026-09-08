@@ -92,7 +92,7 @@ export default async function Games({
     getSlateGames(active.season, active.week, sport),
     // Pinned to the week on screen, never "the latest": a rating from a later
     // cutoff knows results the reader is being asked to look ahead at.
-    getDefenseRatings(active.season, active.week),
+    getDefenseRatings(active.season, active.week, sport),
     getSlateConditions(active.season, active.week),
   ]);
 

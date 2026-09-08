@@ -106,7 +106,7 @@ export default async function NoVig({
       kickoffCutoff: cutoff,
       sort,
     }),
-    getNoVigMarkets(active.season, active.week),
+    getNoVigMarkets(active.season, active.week, sport),
   ]);
 
   const summary = summarise(page.rows);

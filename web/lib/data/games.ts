@@ -21,7 +21,7 @@ import type { GameSummary } from "@/lib/core/types";
 import { type DbRow, unwrap } from "@/lib/data/query";
 
 const COLUMNS =
-  "game_id, season, week, start_date, start_time_tbd, neutral_site, completed, " +
+  "game_id, sport, season, week, start_date, start_time_tbd, neutral_site, completed, " +
   "home_points, away_points, home_team_id, home_school, home_abbreviation, " +
   "home_color, home_alt_color, away_team_id, away_school, away_abbreviation, " +
   "away_color, away_alt_color, venue_name, venue_city, venue_state, " +
@@ -31,6 +31,7 @@ const COLUMNS =
 function toGame(row: DbRow): GameSummary {
   return {
     gameId: row.game_id as number,
+    sport: row.sport as Sport,
     season: row.season as number,
     week: row.week as number,
     startDate: row.start_date as string | null,

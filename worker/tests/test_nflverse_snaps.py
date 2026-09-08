@@ -148,3 +148,44 @@ class TestAmbiguousPfrIdsAreExcluded:
         counts = NflReferenceCounts()
         assert ingest_snaps.load_pfr_index(counts) == {"BankKe01": 7}
         assert not counts.skipped
+
+
+class TestSnapsOnly:
+    """`--snaps-only` loads snaps over box scores already stored.
+
+    The flag exists because the box score upsert is an unconditional DO UPDATE:
+    re-running it purely to reach the snap pass rewrites every row it touches
+    and costs a dead tuple apiece for no change. Its hazard is the mirror of
+    that saving -- skipping the load means nothing guarantees the rows are
+    there, and a snap pass with no rows to match reports a clean zero.
+    """
+
+    def test_skip_snaps_and_snaps_only_cannot_both_be_asked_for(self, capsys):
+        """They are opposites; taking both would silently mean one of them."""
+        import pytest
+
+        from worker.jobs import nfl_ingest_stats
+
+        with pytest.raises(SystemExit):
+            nfl_ingest_stats.main(["--seasons", "2024", "--skip-snaps", "--snaps-only"])
+        assert "not allowed with" in capsys.readouterr().err
+
+    def test_a_season_with_no_box_scores_is_refused(self, monkeypatch):
+        """Not a clean zero -- that reads as "nflverse has no snaps for 2024"."""
+        import pytest
+
+        from worker.jobs import nfl_ingest_stats
+
+        monkeypatch.setattr(
+            nfl_ingest_stats, "fetch_one", lambda *a, **k: {"n": 0}
+        )
+        with pytest.raises(ValueError, match="no NFL box scores stored for 2024"):
+            nfl_ingest_stats._require_box_scores(2024)
+
+    def test_a_season_with_box_scores_passes(self, monkeypatch):
+        from worker.jobs import nfl_ingest_stats
+
+        monkeypatch.setattr(
+            nfl_ingest_stats, "fetch_one", lambda *a, **k: {"n": 14_252}
+        )
+        nfl_ingest_stats._require_box_scores(2024)

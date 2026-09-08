@@ -2,6 +2,7 @@
 
     python -m worker.jobs.nfl_ingest_stats --seasons 2023 2024 2025 --dry-run
     python -m worker.jobs.nfl_ingest_stats --seasons 2023 2024 2025 2026
+    python -m worker.jobs.nfl_ingest_stats --seasons 2023 2024 --snaps-only
 
 Requires `nfl_ingest_reference` to have run for the same seasons first: every
 stat row is joined to a game by nflverse id and to a player by gsis_id, and a
@@ -26,7 +27,13 @@ from worker.adapters.nflverse.ingest_snaps import run_nfl_snaps_ingest
 from worker.adapters.nflverse.ingest_stats import run_nfl_stats_ingest
 from worker.adapters.nflverse.mapping import IMMUTABLE, LIVE_MAX_AGE
 from worker.config import ConfigError, get_settings
-from worker.db import count_rows, pipeline_run, record_failed_run, set_rows_written
+from worker.db import (
+    count_rows,
+    fetch_one,
+    pipeline_run,
+    record_failed_run,
+    set_rows_written,
+)
 from worker.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -34,6 +41,28 @@ log = get_logger(__name__)
 JOB_NAME = "nfl_ingest_stats"
 
 REPORTED_TABLES = ("player_game_stats",)
+
+
+def _require_box_scores(season: int) -> None:
+    """Refuse a `--snaps-only` season whose box scores are not loaded.
+
+    Snaps UPDATE `player_game_stats`; with no rows to match, the pass writes
+    nothing and reports zero, which is indistinguishable from a season nflverse
+    has no snap data for. The normal path cannot hit this because it loads the
+    box scores itself, so the check belongs to the flag that skips that step.
+    """
+    row = fetch_one(
+        "select count(*) as n from player_game_stats s "
+        "join games g on g.id = s.game_id "
+        "where g.sport = 'nfl' and g.season = %s",
+        (season,),
+    )
+    if not row or not row["n"]:
+        raise ValueError(
+            f"--snaps-only: no NFL box scores stored for {season}, so the snap "
+            f"pass would match nothing and report a misleading zero. Run "
+            f"without --snaps-only to load them first."
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,11 +73,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Which season is being played, and so must not be read from a "
              "stale cache. Omit for a pure historical load.",
     )
-    parser.add_argument(
+    snaps = parser.add_mutually_exclusive_group()
+    snaps.add_argument(
         "--skip-snaps", action="store_true",
         help="Load box scores only. Snap counts are a SECOND nflverse asset "
              "and a second pass over the same table; this skips it for a "
              "quick reload when the box scores are what changed.",
+    )
+    snaps.add_argument(
+        "--snaps-only", action="store_true",
+        help="Load snap counts only, over box scores already stored. The box "
+             "score upsert rewrites every row it touches whether or not the "
+             "values changed, so re-running it to reach the snap pass costs a "
+             "dead tuple per row for nothing -- which is worth avoiding on a "
+             "database near its storage cap. Refuses a season whose box "
+             "scores are absent rather than reporting the clean zero that "
+             "such a season would otherwise produce.",
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
@@ -71,14 +111,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         try:
             for season in seasons:
-                frame = client.fetch(
-                    "weekly_stats", season, max_age=max_age_for(season)
-                )
-                log.info(
-                    "%d: %d stat row(s), %d week(s), %d player(s)",
-                    season, frame.height, frame["week"].n_unique(),
-                    frame["player_id"].n_unique(),
-                )
+                if not args.snaps_only:
+                    frame = client.fetch(
+                        "weekly_stats", season, max_age=max_age_for(season)
+                    )
+                    log.info(
+                        "%d: %d stat row(s), %d week(s), %d player(s)",
+                        season, frame.height, frame["week"].n_unique(),
+                        frame["player_id"].n_unique(),
+                    )
                 if not args.skip_snaps:
                     snaps = client.fetch(
                         "snap_counts", season, max_age=max_age_for(season)
@@ -103,9 +144,14 @@ def main(argv: list[str] | None = None) -> int:
                 # insert them, so a snap pass over a season whose box scores
                 # are not loaded yet resolves nothing and reports a clean zero
                 # -- which reads exactly like "this season has no snap data".
-                total += run_nfl_stats_ingest(
-                    client, season, counts, max_age=max_age_for(season)
-                )
+                # `--snaps-only` skips the load but NOT that requirement, so it
+                # asserts the box scores are there instead of assuming it.
+                if args.snaps_only:
+                    _require_box_scores(season)
+                else:
+                    total += run_nfl_stats_ingest(
+                        client, season, counts, max_age=max_age_for(season)
+                    )
                 if not args.skip_snaps:
                     run_nfl_snaps_ingest(
                         client, season, counts, max_age=max_age_for(season)

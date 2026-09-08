@@ -10,12 +10,20 @@ one has nothing to check because nflverse is static files on a CDN. Threading a
 sport through would mean a job whose every step branches on it, which is the
 shape CLAUDE.md §3 asks the adapter layer to absorb instead.
 
-NO QUOTA PREFLIGHT, AND NO --current EITHER. `--current` exists on the college
-jobs because omitting it silently falls through to `app_config.backfill_seasons`
-and refreshes LAST season -- a bug that shipped, ran green for days, and is why
-that flag is load-bearing on every step of the Sunday chain. This job takes
-`--seasons` explicitly and defaults to nothing, so the equivalent mistake is an
-error rather than a successful run against the wrong year.
+NO QUOTA PREFLIGHT: nflverse is static files on a CDN and there is no meter to
+check.
+
+`--seasons` AND `--current` ARE MUTUALLY EXCLUSIVE AND ONE IS REQUIRED. The
+college jobs accept neither and fall through to `app_config.backfill_seasons`,
+which scopes the HISTORICAL backfill -- a bug that shipped, ran green for days,
+and refreshed last season every morning while reporting success. This job has no
+such fallthrough: give it an explicit year or tell it to read
+`app_config.current_season`, and omitting both is an argparse error rather than a
+successful run against the wrong one.
+
+`--current` was added when the daily results cron was, because a scheduled job
+that hardcodes its year in `render.yaml` reproduces exactly the failure the flag
+exists to prevent -- it just moves it into a file no test reads.
 """
 
 from __future__ import annotations
@@ -31,6 +39,7 @@ from worker.db import (
     count_rows,
     pipeline_run,
     record_failed_run,
+    resolve_seasons,
     set_rows_written,
 )
 from worker.logging_setup import configure_logging, get_logger
@@ -51,10 +60,16 @@ REPORTED_TABLES = (
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--seasons", type=int, nargs="+", required=True,
-        help="Seasons to ingest. Required and deliberately not defaulted -- see "
-             "the module docstring on why --current is not offered here.",
+    scope = parser.add_mutually_exclusive_group(required=True)
+    scope.add_argument(
+        "--seasons", type=int, nargs="+",
+        help="Seasons to ingest. Deliberately not defaulted -- see the module "
+             "docstring on why omitting both this and --current is an error.",
+    )
+    scope.add_argument(
+        "--current", action="store_true",
+        help="Work on app_config.current_season only. What the daily in-season "
+             "cron passes, so the schedule carries no hardcoded year.",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -71,7 +86,11 @@ def main(argv: list[str] | None = None) -> int:
 
     configure_logging(settings.log_level)
 
-    seasons = sorted(set(args.seasons))
+    try:
+        seasons = resolve_seasons(args.seasons, current=args.current)
+    except ConfigError as exc:
+        log.error("%s", exc)
+        return 2
     log.info("NFL reference ingest for season(s): %s", seasons)
 
     before = {t: count_rows(t) for t in REPORTED_TABLES}

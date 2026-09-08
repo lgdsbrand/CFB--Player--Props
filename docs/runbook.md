@@ -24,7 +24,8 @@ runbook, so it is tested rather than trusted.
 ## Contents
 
 - [The rules that apply to every job](#the-rules-that-apply-to-every-job)
-- [Scheduled jobs](#scheduled-jobs) — canaries, the weekly pipeline, in-week refreshes
+- [Scheduled jobs](#scheduled-jobs) — canaries, the weekly pipeline, in-week
+  refreshes, the NFL chain
 - [Jobs run by hand](#jobs-run-by-hand) — backtest, odds probe, the migration
 - [Recovery](#recovery) — stuck runs, a failed chain, a wasted projection pass
 - [Applying a migration](#applying-a-migration) — there is no `supabase` CLI on PATH
@@ -531,13 +532,43 @@ not being `"none"`.
 
 ---
 
-## Jobs run by hand
-
-None of these is scheduled, and none should be. Two of them spend money.
-
-### `nfl_ingest_reference`
+### The NFL chain — 08:20 UTC daily
 
 ```bash
+python -m worker.jobs.nfl_ingest_reference --current &&
+python -m worker.jobs.nfl_ingest_stats --current &&
+python -m worker.jobs.nfl_ingest_plays --current &&
+python -m worker.jobs.build_splits --current --sport nfl
+```
+
+**Added 2026-09-08, and until then the NFL board did not learn.** The NFL had
+two crons — capture odds, price them — and neither loaded a result. Week 2 would
+have been projected from priors alone, with empty L5/L10 and OPP RK columns, no
+2026 defensive ratings and no actuals to grade against, while every scheduled
+job reported success. Nothing in the logs would have said so.
+
+**One chain, `&&`, in the college order for the college reasons.** Reference
+first because `completed` gates everything after it; `build_splits` last because
+splits are computed from the plays the step before it just wrote. Render has no
+dependency graph between crons, so four schedules guessing at each other's
+runtime would race.
+
+**`--current` on every step.** These jobs refuse to default a season, so the
+obvious way to schedule them was `--seasons 2026` written into `render.yaml` —
+which reproduces the August bug exactly, just in a file no test reads, where it
+would run green through 2027 ingesting 2026. `--current` reads
+`app_config.current_season`, the same key the college chain uses, so **there is
+one row to change each August, not two.**
+
+**08:20 UTC is 04:20 ET**, after Monday Night Football has settled and hours
+ahead of the 12:20 NFL odds capture and the 12:50 NFL projection, so the board
+is priced from stats ingested the same morning. Twenty minutes after the college
+chain, per the offset rule the two sports' crons follow throughout.
+
+#### `nfl_ingest_reference`
+
+```bash
+python -m worker.jobs.nfl_ingest_reference --current            # what the cron runs
 python -m worker.jobs.nfl_ingest_reference --seasons 2026 --dry-run
 python -m worker.jobs.nfl_ingest_reference --seasons 2026
 ```
@@ -547,27 +578,25 @@ quota, no rate limit — so the dry run really reads the sources rather than
 stopping at a preflight, because "does the source have what we expect" is the
 only question a preview here can answer.
 
-**Unscheduled on purpose, for now.** Nothing downstream consumes these rows yet:
-there are no NFL stats, projections or picks, so `v_board_rows` returns zero NFL
-rows and the college board is unaffected. It gets a cron when the NFL pipeline
-it feeds exists — adding one now would refresh a schedule nothing reads.
+**First in the chain, and that is load-bearing.** `completed` and the final
+score come from the schedule file, and nothing downstream asks for a finished
+game's rows until our table says it finished. Without this step a Sunday game
+stays unfinished in `games` and its stats are never fetched.
 
-**No `--current` flag, deliberately.** On the college jobs `--current` is
-load-bearing: omitting it falls through to `app_config.backfill_seasons` and
-silently refreshes *last* season, which shipped once and ran green for days.
-This job requires `--seasons`, so the same mistake is an error rather than a
-successful run against the wrong year.
+**Monitored:** warning, `max_age_hours=36`, gated on the **NFL** season.
 
 Expected for 2026: 2 conferences, 32 teams, 32 team_seasons, 272 games over 18
 weeks, 2,945 players and 2,945 memberships. One roster row is skipped for having
 no `gsis_id`, which is the source's own gap and is reported rather than hidden.
 
-### `nfl_ingest_stats`
+#### `nfl_ingest_stats`
 
 ```bash
+python -m worker.jobs.nfl_ingest_stats --current                # what the cron runs
 python -m worker.jobs.nfl_ingest_stats --seasons 2023 2024 2025 --dry-run
 python -m worker.jobs.nfl_ingest_stats --seasons 2023 2024 2025
 python -m worker.jobs.nfl_ingest_stats --seasons 2026 --current-season 2026
+python -m worker.jobs.nfl_ingest_stats --current --snaps-only   # snaps over stored box scores
 ```
 
 NFL box scores into `player_game_stats`. Requires `nfl_ingest_reference` for the
@@ -579,7 +608,13 @@ nothing.
 with a bounded cache age. A completed season is immutable and its file never
 expires. The flag is explicit rather than inferred from the calendar for the
 same reason `NflverseClient.fetch` refuses to default `max_age`: the wrong
-choice is silent in both directions.
+choice is silent in both directions. **`--current` implies it** — a cron that
+has already said "work on the current season" should not have to say which
+season is live a second time, because that is the shape the two answers drift
+apart in.
+
+**Monitored:** critical, `max_age_hours=36`, gated on the **NFL** season. Every
+hit rate and game log on the NFL board is computed from these rows.
 
 Expected for 2023–2025: 18,621 / 18,961 / 19,400 rows, 285 games and weeks 1–22
 each. 66 rows are skipped across the three seasons for a player who appears in a
@@ -591,9 +626,10 @@ is the first thing to add when the NFL projection step needs a usage floor
 (N5). Inventing them from `carries + targets` would make a usage filter that
 silently means something different per sport.
 
-### `nfl_ingest_plays`
+#### `nfl_ingest_plays`
 
 ```bash
+python -m worker.jobs.nfl_ingest_plays --current                # what the cron runs
 python -m worker.jobs.nfl_ingest_plays --seasons 2023 2024 2025 --dry-run
 python -m worker.jobs.nfl_ingest_plays --seasons 2023 2024 2025
 python -m worker.jobs.nfl_ingest_plays --seasons 2026 --current-season 2026
@@ -616,7 +652,25 @@ what is dropped, but a future consumer wanting a complete NFL play log
 
 **A season that has not started 404s**, and that is correct rather than a
 failure to handle: nflverse publishes `play_by_play_{season}` once the season
-begins. 2026 will 404 until kickoff on 10 September.
+begins. **2026 week 1 kicks off 2026-09-10 00:20 UTC** (9 September, 20:20 ET),
+and both this file and `stats_player_week_2026` 404 until nflverse publishes
+after it. Until then the daily chain fails at `nfl_ingest_stats` every morning
+and the monitor reports `never-succeeded` criticals for both jobs — which is
+true, not a bug, and clears itself. The first thing to check after the opener is
+that it HAS cleared.
+
+**It rewrites every game in the season's file on each run**, deleting and
+re-COPYing them scoped to the games it is writing (never season-wide — a
+season-wide delete cascades through `play_player_stats` and reissues every
+surviving play a new id). Daily, that is a full-season rewrite: ~13 MB of dead
+tuples a day by December, which autovacuum reclaims but which counts against the
+storage guard in the meantime. See `render.yaml` for why daily is still the
+right trade.
+
+**Monitored:** critical, `max_age_hours=36`, gated on the **NFL** season. It is
+a critical rather than a warning because `build_splits` shares its `job_name`
+with the college run: if this stops, the splits freeze while the splits job goes
+on reporting success.
 
 **`stat_type` uses CFBD's vocabulary** — 'Rush', 'Reception', 'Target',
 'Touchdown', 'Completion', 'Incompletion' — because `core/splits.py` and
@@ -630,6 +684,12 @@ emitting `Target` on only some incompletions. That distortion does not exist
 here (implied catch rate 66.8%, which is the real one), so any comparison of a
 college conversion rate against an NFL one compares an artifact with a
 measurement.
+
+---
+
+## Jobs run by hand
+
+None of these is scheduled, and none should be. Two of them spend money.
 
 ### `run_backtest`
 

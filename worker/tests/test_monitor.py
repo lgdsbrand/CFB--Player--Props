@@ -34,6 +34,7 @@ from worker.jobs.monitor_pipeline import (
 )
 from worker.jobs.monitor_pipeline import (
     MONITORED_JOBS,
+    MONITORED_SPORTS,
     MonitorReport,
 )
 
@@ -301,3 +302,79 @@ class TestEmptyBoardDetection:
         )
         assert [f.key for f in report.critical] == ["empty-board"]
         assert "first week" not in report.critical[0].title
+
+
+# -----------------------------------------------------------------------------
+# The sport dimension
+# -----------------------------------------------------------------------------
+# `in_season_only` used to mean "is it the college season", because there was
+# only one. With two leagues in the same pipeline that gate has to ask per
+# sport: the calendars overlap for about four months and diverge for the rest,
+# and an NFL job gated on the college slate would stop being monitored in
+# January — the stretch where the NFL is the only sport playing.
+class TestSportGating:
+    def test_every_expectation_names_a_sport_that_is_resolved(self) -> None:
+        # An expectation naming a sport absent from MONITORED_SPORTS gets
+        # `slates.get(...) -> None`, which check_staleness reads as "out of
+        # season" and skips. Forever, silently, with the job in the list.
+        named = {job.sport for job in MONITORED_JOBS}
+        assert not named - set(MONITORED_SPORTS), (
+            f"expectations name sport(s) {sorted(named - set(MONITORED_SPORTS))} "
+            "that no slate is resolved for — they would be skipped every run"
+        )
+
+    def test_the_nfl_crons_are_expected_as_nfl(self) -> None:
+        by_name = {job.name: job for job in MONITORED_JOBS}
+        for name in ("nfl_ingest_reference", "nfl_ingest_stats", "nfl_ingest_plays"):
+            assert by_name[name].sport == "nfl", (
+                f"{name} is gated on the college season; in January it would be "
+                "skipped while the NFL is still playing"
+            )
+
+    def test_an_nfl_job_is_gated_on_the_nfl_slate_not_the_college_one(
+        self, monkeypatch
+    ) -> None:
+        """Mutation-checked: reverting `slates.get(expectation.sport)` to a
+        single slate makes this fail, which nothing else here would."""
+        from worker.core.schedule import Slate
+        from worker.jobs import monitor_pipeline
+
+        checked: list[str] = []
+        monkeypatch.setattr(
+            monitor_pipeline,
+            "MONITORED_JOBS",
+            (
+                monitor_pipeline.JobExpectation(
+                    name="nfl_ingest_stats", max_age_hours=36, sport="nfl"
+                ),
+            ),
+        )
+        monkeypatch.setattr(
+            monitor_pipeline,
+            "fetch_one",
+            lambda *a, **k: checked.append("queried") or None,
+        )
+
+        # College over, NFL playing — January. The job must be CHECKED.
+        report = MonitorReport()
+        monitor_pipeline.check_staleness(
+            report,
+            {
+                "cfb": Slate(season=2026, week=15, in_season=False, complete=True),
+                "nfl": Slate(season=2026, week=19, in_season=True, complete=False),
+            },
+        )
+        assert checked == ["queried"], report.skipped
+
+        # And the mirror: NFL over, college playing — it must be SKIPPED.
+        checked.clear()
+        report = MonitorReport()
+        monitor_pipeline.check_staleness(
+            report,
+            {
+                "cfb": Slate(season=2026, week=3, in_season=True, complete=False),
+                "nfl": Slate(season=2026, week=19, in_season=False, complete=True),
+            },
+        )
+        assert checked == []
+        assert report.skipped == ["nfl_ingest_stats (nfl out of season)"]

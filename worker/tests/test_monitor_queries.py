@@ -115,7 +115,7 @@ def _staleness(db, expectation) -> MonitorReport:
     report = MonitorReport()
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(monitor_pipeline, "MONITORED_JOBS", (expectation,))
-        check_staleness(report, slate=None)
+        check_staleness(report, {"cfb": None, "nfl": None})
     return report
 
 

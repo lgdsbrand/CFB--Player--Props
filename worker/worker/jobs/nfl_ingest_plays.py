@@ -36,6 +36,7 @@ from worker.db import (
     count_rows,
     pipeline_run,
     record_failed_run,
+    resolve_seasons,
     set_rows_written,
 )
 from worker.logging_setup import configure_logging, get_logger
@@ -49,11 +50,20 @@ REPORTED_TABLES = ("plays", "play_player_stats")
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--seasons", type=int, nargs="+", required=True)
+    scope = parser.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--seasons", type=int, nargs="+")
+    scope.add_argument(
+        "--current", action="store_true",
+        help="Work on app_config.current_season only, and treat it as live. "
+             "What the daily in-season cron passes, so the schedule carries no "
+             "hardcoded year -- see nfl_ingest_reference's docstring for why "
+             "that matters more than it looks.",
+    )
     parser.add_argument(
         "--current-season", type=int,
         help="Which season is being played, and so must not be read from a "
-             "stale cache. Omit for a pure historical load.",
+             "stale cache. Omit for a pure historical load; implied by "
+             "--current.",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -70,12 +80,20 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     configure_logging(settings.log_level)
 
-    seasons = sorted(set(args.seasons))
+    try:
+        seasons = resolve_seasons(args.seasons, current=args.current)
+    except ConfigError as exc:
+        log.error("%s", exc)
+        return 2
+    # See nfl_ingest_stats: --current already asserts which season is live, so
+    # the cron states the year once rather than twice.
+    current_season = seasons[0] if args.current else args.current_season
+
     client = NflverseClient()
     counts = NflReferenceCounts()
 
     def max_age_for(season: int) -> float | None:
-        return LIVE_MAX_AGE if season == args.current_season else IMMUTABLE
+        return LIVE_MAX_AGE if season == current_season else IMMUTABLE
 
     if args.dry_run:
         try:

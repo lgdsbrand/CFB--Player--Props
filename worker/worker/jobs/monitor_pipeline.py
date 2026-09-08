@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -61,6 +62,12 @@ from worker.logging_setup import configure_logging, get_logger
 log = get_logger(__name__)
 
 JOB_NAME = "monitor_pipeline"
+
+#: The sports whose slate is resolved each run. Every `JobExpectation.sport`
+#: must be in here — an expectation naming a sport nobody looks up would get
+#: `slates.get(...) -> None`, read as "out of season", and be skipped forever
+#: without a word. `tests/test_monitor.py` asserts the two agree.
+MONITORED_SPORTS: tuple[str, ...] = ("cfb", "nfl")
 
 # How long a run may sit `running` before we call it dead rather than slow. The
 # longest scheduled job is the weekly projection pass; a multi-season backfill
@@ -84,6 +91,14 @@ class JobExpectation:
     severity: Severity = "warning"
     #: Skip out of season, when idleness is correct rather than broken.
     in_season_only: bool = True
+    #: WHICH SPORT'S SEASON `in_season_only` MEANS. The two calendars overlap
+    #: for about four months and diverge for the rest: in January the college
+    #: season is over while the NFL is in its playoffs, and gating an NFL job on
+    #: the college slate would stop monitoring it in the one stretch where it is
+    #: the only sport playing. Sport-agnostic is not sport-blind, which is the
+    #: recurring mistake of this build rather than a one-off — see
+    #: `web/lib/core/sport.ts` for the read side of the same discipline.
+    sport: str = "cfb"
     #: `app_config` key that must not read "none" for this job to be expected.
     enabled_key: str | None = None
     note: str = ""
@@ -168,6 +183,42 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
         max_age_hours=30,
         in_season_only=False,
         note="daily 13:00 UTC — the data-integrity canary",
+    ),
+    # NFL. These three have job names of their own, so their staleness is
+    # genuinely separable from the college pipeline's.
+    #
+    # `build_splits`, `run_projections` and `ingest_odds` DO NOT, and that is a
+    # real remaining gap: both sports write those rows under one `job_name`, so
+    # the `distinct on (job_name)` above cannot tell a dead NFL cron from a
+    # healthy college one. The sport is in each run's metadata; making the
+    # checks read it is a separate change, and until then a stopped
+    # `nfl-props-project-current` is invisible here.
+    JobExpectation(
+        name="nfl_ingest_reference",
+        max_age_hours=36,
+        sport="nfl",
+        note="daily 08:20 UTC, chained ahead of nfl_ingest_stats — `completed` "
+             "and the final score come from here, and nothing downstream asks "
+             "for a game's stats until it is marked finished",
+    ),
+    JobExpectation(
+        name="nfl_ingest_stats",
+        max_age_hours=36,
+        severity="critical",
+        sport="nfl",
+        note="daily 08:20 UTC — box scores and snap counts, the rows every hit "
+             "rate and game log on the NFL board is computed from",
+    ),
+    JobExpectation(
+        name="nfl_ingest_plays",
+        max_age_hours=36,
+        severity="critical",
+        sport="nfl",
+        note="daily 08:20 UTC — play-by-play, and so the only source of the "
+             "position splits (CLAUDE.md §5). Critical rather than a warning "
+             "because `build_splits` shares its job name with college: if this "
+             "stops, the splits quietly freeze while the splits job itself "
+             "keeps reporting success from the college run.",
     ),
 )
 
@@ -281,11 +332,21 @@ def check_latest_run_failed(report: MonitorReport) -> None:
         )
 
 
-def check_staleness(report: MonitorReport, slate: Slate | None) -> None:
-    """Jobs that have not SUCCEEDED recently enough."""
+def check_staleness(
+    report: MonitorReport, slates: Mapping[str, Slate | None]
+) -> None:
+    """Jobs that have not SUCCEEDED recently enough.
+
+    Takes a slate PER SPORT rather than one slate: see `JobExpectation.sport`
+    for why a single "is it the season" answer is wrong once two leagues share
+    the pipeline.
+    """
     for expectation in MONITORED_JOBS:
+        slate = slates.get(expectation.sport)
         if expectation.in_season_only and (slate is None or not slate.in_season):
-            report.skipped.append(f"{expectation.name} (out of season)")
+            report.skipped.append(
+                f"{expectation.name} ({expectation.sport} out of season)"
+            )
             continue
 
         if expectation.enabled_key:
@@ -429,12 +490,18 @@ def check_data_freshness(report: MonitorReport, slate: Slate | None) -> None:
 # -----------------------------------------------------------------------------
 # Entrypoint
 # -----------------------------------------------------------------------------
-def run_checks(slate: Slate | None) -> MonitorReport:
+def run_checks(slates: Mapping[str, Slate | None]) -> MonitorReport:
     report = MonitorReport()
     check_stuck_runs(report)
     check_latest_run_failed(report)
-    check_staleness(report, slate)
-    check_data_freshness(report, slate)
+    check_staleness(report, slates)
+    # COLLEGE ONLY, deliberately, and it is a known gap. This check counts
+    # `projections` rows for the slate week and compares them against earlier
+    # weeks and the prior season — a comparison the NFL cannot make yet, having
+    # been projected for the first time on 2026-09-08 with no season of its own
+    # behind it. Running it against an NFL slate today would alert on every run
+    # for a reason that is true and useless.
+    check_data_freshness(report, slates.get("cfb"))
     return report
 
 
@@ -462,22 +529,26 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         with pipeline_run(JOB_NAME) as run_id:
-            slate = current_slate()
-            if slate is None:
-                log.warning(
-                    "No games ingested, so there is no slate to monitor. "
-                    "Run ingest_reference before expecting this to mean anything."
-                )
-            else:
-                log.info(
-                    "Monitoring %s week %s (in_season=%s, complete=%s)",
-                    slate.season,
-                    slate.week,
-                    slate.in_season,
-                    slate.complete,
-                )
+            slates = {sport: current_slate(sport=sport) for sport in MONITORED_SPORTS}
+            for sport, slate in slates.items():
+                if slate is None:
+                    log.warning(
+                        "%s: no games ingested, so there is no slate to monitor. "
+                        "Run the reference ingest before expecting this to mean "
+                        "anything.",
+                        sport,
+                    )
+                else:
+                    log.info(
+                        "Monitoring %s %s week %s (in_season=%s, complete=%s)",
+                        sport,
+                        slate.season,
+                        slate.week,
+                        slate.in_season,
+                        slate.complete,
+                    )
 
-            report = run_checks(slate)
+            report = run_checks(slates)
             log.info("%s (run %s)", report.summary(), run_id)
             for skipped in report.skipped:
                 log.info("  skipped: %s", skipped)

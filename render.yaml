@@ -292,6 +292,63 @@ services:
   # would make a budget overrun look like a bug in whichever finished second.
   # ===========================================================================
 
+  # DAILY 08:20 UTC — the NFL results chain. Twenty minutes after the college
+  # one, per the offset rule above.
+  #
+  # WITHOUT THIS THE NFL BOARD DOES NOT LEARN. Until 2026-09-08 the NFL had two
+  # crons — capture odds, price them — and neither loads a result. The board
+  # would have projected week 2 from priors alone, with empty L5/L10 and OPP RK
+  # columns, no 2026 defensive ratings, and no actuals to grade against, while
+  # every scheduled job reported success. That is the same failure the college
+  # side shipped twice (see cfb-props-ingest-results above and
+  # 20260813140000_in_season_scope.sql); it is invisible from the job logs
+  # because nothing here fails.
+  #
+  # ORDER IS LOAD-BEARING, and it is the college order for the college reasons.
+  # `nfl_ingest_reference` first: `completed` and the final score come from the
+  # schedule file, and nothing downstream asks for a finished game's rows until
+  # our table says it finished. `build_splits` last: splits are computed from
+  # the plays the step before it just wrote. Chained with `&&` in one service
+  # because Render has no dependency graph between crons and four schedules
+  # guessing at each other's runtime would race.
+  #
+  # `--current` ON EVERY STEP, AND IT REPLACED A HARDCODED YEAR. These jobs
+  # deliberately refuse to default a season, so the obvious way to schedule them
+  # was `--seasons 2026` written here. That reproduces exactly the bug the flag
+  # exists to prevent — it only moves it into a file no test reads, where it
+  # would run green through the whole of 2027 ingesting 2026. `--current` reads
+  # `app_config.current_season`, the same single key the college chain uses, so
+  # there is one thing to change each August rather than two.
+  #
+  # 08:20 UTC is 04:20 ET, after Monday Night Football has settled and hours
+  # ahead of the 12:20 capture and the 12:50 projection, so the NFL board is
+  # priced from stats ingested the same morning.
+  #
+  # DAILY EVEN THOUGH THE NFL PLAYS THREE DAYS A WEEK. `nfl_ingest_plays`
+  # rewrites every game in the season's source file on each run, so on the four
+  # days with no games it churns dead tuples for nothing — ~13 MB a day by
+  # December, against 15.8 MB of headroom measured on production 2026-09-08.
+  # Restricting the days is still the wrong trade twice over: a Thursday game
+  # would not reach the splits used for that same week's Sunday slate, and
+  # `tests/test_monitor.py::_cron_period_hours` scores ANY day-of-week-restricted
+  # cron as a 168-hour period, which would push `max_age_hours` past a week and
+  # leave the chain effectively unmonitored. The storage guard refuses loudly
+  # when the room runs out; a silent staleness window would not.
+  - type: cron
+    name: nfl-props-ingest-results
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "20 8 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      python -m worker.jobs.nfl_ingest_reference --current &&
+      python -m worker.jobs.nfl_ingest_stats --current &&
+      python -m worker.jobs.nfl_ingest_plays --current &&
+      python -m worker.jobs.build_splits --current --sport nfl
+    envVars:
+      - fromGroup: cfb-props-worker
+
   # Every 6 hours at :20. NFL line capture.
   #
   # MEASURED COST, 2026-09-08: one week-1 capture was 189 credits for 16 games

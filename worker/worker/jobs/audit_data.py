@@ -1699,12 +1699,28 @@ check(G, "every board call agrees with the confidence shown beside it", """
 # The week strip and the board header read their counts straight from this view.
 # If it drifts from the tables it summarises, the page states a game and
 # projection count that no query behind it agrees with.
+#
+# THE SUBQUERIES JOIN `games` FOR THE SPORT, and that is the whole difficulty of
+# this check. `v_slate_weeks` groups by (season, week, sport); a cross-check that
+# groups by (season, week) alone compares one sport's row against BOTH sports'
+# rows and reports every week of an overlapping season as wrong. It did exactly
+# that from 2026-09-06 — the day NFL projections first landed — and failed the
+# audit daily on data that was entirely correct, which is worse than a check that
+# was never written: it made the whole canary exit non-zero and so hid whatever
+# else it would have caught.
+#
+# (season, week) IS NOT A KEY IN THIS DATABASE. (season, week, sport) is, and
+# every check that correlates on a week has to say so.
 check(G, "v_slate_weeks counts agree with the tables they summarise", """
     select count(*) as weeks, count(*) filter (
              where v.projections <> (select count(*) from projections p
-                                      where p.season = v.season and p.week = v.week)
+                                       join games g on g.id = p.game_id
+                                      where p.season = v.season and p.week = v.week
+                                        and g.sport = v.sport)
                 or v.players <> (select count(distinct p.player_id) from projections p
-                                  where p.season = v.season and p.week = v.week)
+                                   join games g on g.id = p.game_id
+                                  where p.season = v.season and p.week = v.week
+                                    and g.sport = v.sport)
            ) as wrong
       from v_slate_weeks v
 """, lambda r: r["weeks"] > 0 and r["wrong"] == 0)
@@ -1762,13 +1778,31 @@ check(G, "the consensus spread is one a provider actually posted", """
 
 # The board's position tabs are fixed; the data behind them is not. A position
 # with no projections renders an empty tab that looks like a filter bug.
-check(G, "every position tab has rows in the latest slate week", """
-    select count(distinct pl.position_group) as positions
-      from projections pr join players pl on pl.id = pr.player_id
-     where (pr.season, pr.week) = (
-       select season, week from v_slate_weeks order by season desc, week desc limit 1
-     )
-""", lambda r: r["positions"] == 4)
+#
+# ONCE PER SPORT, because the tabs are per sport and so is the empty tab a
+# reader would see. The original took the single latest (season, week) from
+# `v_slate_weeks` — which now carries a sport, so `limit 1` picked whichever
+# sport happened to sort first — and then counted position groups across BOTH
+# sports at that week. It passed, and it would have gone on passing with an NFL
+# tab entirely empty, because 1,264 college players covering all four groups
+# answer the question on the NFL's behalf. A check that cannot fail is not a
+# check.
+#
+# The two sports are also rarely on the same week: measured 2026-09-08, college
+# was on week 2 and the NFL on week 1.
+check(G, "every position tab has rows in each sport's latest slate week", """
+    select count(*) as sports, count(*) filter (where positions <> 4) as short
+      from (
+        select v.sport, count(distinct pl.position_group) as positions
+          from (select distinct on (sport) sport, season, week
+                  from v_slate_weeks order by sport, season desc, week desc) v
+          join games g on g.sport = v.sport
+          join projections pr on pr.game_id = g.id
+                             and pr.season = v.season and pr.week = v.week
+          join players pl on pl.id = pr.player_id
+         group by v.sport
+      ) t
+""", lambda r: r["sports"] > 0 and r["short"] == 0)
 
 # Every source the read layer names must be readable by the anon role. `unwrap`
 # turns a denied read into a thrown error rather than an empty board, so this is

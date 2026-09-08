@@ -21,10 +21,16 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// SPORT-NEUTRAL SINCE N5e. This is the ROOT layout, rendered once for both
+// boards, so it cannot name a league without being wrong on half the traffic —
+// and the title is the browser tab, which a reader on the NFL board would have
+// seen reading "CFB Player Props". Per-sport metadata would need
+// `generateMetadata` on every page reading the same search param the page
+// already reads; neutral here is honest and costs nothing.
 export const metadata: Metadata = {
-  title: "CFB Player Props · Legends Sports",
+  title: "Player Props · Legends Sports",
   description:
-    "Model-derived OVER/UNDER calls with confidence for college football player props.",
+    "Model-derived OVER/UNDER calls with confidence for college football and NFL player props.",
 };
 
 export default function RootLayout({

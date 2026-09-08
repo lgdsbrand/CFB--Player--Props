@@ -119,7 +119,37 @@ Any incoming webhook accepting `{"text": …}` works — Slack, Discord, Teams.
 | `hit_rate_windows` | `[5, 10]` | same | Rolling windows offered by the hit-rate filter (L5 / L10). Web reads this rather than hardcoding. |
 | `min_games_for_defense_rank` | `2` | same | Games required before a defense gets a published rank vs position; below this the rating shows as provisional. |
 | `goal_line_yards_to_goal` | `10` | same | Distance to goal defining a goal-line opportunity for the anytime-TD model (CLAUDE.md §6). |
-| `prior_season_weight_max` | `0.5` | same | Ceiling on prior-season contribution in week 1, decaying as the season accumulates. Transfer portal and NIL churn mean prior-year output often happened at another school (CLAUDE.md §6). |
+| `prior_season_weight_max` | `0.5` | same | Ceiling on prior-season contribution in week 1, decaying as the season accumulates. Transfer portal and NIL churn mean prior-year output often happened at another school (CLAUDE.md §6). **College value; see the sport overrides below.** |
+| `prior_season_weight_max_nfl` | `0.75` | `0.75` | NFL ceiling. Higher because NFL priors measured far more predictive — see the table below. Added by `20260907220000_sport_dependent_prior_weight.sql`. |
+| `changed_team_prior_multiplier` | `0.5` | `0.5` | Extra haircut on the prior when the player changed team. College: a transfer's prior says much less about their new role. Was a module constant until `20260907220000`. |
+| `changed_team_prior_multiplier_nfl` | `0.8` | `0.8` | NFL equivalent. Gentler, because changing team barely dented the correlation in the NFL. |
+
+#### Sport-dependent keys — the `{key}_{sport}` convention
+
+`worker.db.get_config_value_for_sport(key, sport)` looks for `{key}_{sport}`
+and falls back to the bare key. A suffix rather than a new column because
+`app_config` is key/value and most settings are genuinely shared; only the few
+that differ need a row. **College deliberately gets no suffixed rows** — the
+base key *is* its value, because every number in this table was measured on
+college over six phases.
+
+The two prior-weight overrides are **measured, not assumed**. Correlation
+between a player's prior-season and current-season per-game average, same
+method both sports, ≥ 6 games in each (production, 2026-09-07):
+
+| | CFB 2022-25 (all / stayed / moved) | NFL 2023-25 (all / stayed / moved) |
+|---|---|---|
+| RB rush yds | 0.476 / 0.554 / 0.255 | 0.629 / 0.644 / 0.628 |
+| WR rec yds | 0.440 / 0.569 / 0.206 | 0.672 / 0.693 / 0.535 |
+| TE rec yds | 0.494 / 0.510 / 0.635 | 0.727 / 0.770 / 0.274 |
+| QB pass yds | 0.377 / 0.404 / 0.346 | 0.373 / 0.542 / 0.119 |
+
+**Known limitation:** the QB row shows NFL quarterback priors are *not* more
+predictive than college ones, so a single per-sport ceiling over-weights them.
+Carving QB out would add a position dimension for one cell of the table, on
+samples of 65 and 19; left alone until NFL grading gives an outcome to fit
+against. **These values are unfitted** — scaled from correlations, not tuned
+against profit or calibration.
 
 **`hit_rate_basis` is worth revisiting.** It was settled on `"threshold"` when
 historical prop odds were believed unreachable. They are not — the probe resolved

@@ -139,6 +139,14 @@ PRIOR_GAMES_EQUIVALENT = 4.0
 # Extra haircut when the player was on a DIFFERENT team last season. Their prior
 # production is still informative about the player, but far less about their
 # role: usage is a property of the depth chart they left behind.
+#
+# SPORT-DEPENDENT since migration 0054, and this constant is now only the
+# college default. Measured on production: changing team roughly halves the
+# prior/current correlation in college (RB .554->.255, WR .569->.206) and
+# barely dents it in the NFL (RB .644->.628, WR .693->.535), which is the
+# transfer portal showing up in the data exactly where CLAUDE.md §6 says it
+# should. Callers pass the value for their sport; see
+# `db.get_config_value_for_sport`.
 CHANGED_TEAM_PRIOR_MULTIPLIER = 0.5
 
 
@@ -445,7 +453,11 @@ def prior_column_names() -> list[str]:
 
 
 def prior_weight(
-    games_played: int, *, changed_team: bool, ceiling: float
+    games_played: int,
+    *,
+    changed_team: bool,
+    ceiling: float,
+    changed_team_multiplier: float = CHANGED_TEAM_PRIOR_MULTIPLIER,
 ) -> float:
     """How much of a projection the prior season may carry.
 
@@ -454,13 +466,21 @@ def prior_weight(
     accumulates" rule in CLAUDE.md §6. Written to `projections.prior_weight` so
     the UI can widen the displayed range honestly instead of implying a
     precision the model does not have this early.
+
+    BOTH KNOBS ARE SPORT-DEPENDENT (migration 0054) and neither is read here:
+    the caller resolves them, because this function is in the sport-agnostic
+    core and agnostic means it takes the number rather than knowing which sport
+    asked. `PRIOR_GAMES_EQUIVALENT` is NOT sport-dependent — the measurement
+    behind 0054 says how much a prior season is worth, not how fast it should
+    decay, and inventing a second NFL number from evidence that does not speak
+    to it would be guessing dressed as calibration.
     """
     if ceiling <= 0:
         return 0.0
     decay = PRIOR_GAMES_EQUIVALENT / (PRIOR_GAMES_EQUIVALENT + max(games_played, 0))
     weight = ceiling * decay
     if changed_team:
-        weight *= CHANGED_TEAM_PRIOR_MULTIPLIER
+        weight *= changed_team_multiplier
     return max(0.0, min(weight, ceiling))
 
 
@@ -805,6 +825,7 @@ def build_feature_frame(
     as_of: AsOf,
     *,
     prior_season_weight_max: float = 0.5,
+    changed_team_prior_multiplier: float = CHANGED_TEAM_PRIOR_MULTIPLIER,
     include_weather: bool = True,
     goal_line_yards: int = 10,
 ) -> pl.DataFrame:
@@ -1029,6 +1050,7 @@ def build_feature_frame(
                 int(row["games_played"] or 0),
                 changed_team=bool(row["changed_team"]),
                 ceiling=prior_season_weight_max,
+                changed_team_multiplier=changed_team_prior_multiplier,
             ),
             return_dtype=pl.Float64,
         )

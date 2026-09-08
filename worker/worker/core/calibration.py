@@ -553,13 +553,20 @@ class StoredCalibration:
     calibration report would no longer describe the board.
     """
 
-    def __init__(self, snapshot: dict[str, Any] | None) -> None:
+    def __init__(
+        self, snapshot: dict[str, Any] | None, sport: str = "cfb"
+    ) -> None:
         snapshot = snapshot or {}
         mean_entries = dict(snapshot.get("mean") or {})
         width_entries = dict(snapshot.get("width") or {})
         self.mean = _StoredMean(mean_entries)
         self.variance = _StoredWidth(width_entries)
         self.entry_count = len(mean_entries) + len(width_entries)
+        # Which sport the corrections were MEASURED on, which is not
+        # necessarily the sport they are being applied to. A residual width is
+        # a property of the sport it was fitted on; carrying the provenance
+        # lets a run record that it borrowed rather than leaving it implied.
+        self.sport = sport
 
     @property
     def is_empty(self) -> bool:

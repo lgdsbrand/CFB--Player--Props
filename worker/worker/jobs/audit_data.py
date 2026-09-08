@@ -1593,10 +1593,21 @@ check(G, "edge_threshold is a sane probability difference", """
     select (value #>> '{}')::numeric as t from app_config where key='edge_threshold'
 """, lambda r: 0 < float(r["t"]) < 0.5)
 
-check(G, "prior_season_weight_max is a proportion below 1", """
-    select (value #>> '{}')::numeric as w
-      from app_config where key='prior_season_weight_max'
-""", lambda r: 0 < float(r["w"]) < 1)
+# ASKED OF EVERY SPORT, NOT JUST THE BASE KEY. Migration 0054 added
+# `{key}_{sport}` overrides, and a check naming only the bare key would pass
+# while an NFL value of 3.0 quietly tripled every NFL prior. `like` rather than
+# an explicit list so a third sport is covered the day its row is inserted.
+check(G, "every prior_season_weight_max is a proportion below 1", """
+    select count(*) as bad from app_config
+     where key like 'prior_season_weight_max%'
+       and ((value #>> '{}')::numeric <= 0 or (value #>> '{}')::numeric >= 1)
+""", lambda r: r["bad"] == 0)
+
+check(G, "every changed_team_prior_multiplier is a proportion in (0,1]", """
+    select count(*) as bad from app_config
+     where key like 'changed_team_prior_multiplier%'
+       and ((value #>> '{}')::numeric <= 0 or (value #>> '{}')::numeric > 1)
+""", lambda r: r["bad"] == 0)
 
 # app_config is world-READABLE by design — the app reads it directly. CLAUDE.md
 # §0 makes key hygiene a hard rule, so the table has to be checked for anything

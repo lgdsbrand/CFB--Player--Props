@@ -54,7 +54,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from worker.core.calibration import Calibration
-from worker.core.features import AsOf, build_feature_frame
+from worker.core.features import (
+    CHANGED_TEAM_PRIOR_MULTIPLIER,
+    AsOf,
+    build_feature_frame,
+)
 from worker.core.models import (
     Projection,
     position_baselines,
@@ -238,6 +242,7 @@ def backtest_week(
     catalogue: Sequence[dict[str, Any]],
     *,
     prior_season_weight_max: float = 0.5,
+    changed_team_prior_multiplier: float = CHANGED_TEAM_PRIOR_MULTIPLIER,
     calibration: Calibration | None = None,
 ) -> tuple[list[Prediction], list[Observation]]:
     """Project every player-market for one week and grade against the result.
@@ -248,7 +253,9 @@ def backtest_week(
     earlier weeks only, and only once it is graded does it inform the next.
     """
     frame = build_feature_frame(
-        as_of, prior_season_weight_max=prior_season_weight_max
+        as_of,
+        prior_season_weight_max=prior_season_weight_max,
+        changed_team_prior_multiplier=changed_team_prior_multiplier,
     )
     if frame.is_empty():
         return [], []
@@ -409,6 +416,7 @@ def walk_forward(
     *,
     max_week: int | None = None,
     prior_season_weight_max: float = 0.5,
+    changed_team_prior_multiplier: float = CHANGED_TEAM_PRIOR_MULTIPLIER,
     calibration: Calibration | None = None,
     sport: str = "cfb",
 ) -> list[Prediction]:
@@ -455,6 +463,7 @@ def walk_forward(
                 as_of,
                 catalogue,
                 prior_season_weight_max=prior_season_weight_max,
+                changed_team_prior_multiplier=changed_team_prior_multiplier,
                 calibration=calibration,
             )
             predictions.extend(weekly)

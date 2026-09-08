@@ -54,7 +54,13 @@ def no_live_weeks(monkeypatch):
 
     monkeypatch.setattr(run_projections, "get_settings", lambda: _Settings())
     monkeypatch.setattr(run_projections, "resolve_season", lambda explicit: 2026)
-    monkeypatch.setattr(run_projections, "live_weeks", lambda season: [])
+    # The stub takes `sport` because the real one does (N5b): both sports number
+    # their weeks from 1 in the same seasons, so "which weeks are live" cannot
+    # be answered without it. That it is actually THREADED is asserted by
+    # `test_the_live_week_lookup_is_asked_for_the_requested_sport` below.
+    monkeypatch.setattr(
+        run_projections, "live_weeks", lambda season, *, sport="cfb": []
+    )
     monkeypatch.setattr(run_projections, "pipeline_run", fake_pipeline_run)
     return recorded
 
@@ -198,3 +204,39 @@ def test_the_daily_run_lands_after_an_odds_capture() -> None:
             f"only {minute} minutes after the capture starts; ingest_odds has "
             "taken 157s on production and this would race it"
         )
+
+
+def test_the_live_week_lookup_is_asked_for_the_requested_sport(monkeypatch):
+    """`--sport nfl` must reach `live_weeks`, not just be accepted by argparse.
+
+    A stub that tolerates the argument proves nothing on its own: the failure
+    this guards is the one N5b found twice already -- a call site that keeps the
+    sport-blind default while everything around it is threaded. `(season, week)`
+    stops identifying a slate the moment both sports share the table, and
+    nothing raises when it does; the numbers just get bigger.
+    """
+    asked: list[str] = []
+
+    @contextlib.contextmanager
+    def fake_pipeline_run(job_name, metadata=None):
+        yield None
+
+    class _Settings:
+        log_level = "INFO"
+        environment = "production"
+
+    def fake_live_weeks(season, *, sport="cfb"):
+        asked.append(sport)
+        return []
+
+    monkeypatch.setattr(run_projections, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(run_projections, "resolve_season", lambda explicit: 2026)
+    monkeypatch.setattr(run_projections, "live_weeks", fake_live_weeks)
+    monkeypatch.setattr(run_projections, "pipeline_run", fake_pipeline_run)
+
+    assert run_projections.main(["--current-week", "--sport", "nfl"]) == 0
+    assert asked == ["nfl"]
+
+    asked.clear()
+    assert run_projections.main(["--current-week"]) == 0
+    assert asked == ["cfb"], "the default must stay college"

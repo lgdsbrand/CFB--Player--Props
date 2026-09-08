@@ -50,7 +50,7 @@ import psycopg
 from worker.adapters.odds import SYNTHETIC_ADAPTER
 from worker.config import ConfigError, get_settings
 from worker.core.calibration import StoredCalibration
-from worker.core.features import AsOf
+from worker.core.features import CHANGED_TEAM_PRIOR_MULTIPLIER, AsOf
 from worker.core.ladder import build_ladder, ladder_json
 from worker.core.probability import side_and_confidence
 from worker.core.projections import (
@@ -62,7 +62,14 @@ from worker.core.projections import (
     market_catalogue,
     project_slate,
 )
-from worker.db import connect, fetch_all, fetch_one, get_config_value, pipeline_run
+from worker.db import (
+    connect,
+    fetch_all,
+    fetch_one,
+    get_config_value,
+    get_config_value_for_sport,
+    pipeline_run,
+)
 from worker.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -223,7 +230,9 @@ def live_weeks(
 # -----------------------------------------------------------------------------
 # Calibration
 # -----------------------------------------------------------------------------
-def load_calibration(backtest_id: uuid.UUID | None = None) -> StoredCalibration:
+def load_calibration(
+    backtest_id: uuid.UUID | None = None, sport: str = "cfb"
+) -> StoredCalibration:
     """The corrections measured by the most recent completed walk.
 
     A live run cannot learn its own — see `StoredCalibration`. Missing
@@ -232,17 +241,26 @@ def load_calibration(backtest_id: uuid.UUID | None = None) -> StoredCalibration:
     distributions the Phase 3 improvement round removed: the extreme bin said
     0.962 and hit 0.774. Publishing those to the board silently would undo the
     deliverable the client is reviewing.
+
+    PREFERS THE SPORT'S OWN CALIBRATION, AND SAYS SO WHEN IT BORROWS. A
+    correction is a measured residual width per market, and there is no reason
+    college's should describe the NFL. But no NFL walk exists yet — N5's agreed
+    order is build now, grade later — so borrowing beats running raw, whose
+    overconfidence is the measured 0.962-against-0.774 above. What must not
+    happen is borrowing SILENTLY, which is what this did before N5b: every
+    backtest stored to date is college and none of them recorded a sport.
     """
     row = fetch_one(
         """
-        select id, created_at, config->'calibration' as calibration
+        select id, created_at, config->'calibration' as calibration,
+               coalesce(config->>'sport', 'cfb') as sport
           from backtests
          where (%s::uuid is null or id = %s::uuid)
            and config ? 'calibration'
-         order by created_at desc
+         order by (coalesce(config->>'sport', 'cfb') = %s) desc, created_at desc
          limit 1
         """,
-        (backtest_id, backtest_id),
+        (backtest_id, backtest_id, sport),
     )
     if row is None:
         raise ConfigError(
@@ -251,16 +269,25 @@ def load_calibration(backtest_id: uuid.UUID | None = None) -> StoredCalibration:
             "--no-calibration to publish raw distributions deliberately."
         )
 
-    calibration = StoredCalibration(row["calibration"])
+    calibration = StoredCalibration(row["calibration"], sport=row["sport"])
     if calibration.is_empty:
         raise ConfigError(f"Backtest {row['id']} stored an empty calibration snapshot.")
 
     log.info(
-        "Calibration from backtest %s (%s): %d entries",
+        "Calibration from backtest %s (%s, %s): %d entries",
         row["id"],
         row["created_at"].date(),
+        row["sport"],
         calibration.entry_count,
     )
+    if row["sport"] != sport:
+        log.warning(
+            "BORROWED CALIBRATION: projecting %s with corrections measured on "
+            "%s. Residual widths are a property of the sport they were fitted "
+            "on, so these probabilities are approximate until a %s backtest "
+            "exists. Recorded on the model_run as calibration_sport.",
+            sport, row["sport"], sport,
+        )
     return calibration
 
 
@@ -846,6 +873,12 @@ def _backfill_ladders(*, dry_run: bool = False) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--season", type=int)
+    parser.add_argument(
+        "--sport", default="cfb", choices=("cfb", "nfl"),
+        help="Which sport's slate to project. Selects the games, the players "
+             "and the sport-dependent prior weighting (migration 0054). "
+             "Defaults to cfb.",
+    )
     parser.add_argument("--weeks", type=int, nargs="+")
     parser.add_argument(
         "--all-weeks", action="store_true", help="Every projectable week of the season."
@@ -939,9 +972,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         season = resolve_season(args.season)
         if args.all_weeks:
-            weeks = projectable_weeks(season)
+            weeks = projectable_weeks(season, args.sport)
         elif args.current_week:
-            weeks = live_weeks(season)
+            weeks = live_weeks(season, sport=args.sport)
             if not weeks:
                 # NOT an error. See `live_weeks` — a schedule gap longer than
                 # the horizon legitimately has nothing live, and a daily cron
@@ -973,7 +1006,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
         calibration = None if args.no_calibration else load_calibration(
-            uuid.UUID(args.backtest_id) if args.backtest_id else None
+            uuid.UUID(args.backtest_id) if args.backtest_id else None,
+            sport=args.sport,
         )
     except ConfigError as exc:
         log.error("%s", exc)
@@ -986,7 +1020,17 @@ def main(argv: list[str] | None = None) -> int:
             "top bin."
         )
 
-    prior_ceiling = float(get_config_value("prior_season_weight_max") or 0.5)
+    # Sport-dependent (migration 0054). The college ceiling exists because of
+    # the transfer portal and NIL — CLAUDE.md §6 — and that reasoning simply
+    # does not describe the NFL, where prior seasons measured far more
+    # predictive (r 0.63-0.73 vs 0.44-0.49 on RB/WR/TE).
+    prior_ceiling = float(
+        get_config_value_for_sport("prior_season_weight_max", args.sport) or 0.5
+    )
+    changed_team_multiplier = float(
+        get_config_value_for_sport("changed_team_prior_multiplier", args.sport)
+        or CHANGED_TEAM_PRIOR_MULTIPLIER
+    )
     catalogue = market_catalogue()
     if not catalogue:
         log.error("No active markets — did the seed migration run?")
@@ -997,7 +1041,9 @@ def main(argv: list[str] | None = None) -> int:
         "weeks": weeks,
         "model_version": MODEL_VERSION,
         "git_sha": _git_sha(),
+        "sport": args.sport,
         "prior_season_weight_max": prior_ceiling,
+        "changed_team_prior_multiplier": changed_team_multiplier,
         "devig_method": str(get_config_value("devig_method") or "shin"),
         "odds_adapter": str(get_config_value("odds_adapter") or "none"),
         "usage_filter": f"{MIN_USAGE_FRACTION_OF_BASELINE:.0%} of position baseline",
@@ -1009,6 +1055,7 @@ def main(argv: list[str] | None = None) -> int:
             "prior-season games"
         ),
         "calibrated": calibration is not None,
+        "calibration_sport": calibration.sport if calibration is not None else None,
         "synthetic_lines": bool(args.synthetic_lines),
     }
 
@@ -1016,15 +1063,19 @@ def main(argv: list[str] | None = None) -> int:
     totals = {"projections": 0, "picks": 0, "picks_with_book_line": 0, "synthetic_lines": 0}
 
     try:
-        with pipeline_run(JOB_NAME, metadata={"season": season, "weeks": weeks}):
+        with pipeline_run(
+            JOB_NAME,
+            metadata={"season": season, "sport": args.sport, "weeks": weeks},
+        ):
             if not args.dry_run:
                 _record_model_run(model_run_id, config)
 
             for week in weeks:
                 projected = project_slate(
-                    AsOf(season=season, week=week),
+                    AsOf(season=season, week=week, sport=args.sport),
                     catalogue,
                     prior_season_weight_max=prior_ceiling,
+                    changed_team_prior_multiplier=changed_team_multiplier,
                     calibration=calibration,
                 )
                 if not projected:

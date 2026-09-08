@@ -48,13 +48,21 @@ from worker.core.backtest import (
     walk_forward,
 )
 from worker.core.calibration import Calibration
+from worker.core.features import CHANGED_TEAM_PRIOR_MULTIPLIER
 from worker.core.models import can_rescale
 from worker.core.projections import (
     LAST_OPENING_WEEK,
     MIN_GAMES_TO_PROJECT,
     MIN_PRIOR_GAMES_TO_PROJECT,
 )
-from worker.db import execute, fetch_all, fetch_one, get_config_value, pipeline_run
+from worker.db import (
+    execute,
+    fetch_all,
+    fetch_one,
+    get_config_value,
+    get_config_value_for_sport,
+    pipeline_run,
+)
 from worker.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -410,6 +418,13 @@ def _log_comparison(backtest_id: uuid.UUID) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seasons", type=int, nargs="+")
+    parser.add_argument(
+        "--sport", default="cfb", choices=("cfb", "nfl"),
+        help="Which sport to walk. Recorded in the backtest's config so "
+             "`run_projections` can match a calibration to the sport it was "
+             "measured on -- every backtest stored before migration 0054 is "
+             "college, and none of them said so.",
+    )
     parser.add_argument("--max-week", type=int)
     parser.add_argument(
         "--persist-predictions", action="store_true",
@@ -473,14 +488,22 @@ def main(argv: list[str] | None = None) -> int:
 
     devig_method = str(get_config_value("devig_method") or "shin")
     hit_rate_basis = str(get_config_value("hit_rate_basis") or "threshold")
-    prior_ceiling = float(get_config_value("prior_season_weight_max") or 0.5)
+    prior_ceiling = float(
+        get_config_value_for_sport("prior_season_weight_max", args.sport) or 0.5
+    )
+    changed_team_multiplier = float(
+        get_config_value_for_sport("changed_team_prior_multiplier", args.sport)
+        or CHANGED_TEAM_PRIOR_MULTIPLIER
+    )
 
     config = {
+        "sport": args.sport,
         "seasons": seasons,
         "max_week": args.max_week,
         "devig_method": devig_method,
         "hit_rate_basis": hit_rate_basis,
         "prior_season_weight_max": prior_ceiling,
+        "changed_team_prior_multiplier": changed_team_multiplier,
         "usage_filter": f"{MIN_USAGE_FRACTION_OF_BASELINE:.0%} of position baseline",
         # Recorded because it CHANGED in Phase 6b.3, and a stored run whose
         # population is only implied is a run that cannot be compared to the one
@@ -529,7 +552,9 @@ def main(argv: list[str] | None = None) -> int:
                 seasons,
                 max_week=args.max_week,
                 prior_season_weight_max=prior_ceiling,
+                changed_team_prior_multiplier=changed_team_multiplier,
                 calibration=calibration,
+                sport=args.sport,
             )
             if not predictions:
                 log.error("No predictions produced.")

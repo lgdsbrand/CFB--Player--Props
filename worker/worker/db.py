@@ -360,6 +360,24 @@ def get_config_value(key: str) -> Any:
     return row["value"] if row else None
 
 
+def get_config_value_for_sport(key: str, sport: str) -> Any:
+    """`app_config` value for one sport, falling back to the sport-blind key.
+
+    Looks for `{key}_{sport}` first, then `{key}`. A suffix rather than a new
+    column because `app_config` is key/value and most settings are genuinely
+    shared: only the handful where the sports actually differ need overriding,
+    and the base key keeps working untouched for every reader and every audit
+    check that already names it.
+
+    `cfb` deliberately gets no suffixed rows. Its values ARE the base key -- the
+    project was college-only for six phases and every number in `app_config` was
+    measured there, so making college look like just another override would
+    misrepresent where those figures came from.
+    """
+    value = get_config_value(f"{key}_{sport}")
+    return value if value is not None else get_config_value(key)
+
+
 def resolve_seasons(explicit: Sequence[int] | None, *, current: bool = False) -> list[int]:
     """Which seasons a job should work on.
 

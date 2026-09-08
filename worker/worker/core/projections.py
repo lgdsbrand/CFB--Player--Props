@@ -45,7 +45,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from worker.core.calibration import Corrections
-from worker.core.features import AsOf, build_feature_frame
+from worker.core.features import (
+    CHANGED_TEAM_PRIOR_MULTIPLIER,
+    AsOf,
+    build_feature_frame,
+)
 from worker.core.ladder import build_ladder, ladder_json
 from worker.core.models import (
     Projection,
@@ -178,6 +182,7 @@ def project_slate(
     catalogue: Sequence[dict[str, Any]],
     *,
     prior_season_weight_max: float = 0.5,
+    changed_team_prior_multiplier: float = CHANGED_TEAM_PRIOR_MULTIPLIER,
     calibration: Corrections | None = None,
 ) -> list[ProjectedRow]:
     """Every publishable player-market distribution for one week.
@@ -187,7 +192,9 @@ def project_slate(
     overconfident at the extremes — useful for comparison, wrong for the board.
     """
     frame = build_feature_frame(
-        as_of, prior_season_weight_max=prior_season_weight_max
+        as_of,
+        prior_season_weight_max=prior_season_weight_max,
+        changed_team_prior_multiplier=changed_team_prior_multiplier,
     )
     if frame.is_empty():
         log.warning("%s: empty feature frame — nothing to project", as_of)

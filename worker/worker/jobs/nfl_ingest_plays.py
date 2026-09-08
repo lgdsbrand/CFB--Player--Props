@@ -31,7 +31,13 @@ from worker.adapters.nflverse.ingest_plays import (
 from worker.adapters.nflverse.ingest_reference import NflReferenceCounts
 from worker.adapters.nflverse.mapping import IMMUTABLE, LIVE_MAX_AGE
 from worker.config import ConfigError, get_settings
-from worker.db import count_rows, pipeline_run, record_failed_run, set_rows_written
+from worker.db import (
+    check_storage_headroom,
+    count_rows,
+    pipeline_run,
+    record_failed_run,
+    set_rows_written,
+)
 from worker.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -90,6 +96,12 @@ def main(argv: list[str] | None = None) -> int:
             return 3
         log.info("Dry run: sources resolved, stopping before any write.")
         return 0
+
+    # This job is the reason the guard is here: its Sunday load is what put
+    # production over its cap on 2026-09-07, and it is by far the largest
+    # writer of the three NFL jobs.
+    if not check_storage_headroom(JOB_NAME):
+        return 4
 
     before = {t: count_rows(t) for t in REPORTED_TABLES}
     try:

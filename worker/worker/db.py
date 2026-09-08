@@ -247,6 +247,54 @@ def database_size_mb() -> float:
     return (row["bytes"] / 1024 / 1024) if row else 0.0
 
 
+# Storage headroom. The cap is configuration (`app_config.db_size_cap_mb`) so
+# moving to Supabase Pro is a row edit rather than a deploy; these constants are
+# only the fallback for a database migrated before 20260813140000.
+#
+# RAISING OUR CAP DOES NOT RAISE SUPABASE'S. The free tier stops at 500 MB and
+# passing it makes the whole project READ-ONLY, which breaks every job and the
+# board with it. The cap is a place to notice the ceiling coming, not a licence.
+DEFAULT_SIZE_CAP_MB = 500.0
+SIZE_RESERVE_MB = 60.0
+
+
+def storage_headroom() -> tuple[float, float, float]:
+    """`(used, cap, available)` in MB, available net of the reserve."""
+    used = database_size_mb()
+    cap = float(get_config_value("db_size_cap_mb") or DEFAULT_SIZE_CAP_MB)
+    return used, cap, cap - used - SIZE_RESERVE_MB
+
+
+def check_storage_headroom(job: str, needed_mb: float = 0.0) -> bool:
+    """False, with a log line saying why, when there is no room to start.
+
+    A floor check, deliberately not an estimator. `ingest_stats` predicts its
+    own footprint from play-by-play volume because it loads whole seasons; the
+    jobs that call this write incrementally and have no comparable per-row
+    figure to project from. Guessing badly would be worse than not guessing:
+    the failure this exists to prevent is a database already over its cap being
+    pushed further by a cron nobody is watching, and that case is visible
+    without any estimate at all.
+
+    Passing `needed_mb` adds a known cost to the test where a caller has one.
+    """
+    used, cap, available = storage_headroom()
+    log.info(
+        "%s: database %.1f MB used, %.1f MB usable (cap %.0f, reserve %.0f).",
+        job, used, available, cap, SIZE_RESERVE_MB,
+    )
+    if needed_mb > available:
+        log.error(
+            "%s refusing to start: %.0f MB needed but only %.1f MB usable "
+            "against a %.0f MB cap. Free space, or raise "
+            "app_config.db_size_cap_mb once the project is off the free tier "
+            "-- noting that our cap and Supabase's are not the same number.",
+            job, needed_mb, available, cap,
+        )
+        return False
+    return True
+
+
 def fetch_id_map(
     table: str,
     key_column: str,

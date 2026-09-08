@@ -26,7 +26,13 @@ import sys
 from worker.adapters.nflverse.client import NflverseClient, NflverseError
 from worker.adapters.nflverse.ingest_reference import run_nfl_reference_ingest
 from worker.config import ConfigError, get_settings
-from worker.db import count_rows, pipeline_run, record_failed_run, set_rows_written
+from worker.db import (
+    check_storage_headroom,
+    count_rows,
+    pipeline_run,
+    record_failed_run,
+    set_rows_written,
+)
 from worker.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -91,6 +97,9 @@ def main(argv: list[str] | None = None) -> int:
             return 3
         log.info("Dry run: sources resolved, stopping before any write.")
         return 0
+
+    if not check_storage_headroom(JOB_NAME):
+        return 4
 
     try:
         with pipeline_run(JOB_NAME, metadata={"seasons": seasons}) as run_id:

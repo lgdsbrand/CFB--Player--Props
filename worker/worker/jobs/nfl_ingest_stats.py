@@ -28,6 +28,7 @@ from worker.adapters.nflverse.ingest_stats import run_nfl_stats_ingest
 from worker.adapters.nflverse.mapping import IMMUTABLE, LIVE_MAX_AGE
 from worker.config import ConfigError, get_settings
 from worker.db import (
+    check_storage_headroom,
     count_rows,
     fetch_one,
     pipeline_run,
@@ -134,6 +135,9 @@ def main(argv: list[str] | None = None) -> int:
             return 3
         log.info("Dry run: sources resolved, stopping before any write.")
         return 0
+
+    if not check_storage_headroom(JOB_NAME):
+        return 4
 
     before = {t: count_rows(t) for t in REPORTED_TABLES}
     try:

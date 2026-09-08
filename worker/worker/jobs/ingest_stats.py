@@ -28,6 +28,8 @@ from worker.adapters.cfbd.quota import (
 )
 from worker.config import ConfigError, get_settings
 from worker.db import (
+    DEFAULT_SIZE_CAP_MB,
+    SIZE_RESERVE_MB,
     count_rows,
     database_size_mb,
     fetch_one,
@@ -49,11 +51,12 @@ REPORTED_TABLES = ("player_game_stats", "plays", "play_player_stats")
 # messier than a refusal — and on the Supabase free tier passing the cap makes
 # the whole project READ-ONLY, which breaks every other job too.
 #
-# The cap is configuration (`app_config.db_size_cap_mb`) so moving to Pro is a
-# row edit rather than a deploy. This constant is only the fallback for a
-# database migrated before 20260813140000.
-DEFAULT_SIZE_CAP_MB = 500.0
-RESERVE_MB = 60.0
+# The cap and reserve now live in `worker.db` because the NFL jobs need the same
+# ceiling and had no guard at all until 2026-09-07 — one of them is what pushed
+# production past its cap in the first place. This job keeps its own estimator
+# on top: it loads whole seasons of play-by-play and can predict its footprint,
+# which the incremental jobs cannot.
+RESERVE_MB = SIZE_RESERVE_MB
 
 # Measured on production 2026-08-13: plays 94.2 MB + play_player_stats 78.5 MB +
 # player_game_stats 14.3 MB = 187.0 MB across the 1,852 games that had

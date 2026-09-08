@@ -146,6 +146,7 @@ export async function getCheatSheetContext(
   season: number,
   week: number,
   kickoffCutoff: Date,
+  sport: Sport = DEFAULT_SPORT,
 ): Promise<{ pricedProps: number; playedGames: number }> {
   const supabase = createServerSupabaseClient();
 
@@ -153,7 +154,7 @@ export async function getCheatSheetContext(
     supabase
       .from("v_board_rows")
       .select("projection_id", { count: "exact", head: true })
-      .eq("sport", DEFAULT_SPORT)
+      .eq("sport", sport)
       .eq("season", season)
       .eq("week", week)
       .eq("conference_is_displayed", true)

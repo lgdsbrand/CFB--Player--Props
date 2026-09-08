@@ -17,6 +17,7 @@ import type { BoardSort } from "@/lib/data/board";
 // stripping and the test runner has to resolve it for real. Type-only imports
 // above can keep the alias because they are erased before Node sees them.
 import { POSITION_GROUPS, type PositionGroup } from "./types.ts";
+import { DEFAULT_SPORT, resolveSport, type Sport } from "./sport.ts";
 
 /**
  * How the board lays its results out.
@@ -82,6 +83,17 @@ export function isBoardPreset(value: string | undefined): value is BoardPreset {
 }
 
 export type BoardParams = {
+  /**
+   * Which sport's board this is.
+   *
+   * IN THE URL LIKE EVERY OTHER FILTER, AND FOR THE SAME REASON. Every link on
+   * the page is rebuilt by `boardHref` from the current params; a sport held
+   * anywhere else — a cookie, a layout, component state — is dropped the first
+   * time a reader clicks a position tab, and they land silently back on
+   * college. Sport changes WHICH ROWS EXIST, so that failure does not look like
+   * a lost filter, it looks like an empty or wrong board.
+   */
+  sport?: Sport;
   season?: number;
   week?: number;
   position?: PositionGroup;
@@ -149,6 +161,7 @@ export const BOARD_PATH = "/props";
  * would make a shared link silently land on the home page instead.
  */
 const BOARD_PARAM_KEYS = [
+  "sport",
   "season", "week", "position", "market", "game", "day", "conference", "q",
   "sort", "edges", "top25", "conf", "rank", "window", "view", "preset", "page",
 ] as const;
@@ -264,6 +277,7 @@ export function parseBoardParams(
   const preset = first(raw.preset);
 
   return {
+    sport: resolveSport(raw.sport),
     season: int(raw.season),
     week: int(raw.week),
     position:
@@ -320,6 +334,9 @@ export function boardHref(
     if (value !== undefined && value !== "") search.set(key, String(value));
   };
 
+  // First, so a shared URL reads sport-first and so the one parameter that
+  // changes which rows exist is the hardest to lose in a truncated link.
+  if (next.sport && next.sport !== DEFAULT_SPORT) set("sport", next.sport);
   set("season", next.season);
   set("week", next.week);
   set("position", next.position);
@@ -363,6 +380,12 @@ export function boardHref(
 export function resetBoardHref(current: BoardParams): string {
   return boardHref(
     {
+      // SPORT IS NOT A FILTER AND MUST SURVIVE THE RESET. Clearing the board
+      // means "show me everything in this league", not "send me to the other
+      // one" -- and because sport decides which rows exist, dropping it here
+      // would look like the reset had emptied the board rather than switched
+      // it. Season and week survive for the same reason.
+      sport: current.sport,
       season: current.season,
       week: current.week,
       sort: "edge",

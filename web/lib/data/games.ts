@@ -16,7 +16,7 @@
  */
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { DEFAULT_SPORT } from "@/lib/core/sport";
+import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { GameSummary } from "@/lib/core/types";
 import { type DbRow, unwrap } from "@/lib/data/query";
 
@@ -80,13 +80,14 @@ function toGame(row: DbRow): GameSummary {
 export async function getSlateGames(
   season: number,
   week: number,
+  sport: Sport = DEFAULT_SPORT,
 ): Promise<GameSummary[]> {
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
     await supabase
       .from("v_slate_games")
       .select(COLUMNS)
-      .eq("sport", DEFAULT_SPORT)
+      .eq("sport", sport)
       .eq("season", season)
       .eq("week", week)
       .order("start_date", { nullsFirst: false })

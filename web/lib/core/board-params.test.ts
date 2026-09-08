@@ -31,6 +31,10 @@ import {
 
 /** Every filter on, so a reset has something to clear in each of them. */
 const FULLY_FILTERED: BoardParams = {
+  // NFL deliberately, not the default: a round-trip that only ever carries
+  // `cfb` would pass while `boardHref` dropped the parameter entirely, since
+  // an omitted sport parses back as college.
+  sport: "nfl",
   season: 2025,
   week: 8,
   position: "WR",
@@ -253,4 +257,69 @@ test("leaving a preset for the full board drops it", () => {
   );
   assert.equal(href.includes("preset="), false);
   assert.match(href, /sort=confidence/);
+});
+
+// -----------------------------------------------------------------------------
+// Sport — a filter that decides which rows EXIST, not which are shown
+// -----------------------------------------------------------------------------
+
+/** The smallest valid params, so a sport test is only about sport. */
+const bare = (sport: BoardParams["sport"]): BoardParams => ({
+  sport,
+  season: 2026,
+  week: 1,
+  rankedOnly: false,
+  sort: "edge",
+  edgesOnly: false,
+  hitRateWindow: DEFAULT_HIT_RATE_WINDOW,
+  page: 1,
+});
+
+test("sport survives a trip through the URL", () => {
+  const href = boardHref(bare("nfl"), {});
+  assert.match(href, /sport=nfl/);
+
+  const params = parseBoardParams(
+    Object.fromEntries(new URLSearchParams(href.split("?")[1] ?? "")),
+    { edgesOnlyDefault: false },
+  );
+  assert.equal(params.sport, "nfl");
+});
+
+test("the default sport stays out of the URL", () => {
+  // Every existing shared link omits it, and they must keep meaning college.
+  const href = boardHref(bare("cfb"), {});
+  assert.ok(!href.includes("sport="));
+  assert.equal(
+    parseBoardParams(
+      Object.fromEntries(new URLSearchParams(href.split("?")[1] ?? "")),
+      { edgesOnlyDefault: false },
+    ).sport,
+    "cfb",
+  );
+});
+
+test("an unknown sport degrades to college rather than throwing", () => {
+  // Same rule every other filter follows: these URLs get shared and truncated.
+  assert.equal(
+    parseBoardParams({ sport: "xfl" }, { edgesOnlyDefault: false }).sport,
+    "cfb",
+  );
+});
+
+test("resetting the filters keeps the sport", () => {
+  // Clearing the board means "show me everything in this league", not "send me
+  // to the other one". Because sport decides which rows exist, dropping it here
+  // reads as a reset that emptied the board rather than one that switched it.
+  const href = resetBoardHref(FULLY_FILTERED);
+  assert.match(href, /sport=nfl/);
+  assert.ok(!href.includes("position="), "it is still a reset");
+});
+
+test("changing any other filter carries the sport along", () => {
+  // The failure this pins: a reader on the NFL board clicks a position tab and
+  // silently lands back on college.
+  const href = boardHref(bare("nfl"), { position: "RB" });
+  assert.match(href, /sport=nfl/);
+  assert.match(href, /position=RB/);
 });

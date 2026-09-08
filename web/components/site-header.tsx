@@ -1,6 +1,12 @@
 import Link from "next/link";
 
 import { BOARD_PATH } from "@/lib/core/board-params";
+import {
+  DEFAULT_SPORT,
+  SPORTS,
+  SPORT_SHORT,
+  type Sport,
+} from "@/lib/core/sport";
 
 /**
  * The app shell's header.
@@ -10,7 +16,23 @@ import { BOARD_PATH } from "@/lib/core/board-params";
  * globals.css — nothing here holds a hex value, so the reskin to the client's
  * measured palette stays a one-file change.
  */
-export function SiteHeader({ activeHref = "/" }: { activeHref?: string }) {
+export function SiteHeader({
+  activeHref = "/",
+  sport = DEFAULT_SPORT,
+}: {
+  activeHref?: string;
+  sport?: Sport;
+}) {
+  /**
+   * Sport rides on every nav link.
+   *
+   * It is a URL parameter (see `BoardParams.sport`), so a nav link that omits
+   * it silently returns an NFL reader to the college board. That is worse than
+   * a lost filter: sport decides which rows exist at all, so the symptom is a
+   * board full of the wrong league rather than an obviously missing control.
+   */
+  const withSport = (href: string) =>
+    sport === DEFAULT_SPORT ? href : `${href}?sport=${sport}`;
   // `/health` IS DELIBERATELY NOT HERE. It is an operator's deploy proof, not a
   // destination: it names internal tables, prints row counts, echoes raw
   // Postgres error text when a check fails, and reports on the RLS posture by
@@ -39,9 +61,9 @@ export function SiteHeader({ activeHref = "/" }: { activeHref?: string }) {
           document: without it a flex child refuses to shrink below its content
           and pushes its parent wide instead. */}
       <div className="mx-auto flex w-full max-w-7xl items-center gap-3 px-4 py-3 sm:gap-6 sm:px-6">
-        <Link href="/" className="flex shrink-0 items-baseline gap-2">
+        <Link href={withSport("/")} className="flex shrink-0 items-baseline gap-2">
           <span className="gradient-text text-lg font-extrabold tracking-tight">
-            CFB PROPS
+            {SPORT_SHORT[sport]} PROPS
           </span>
           {/* Hidden on narrow screens so all three nav links fit without
               clipping. It is a status badge, not navigation: the cost of
@@ -58,7 +80,7 @@ export function SiteHeader({ activeHref = "/" }: { activeHref?: string }) {
             return (
               <Link
                 key={link.href}
-                href={link.href}
+                href={withSport(link.href)}
                 aria-current={active ? "page" : undefined}
                 className={
                   "shrink-0 rounded-full px-2.5 py-1.5 text-xs font-bold uppercase tracking-label transition-colors sm:px-3 " +
@@ -73,7 +95,36 @@ export function SiteHeader({ activeHref = "/" }: { activeHref?: string }) {
           })}
         </nav>
 
-        <span className="text-dim ml-auto hidden text-[0.625rem] font-semibold uppercase tracking-label sm:inline">
+        {/* THE SPORT TOGGLE. `ml-auto` puts it at the right edge, and it is
+            allowed to be the thing that survives a narrow viewport while the
+            brand line is not: switching league is navigation, and the header
+            comment above records what happens when this row grows past a 390px
+            screen. Rendered as links, not a control, so it works without
+            JavaScript and so each option is a shareable URL. */}
+        <div className="ml-auto flex shrink-0 items-center gap-0.5 rounded-full bg-panel/60 p-0.5">
+          {SPORTS.map((option) => {
+            const active = option === sport;
+            const href =
+              option === DEFAULT_SPORT ? activeHref : `${activeHref}?sport=${option}`;
+            return (
+              <Link
+                key={option}
+                href={href}
+                aria-current={active ? "true" : undefined}
+                className={
+                  "rounded-full px-2 py-1 text-[0.625rem] font-bold uppercase tracking-label transition-colors sm:px-2.5 " +
+                  (active
+                    ? "bg-accent-cyan/15 text-accent-cyan"
+                    : "text-muted hover:text-ink")
+                }
+              >
+                {SPORT_SHORT[option]}
+              </Link>
+            );
+          })}
+        </div>
+
+        <span className="text-dim hidden text-[0.625rem] font-semibold uppercase tracking-label lg:inline">
           Legends Sports
         </span>
       </div>

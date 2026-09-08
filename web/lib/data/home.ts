@@ -21,7 +21,7 @@ import {
   DEFAULT_CHEAT_WINDOW,
   minDecidedFor,
 } from "@/lib/core/cheat-sheet";
-import { DEFAULT_SPORT } from "@/lib/core/sport";
+import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { HomeCounts } from "@/lib/core/home-view";
 import { SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
 import { upcomingOnly } from "@/lib/data/query";
@@ -32,6 +32,7 @@ export async function getHomeCounts(
   edgeThreshold: number,
   games: number,
   kickoffCutoff: Date,
+  sport: Sport = DEFAULT_SPORT,
 ): Promise<HomeCounts> {
   const supabase = createServerSupabaseClient();
 
@@ -42,7 +43,7 @@ export async function getHomeCounts(
     supabase
       .from("v_board_rows")
       .select("projection_id", { count: "exact", head: true })
-      .eq("sport", DEFAULT_SPORT)
+      .eq("sport", sport)
       .eq("season", season)
       .eq("week", week)
       .eq("conference_is_displayed", true)
@@ -63,7 +64,7 @@ export async function getHomeCounts(
   const cheatSheet = supabase
     .from("v_cheat_sheet")
     .select("projection_id", { count: "exact", head: true })
-    .eq("sport", DEFAULT_SPORT)
+    .eq("sport", sport)
     .eq("season", season)
     .eq("week", week)
     .eq("window_size", DEFAULT_CHEAT_WINDOW)

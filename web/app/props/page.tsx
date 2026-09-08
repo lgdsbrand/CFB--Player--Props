@@ -41,6 +41,12 @@ import {
   type BoardFilters,
 } from "@/lib/data/board";
 import type { BoardRow } from "@/lib/core/types";
+import {
+  DEFAULT_SPORT,
+  resolveSport,
+  SPORT_LABEL,
+  type Sport,
+} from "@/lib/core/sport";
 import { getConferences, getMarkets } from "@/lib/data/catalogue";
 import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
@@ -71,11 +77,12 @@ export default async function Home({
   }
 
   const raw = await searchParams;
+  const sport = resolveSport(raw.sport);
   const [weeks, config, markets, conferences] = await Promise.all([
-    getSlateWeeks(),
+    getSlateWeeks(sport),
     getAppConfig(),
     getMarkets(),
-    getConferences(),
+    getConferences(sport),
   ]);
 
   const params = parseBoardParams(raw, {
@@ -85,7 +92,7 @@ export default async function Home({
 
   if (!active) {
     return (
-      <Shell>
+      <Shell sport={sport}>
         <div className="panel p-6">
           <h1 className="section-header mb-2">No slate yet</h1>
           <p className="text-muted max-w-prose text-sm">
@@ -119,6 +126,7 @@ export default async function Home({
 
   const filters: BoardFilters = preset
     ? {
+        sport,
         kickoffCutoff: cutoff,
         season: active.season,
         week: active.week,
@@ -130,6 +138,7 @@ export default async function Home({
         sort: preset === "best" ? "confidence" : "edge",
       }
     : {
+        sport,
         kickoffCutoff: cutoff,
         season: active.season,
         week: active.week,
@@ -152,7 +161,7 @@ export default async function Home({
     getBoardCounts(active.season, active.week, config.edgeThreshold, {
       kickoffCutoff: cutoff,
     }),
-    getSlateGames(active.season, active.week),
+    getSlateGames(active.season, active.week, sport),
     // Pinned to as_of_week = the week on screen, never "the latest": a rating
     // from a later cutoff knows results the reader is being asked to predict.
     getDefenseRatings(active.season, active.week),
@@ -234,9 +243,9 @@ export default async function Home({
   const coverage = lineCoverage(counts);
 
   return (
-    <Shell>
+    <Shell sport={sport}>
       <div className="flex flex-col gap-1">
-        <span className="label-caption">Legends Sports · College Football</span>
+        <span className="label-caption">Legends Sports · {SPORT_LABEL[sport]}</span>
         <h1 className="text-2xl font-extrabold tracking-tight">
           {preset ? BOARD_PRESETS[preset].title : "Player Props Board"}
         </h1>
@@ -387,8 +396,8 @@ export default async function Home({
                 coverage.bookLine,
               )} rows priced by a book carry`}{" "}
           a two-way price that de-vigs to exactly 0.500 — the book pricing both
-          sides the same, which is normal on a thin college prop and means it is
-          not taking a side. The edge on those rows is therefore the model&rsquo;s
+          sides the same, which is normal on a thinly-traded prop and means it
+          is not taking a side. The edge on those rows is therefore the model&rsquo;s
           own confidence minus 50%, not a disagreement with the market, so a
           confident call prints a large edge whatever the book thinks. The call
           still stands; read the edge as a restatement of it.
@@ -666,10 +675,16 @@ function EmptyBoard({
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({
+  children,
+  sport = DEFAULT_SPORT,
+}: {
+  children: React.ReactNode;
+  sport?: Sport;
+}) {
   return (
     <>
-      <SiteHeader activeHref={BOARD_PATH} />
+      <SiteHeader activeHref={BOARD_PATH} sport={sport} />
       <main className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-6 sm:px-6">
         {children}
       </main>

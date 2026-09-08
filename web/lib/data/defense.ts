@@ -25,7 +25,7 @@ import type {
 } from "@/lib/core/types";
 import { type DbRow, MAX_ROWS_PER_REQUEST, unwrap } from "@/lib/data/query";
 import { cachedRead } from "@/lib/data/cache";
-import { DEFAULT_SPORT } from "@/lib/core/sport";
+import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 
 /**
  * Cumulative raw allowances to each position, through weeks BEFORE `week`.
@@ -153,6 +153,7 @@ export type DefenseRating = {
 async function readDefenseRatings(
   season: number,
   week: number,
+  sport: Sport = DEFAULT_SPORT,
   { positionGroup }: { positionGroup?: PositionGroup } = {},
 ): Promise<DefenseRating[]> {
   const supabase = createServerSupabaseClient();
@@ -171,7 +172,7 @@ async function readDefenseRatings(
     )
     .eq("season", season)
     .eq("as_of_week", week)
-    .eq("teams.sport", DEFAULT_SPORT)
+    .eq("teams.sport", sport)
     .order("rank_vs_position", { nullsFirst: false });
 
   if (positionGroup) query = query.eq("position_group", positionGroup);

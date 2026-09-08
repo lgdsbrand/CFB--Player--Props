@@ -9,7 +9,7 @@
  */
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { DEFAULT_SPORT } from "@/lib/core/sport";
+import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { Conference, Market, PositionGroup } from "@/lib/core/types";
 import { type DbRow, unwrap } from "@/lib/data/query";
 import { cachedRead } from "@/lib/data/cache";
@@ -103,6 +103,7 @@ export function marketsForPosition(
  * option.
  */
 async function readConferences(
+  sport: Sport = DEFAULT_SPORT,
   { displayedOnly = true }: { displayedOnly?: boolean } = {},
 ): Promise<Conference[]> {
   const supabase = createServerSupabaseClient();
@@ -110,7 +111,7 @@ async function readConferences(
   let query = supabase
     .from("conferences")
     .select("id, name, abbreviation, is_displayed")
-    .eq("sport", DEFAULT_SPORT)
+    .eq("sport", sport)
     .order("name");
 
   if (displayedOnly) query = query.eq("is_displayed", true);

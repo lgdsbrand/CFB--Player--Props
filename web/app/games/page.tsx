@@ -25,6 +25,12 @@ import { getSlateGames } from "@/lib/data/games";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
 import { getTeamDirectory } from "@/lib/data/teams";
 import { kickoffCutoff, playedCount, upcomingGames } from "@/lib/core/kickoff";
+import {
+  DEFAULT_SPORT,
+  resolveSport,
+  SPORT_LABEL,
+  type Sport,
+} from "@/lib/core/sport";
 import { getSlateConditions } from "@/lib/data/weather";
 
 /**
@@ -62,9 +68,10 @@ export default async function Games({
   }
 
   const raw = await searchParams;
+  const sport = resolveSport(raw.sport);
   const [weeks, conferences] = await Promise.all([
-    getSlateWeeks(),
-    getConferences(),
+    getSlateWeeks(sport),
+    getConferences(sport),
   ]);
 
   // The board's parser, not a second one. Season, week and conference mean the
@@ -75,14 +82,14 @@ export default async function Games({
 
   if (!active) {
     return (
-      <Shell>
+      <Shell sport={sport}>
         <EmptySlate />
       </Shell>
     );
   }
 
   const [games, ratings, conditions] = await Promise.all([
-    getSlateGames(active.season, active.week),
+    getSlateGames(active.season, active.week, sport),
     // Pinned to the week on screen, never "the latest": a rating from a later
     // cutoff knows results the reader is being asked to look ahead at.
     getDefenseRatings(active.season, active.week),
@@ -156,9 +163,9 @@ export default async function Games({
   ].filter((clause): clause is string => clause !== undefined);
 
   return (
-    <Shell>
+    <Shell sport={sport}>
       <div className="flex flex-col gap-1">
-        <span className="label-caption">Legends Sports · College Football</span>
+        <span className="label-caption">Legends Sports · {SPORT_LABEL[sport]}</span>
         <h1 className="text-2xl font-extrabold tracking-tight">Analyze Games</h1>
       </div>
 
@@ -295,10 +302,16 @@ function EmptySlate() {
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({
+  children,
+  sport = DEFAULT_SPORT,
+}: {
+  children: React.ReactNode;
+  sport?: Sport;
+}) {
   return (
     <>
-      <SiteHeader activeHref="/games" />
+      <SiteHeader activeHref="/games" sport={sport} />
       <main className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-6 sm:px-6">
         {children}
       </main>

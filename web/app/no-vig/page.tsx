@@ -15,6 +15,12 @@ import {
   type NoVigSort,
 } from "@/lib/core/no-vig";
 import { POSITION_GROUPS, type PositionGroup } from "@/lib/core/types";
+import {
+  DEFAULT_SPORT,
+  resolveSport,
+  SPORT_LABEL,
+  type Sport,
+} from "@/lib/core/sport";
 import { getNoVigMarkets, getNoVigPage } from "@/lib/data/no-vig";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
 
@@ -62,6 +68,7 @@ export default async function NoVig({
   }
 
   const raw = await searchParams;
+  const sport = resolveSport(raw.sport);
   // The board's parser, not a second one. Season, week and position mean the
   // same thing here and are validated the same way.
   const params = parseBoardParams(raw, { edgesOnlyDefault: false });
@@ -69,13 +76,13 @@ export default async function NoVig({
   const market = first(raw.market);
   const shoppableOnly = first(raw.shop) === "1";
 
-  const weeks = await getSlateWeeks();
+  const weeks = await getSlateWeeks(sport);
   const active = findWeek(weeks, params.season, params.week);
 
   if (!active) {
     return (
-      <Shell>
-        <Header />
+      <Shell sport={sport}>
+        <Header sport={sport} />
         <div className="panel p-6">
           <h2 className="section-header mb-2">No slate yet</h2>
           <p className="text-muted max-w-prose text-sm">
@@ -90,6 +97,7 @@ export default async function NoVig({
 
   const [page, markets] = await Promise.all([
     getNoVigPage({
+      sport,
       season: active.season,
       week: active.week,
       positionGroup: params.position,
@@ -130,8 +138,8 @@ export default async function NoVig({
   };
 
   return (
-    <Shell>
-      <Header />
+    <Shell sport={sport}>
+      <Header sport={sport} />
 
       <WeekStrip weeks={weeks} active={active} basePath="/no-vig" />
 
@@ -371,19 +379,25 @@ function Pill({
   );
 }
 
-function Header() {
+function Header({ sport }: { sport: Sport }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="label-caption">Legends Sports · College Football</span>
+      <span className="label-caption">Legends Sports · {SPORT_LABEL[sport]}</span>
       <h1 className="text-2xl font-extrabold tracking-tight">No-Vig Prices</h1>
     </div>
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({
+  children,
+  sport = DEFAULT_SPORT,
+}: {
+  children: React.ReactNode;
+  sport?: Sport;
+}) {
   return (
     <>
-      <SiteHeader activeHref="/no-vig" />
+      <SiteHeader activeHref="/no-vig" sport={sport} />
       <main className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-6 sm:px-6">
         {children}
       </main>

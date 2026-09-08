@@ -42,6 +42,7 @@ import {
   windowSplits,
 } from "@/lib/core/splits";
 import type { BoardRow, Market, PositionGroup } from "@/lib/core/types";
+import { DEFAULT_SPORT, resolveSport, type Sport } from "@/lib/core/sport";
 import { getAiRead } from "@/lib/data/ai-reads";
 import { getPlayerBoardRows } from "@/lib/data/board";
 import { getMarkets } from "@/lib/data/catalogue";
@@ -93,6 +94,7 @@ export default async function PlayerDetail({
   }
 
   const raw = await searchParams;
+  const sport = resolveSport(raw.sport);
   const requested = parsePlayerParams(playerId, raw);
 
   // EVERY READ IN THIS WAVE IS CACHED, which is the point of it being alone.
@@ -104,7 +106,7 @@ export default async function PlayerDetail({
   // message rather than a board. Measured at ~415ms per round trip from a
   // development machine (lib/data/cache.ts).
   const [weeks, config, markets] = await Promise.all([
-    getSlateWeeks(),
+    getSlateWeeks(sport),
     getAppConfig(),
     getMarkets(),
   ]);
@@ -112,7 +114,7 @@ export default async function PlayerDetail({
   const active = findWeek(weeks, requested.season, requested.week);
   if (!active) {
     return (
-      <Shell>
+      <Shell sport={sport}>
         <NotOnSlate
           name={await nameOr404(playerId)}
           reason="No week has model output yet."
@@ -125,7 +127,7 @@ export default async function PlayerDetail({
   if (rows.length === 0) {
     const name = await nameOr404(playerId);
     return (
-      <Shell>
+      <Shell sport={sport}>
         <NotOnSlate
           name={name}
           reason={`Nothing projected for ${name} in ${active.season} week ${active.week}. He is on a bye, did not clear the usage floor, or his team is not on this slate.`}
@@ -182,7 +184,9 @@ export default async function PlayerDetail({
       }),
       getPlayerQuotes(playerId, active.season, active.week),
       getAiRead(playerId, active.season, active.week),
-      getDefenseRatings(active.season, active.week, { positionGroup: position }),
+      getDefenseRatings(active.season, active.week, sport, {
+        positionGroup: position,
+      }),
       getDefenseGameLog(
         activeRow.opponentTeamId,
         active.season,
@@ -224,7 +228,7 @@ export default async function PlayerDetail({
   );
 
   return (
-    <Shell>
+    <Shell sport={sport}>
       <Link
         href={`${BOARD_PATH}?season=${active.season}&week=${active.week}`}
         className="text-muted hover:text-accent-cyan w-fit text-xs"
@@ -769,10 +773,16 @@ function NotOnSlate({
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({
+  children,
+  sport = DEFAULT_SPORT,
+}: {
+  children: React.ReactNode;
+  sport?: Sport;
+}) {
   return (
     <>
-      <SiteHeader />
+      <SiteHeader sport={sport} />
       <main className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-6 sm:px-6">
         {children}
       </main>

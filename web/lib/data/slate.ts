@@ -12,7 +12,7 @@
  */
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { DEFAULT_SPORT } from "@/lib/core/sport";
+import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { SlateWeek } from "@/lib/core/types";
 import { type DbRow, unwrap } from "@/lib/data/query";
 import { cachedRead } from "@/lib/data/cache";
@@ -22,13 +22,13 @@ import { cachedRead } from "@/lib/data/cache";
  * predicate a second sport's week 3 arrives as a SECOND strip entry for week 3,
  * and `defaultWeek` picks between them by kickoff time.
  */
-async function readSlateWeeks(): Promise<SlateWeek[]> {
+async function readSlateWeeks(sport: Sport = DEFAULT_SPORT): Promise<SlateWeek[]> {
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
     await supabase
       .from("v_slate_weeks")
       .select("season, week, games, projections, players, first_kickoff, last_kickoff")
-      .eq("sport", DEFAULT_SPORT)
+      .eq("sport", sport)
       .order("season")
       .order("week"),
     "v_slate_weeks",

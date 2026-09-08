@@ -14,6 +14,12 @@ import { formatCount, formatDateRange } from "@/lib/core/format";
 import { homeTiles, pricingNote, type HomeTile } from "@/lib/core/home-view";
 import { getAppConfig } from "@/lib/data/config";
 import { kickoffCutoff, upcomingGames } from "@/lib/core/kickoff";
+import {
+  DEFAULT_SPORT,
+  resolveSport,
+  SPORT_LABEL,
+  type Sport,
+} from "@/lib/core/sport";
 import { getSlateGames } from "@/lib/data/games";
 import { getHomeCounts } from "@/lib/data/home";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
@@ -42,6 +48,7 @@ export default async function Home({
   searchParams: Promise<RawParams>;
 }) {
   const raw = await searchParams;
+  const sport = resolveSport(raw.sport);
 
   // The board lived here until this page took the address. Anything arriving
   // with board filters on it is a link shared before the move — forward it
@@ -58,19 +65,19 @@ export default async function Home({
 
   if (!isSupabaseConfigured()) {
     return (
-      <Shell>
+      <Shell sport={sport}>
         <NotConfigured />
       </Shell>
     );
   }
 
-  const [weeks, config] = await Promise.all([getSlateWeeks(), getAppConfig()]);
+  const [weeks, config] = await Promise.all([getSlateWeeks(sport), getAppConfig()]);
   const active = findWeek(weeks, undefined, undefined);
 
   if (!active) {
     return (
-      <Shell>
-        <Hero subtitle="No week has model output yet." />
+      <Shell sport={sport}>
+        <Hero subtitle="No week has model output yet." sport={sport} />
       </Shell>
     );
   }
@@ -79,7 +86,7 @@ export default async function Home({
   // Counted over the games still to kick, matching every destination these
   // tiles link to.
   const games = upcomingGames(
-    await getSlateGames(active.season, active.week),
+    await getSlateGames(active.season, active.week, sport),
     cutoff,
   );
   const teamDirectory = await getTeamDirectory(
@@ -101,6 +108,7 @@ export default async function Home({
     config.edgeThreshold,
     listedGames,
     cutoff,
+    sport,
   );
 
   const tiles = homeTiles(counts, {
@@ -110,12 +118,13 @@ export default async function Home({
   const note = pricingNote(counts);
 
   return (
-    <Shell>
+    <Shell sport={sport}>
       <Hero
         subtitle={`${active.season} · Week ${active.week} · ${formatDateRange(
           active.firstKickoff,
           active.lastKickoff,
         )}`}
+        sport={sport}
       />
 
       {/* An odd tile count leaves a hole in a two-column grid, so the last one
@@ -172,10 +181,10 @@ export default async function Home({
   );
 }
 
-function Hero({ subtitle }: { subtitle: string }) {
+function Hero({ subtitle, sport }: { subtitle: string; sport: Sport }) {
   return (
     <div className="flex flex-col gap-2">
-      <span className="label-caption">Legends Sports · College Football</span>
+      <span className="label-caption">Legends Sports · {SPORT_LABEL[sport]}</span>
       <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl">
         College Football{" "}
         <span className="gradient-text">Player Props</span>
@@ -254,10 +263,16 @@ function Tile({ tile, wide = false }: { tile: HomeTile; wide?: boolean }) {
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({
+  children,
+  sport = DEFAULT_SPORT,
+}: {
+  children: React.ReactNode;
+  sport?: Sport;
+}) {
   return (
     <>
-      <SiteHeader activeHref="/" />
+      <SiteHeader activeHref="/" sport={sport} />
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-4 py-8 sm:px-6">
         {children}
       </main>

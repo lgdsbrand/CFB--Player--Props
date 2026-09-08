@@ -51,7 +51,11 @@ from worker.adapters.odds import (
     PropQuote,
     get_adapter,
 )
-from worker.adapters.odds.markets import OUR_KEY_TO_PROVIDER
+from worker.adapters.odds.markets import (
+    OUR_KEY_TO_PROVIDER,
+    SPORT_KEY_BY_SPORT,
+    sport_key_for,
+)
 from worker.adapters.odds.null import ADAPTER_NAME as NULL_ADAPTER_NAME
 from worker.adapters.odds.theoddsapi import ADAPTER_NAME as THEODDSAPI_ADAPTER_NAME
 from worker.config import ConfigError, env_names_containing, get_settings
@@ -465,6 +469,7 @@ def run(
     dry_run: bool,
     event_limit: int | None,
     prefer_free: bool = False,
+    sport: str = "cfb",
 ) -> IngestReport:
     report = IngestReport()
     settings = get_settings()
@@ -532,23 +537,28 @@ def run(
             "ODDS_API_KEY_FREE" if using_free else "ODDS_API_KEY (shared paid pool)",
         )
         kwargs["api_key"] = key
+        # The provider's sport key, not ours. It must agree with the games
+        # loaded below: an NCAAF event list can never match an NFL game row,
+        # and the mismatch shows up as "every event unmatched" rather than as
+        # an error.
+        kwargs["sport_key"] = sport_key_for(sport)
 
     adapter = get_adapter(adapter_name, **kwargs)
     events = adapter.list_events()
     report.events_seen = len(events)
 
     with connect() as conn:
-        # CFB explicitly: the adapter's sport key is NCAAF, so an NFL game in
-        # these tables could never match an event it returns. Both are passed
-        # rather than defaulted so an NFL odds adapter has one place to change.
-        resolver = load_teams(conn, sport="cfb")
-        games = load_games(conn, season, week, sport="cfb")
+        # Scoped to the sport being ingested, and matched to the adapter's
+        # sport key above. Both are passed rather than defaulted so the pairing
+        # is visible in one place: they are two halves of one choice, and a
+        # mismatch resolves nothing while still paying for the event list.
+        resolver = load_teams(conn, sport=sport)
+        games = load_games(conn, season, week, sport=sport)
         if not games:
             log.warning(
-                "No games stored for season %s%s. The schedule has to be "
-                "ingested before lines can attach to anything: "
-                "python -m worker.jobs.ingest_reference --seasons %s",
-                season, f" week {week}" if week else "", season,
+                "No %s games stored for season %s%s. The schedule has to be "
+                "ingested before lines can attach to anything.",
+                sport, season, f" week {week}" if week else "",
             )
             return report
 
@@ -621,6 +631,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Restrict to one week. Defaults to the current slate's week.",
     )
     parser.add_argument(
+        "--sport", default="cfb", choices=sorted(SPORT_KEY_BY_SPORT),
+        help="Which sport's lines to capture. Selects the games read from our "
+             "tables, the provider's sport key, AND which sport's current "
+             "slate --season/--week default to. Defaults to cfb.",
+    )
+    parser.add_argument(
         "--adapter",
         help="Override app_config.odds_adapter (for testing a provider).",
     )
@@ -670,14 +686,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        season, week = resolve_slate_args(args.season, args.week)
+        season, week = resolve_slate_args(
+            args.season, args.week, sport=args.sport
+        )
     except ConfigError as exc:
         log.error("%s", exc)
         return 2
 
     try:
         with pipeline_run(
-            JOB_NAME, metadata={"season": season, "week": week}
+            JOB_NAME,
+            metadata={"season": season, "sport": args.sport, "week": week},
         ) as run_id:
             report = run(
                 season=season,
@@ -686,10 +705,12 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 event_limit=args.event_limit,
                 prefer_free=args.free,
+                sport=args.sport,
             )
             log.info(
-                "Odds ingest (%s%s):\n%s",
-                adapter_name, ", DRY RUN" if args.dry_run else "", report.render(),
+                "Odds ingest (%s, %s%s):\n%s",
+                adapter_name, args.sport,
+                ", DRY RUN" if args.dry_run else "", report.render(),
             )
             set_rows_written(run_id, report.rows_written)
     except (ConfigError, OddsAdapterError) as exc:

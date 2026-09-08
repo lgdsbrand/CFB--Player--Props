@@ -281,6 +281,64 @@ services:
     envVars:
       - fromGroup: cfb-props-worker
 
+  # ===========================================================================
+  # NFL (N5). Separate crons rather than a sport loop inside the jobs, for the
+  # same reason `nfl_ingest_reference` is a separate job from its college
+  # twin: the two share no provider, no quota and no failure mode, and one
+  # sport's outage must not take the other's schedule down with it.
+  #
+  # The times are OFFSET from the college crons on purpose. Both sports draw on
+  # the same Odds API pool and the same starter instance; running them together
+  # would make a budget overrun look like a bug in whichever finished second.
+  # ===========================================================================
+
+  # Every 6 hours at :20. NFL line capture.
+  #
+  # MEASURED COST, 2026-09-08: one week-1 capture was 189 credits for 16 games
+  # and wrote 5,625 book rows. That is ~750/day at four captures, against a
+  # SHARED pool that stood at 7,643 of 20,000 — so this is the cron most likely
+  # to need narrowing, and `--event-limit` is the lever.
+  #
+  # NEARLY HALF OF THAT SPEND BUYS NOTHING RANKABLE. `anytime_td` was 2,077 of
+  # 4,446 NFL picks and produced exactly ZERO edges, because a one-way Yes-only
+  # price cannot be de-vigged and so can never show one. Excluding it is the
+  # obvious saving and is NOT done here, because `ingest_odds` has no
+  # market-exclusion flag and adding one silently changes what the board can
+  # display. See the anytime-TD decision, which is the client's to make.
+  - type: cron
+    name: nfl-props-odds-refresh
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "20 */6 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.ingest_odds --sport nfl --event-limit 120
+    envVars:
+      - fromGroup: cfb-props-worker
+
+  # Daily 12:50 UTC — 20 minutes after the college projection run, and 30
+  # minutes after the 12:20 NFL capture, mirroring the college spacing.
+  #
+  # THE SECOND HALF OF THE NFL ODDS PIPELINE, for exactly the reason the
+  # college comment above gives: `ingest_odds` writes `player_prop_lines` and
+  # the board reads its line and edge off `picks`, which only this job writes.
+  # A captured NFL line is invisible until this runs.
+  #
+  # `--sport nfl` is load-bearing on BOTH halves. Without it this would project
+  # college — and, before the fix in c7b3afe, would have DELETED the NFL week
+  # it was supposed to be writing, because the projection delete was not scoped
+  # by sport.
+  - type: cron
+    name: nfl-props-project-current
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "50 12 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.run_projections --current-week --sport nfl
+    envVars:
+      - fromGroup: cfb-props-worker
+
   # Daily 10:00 UTC. Game spreads and totals for the card (CLAUDE.md §7), from
   # CFBD rather than the metered odds provider — this costs ZERO Odds API
   # credits and must not be confused with `cfb-props-odds-refresh` above, which

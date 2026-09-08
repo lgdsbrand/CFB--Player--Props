@@ -501,3 +501,56 @@ class TestLoadersAreScopedToOneSport:
         # which is the bucket a one-sided match has to be unique within.
         assert len(pooled._by_mascot["bears"]) == 2
         assert len(scoped._by_mascot["bears"]) == 1
+
+
+class TestOddsIngestSportSelection:
+    """`--sport` picks THREE things at once, and they have to agree.
+
+    The games read from our tables, the provider's sport key, and which sport's
+    current slate `--season`/`--week` fall back to. A mismatch is silent: an
+    NCAAF event list against NFL game rows matches nothing, reports every event
+    unmatched, and still pays for the event list.
+    """
+
+    def test_the_slate_default_is_asked_per_sport(self):
+        """Two sports share (season, week), so one slate answer cannot serve both."""
+        import inspect
+
+        from worker.core.schedule import current_slate, resolve_slate_args
+
+        assert "sport" in inspect.signature(resolve_slate_args).parameters
+        assert "sport" in inspect.signature(current_slate).parameters
+
+    def test_run_takes_a_sport(self):
+        import inspect
+
+        from worker.jobs.ingest_odds import run
+
+        assert inspect.signature(run).parameters["sport"].default == "cfb"
+
+    def test_the_cli_offers_the_sports_we_hold_keys_for(self):
+        import pytest
+
+        from worker.adapters.odds.markets import SPORT_KEY_BY_SPORT
+        from worker.jobs import ingest_odds
+
+        with pytest.raises(SystemExit):
+            ingest_odds.main(["--sport", "wnba"])
+        assert set(SPORT_KEY_BY_SPORT) == {"cfb", "nfl"}
+
+    def test_the_games_and_the_provider_key_come_from_one_choice(self):
+        """Read as source: both halves must derive from `sport`, not a literal.
+
+        The previous version hardcoded sport="cfb" in `load_teams`/`load_games`
+        while the adapter defaulted to the NCAAF key. That pairing was correct
+        only by coincidence of two independent defaults.
+        """
+        import inspect
+
+        from worker.jobs import ingest_odds
+
+        source = inspect.getsource(ingest_odds.run)
+        assert 'load_teams(conn, sport=sport)' in source
+        assert 'load_games(conn, season, week, sport=sport)' in source
+        assert 'sport_key_for(sport)' in source
+        assert 'sport="cfb"' not in source

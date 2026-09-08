@@ -175,13 +175,22 @@ def load_slate_weeks(sport: str = "cfb") -> list[SlateWeek]:
     ]
 
 
-def current_slate(now: datetime | None = None) -> Slate | None:
-    """The season and week the pipeline should be working on, from the database."""
-    return pick_slate(load_slate_weeks(), now)
+def current_slate(now: datetime | None = None, sport: str = "cfb") -> Slate | None:
+    """The season and week the pipeline should be working on, from the database.
+
+    Takes the sport for the reason `load_slate_weeks` documents: two sports
+    share `(season, week)`, so "which week is the pipeline on" has a different
+    answer for each and no answer at all for both at once.
+    """
+    return pick_slate(load_slate_weeks(sport), now)
 
 
 def resolve_slate_args(
-    season: int | None, week: int | None, *, now: datetime | None = None
+    season: int | None,
+    week: int | None,
+    *,
+    now: datetime | None = None,
+    sport: str = "cfb",
 ) -> tuple[int, int]:
     """Fill in whichever of season/week a caller left out.
 
@@ -199,12 +208,12 @@ def resolve_slate_args(
     if season is not None and week is not None:
         return season, week
 
-    slate = current_slate(now)
+    slate = current_slate(now, sport)
     if slate is None:
         raise ConfigError(
-            "No games are ingested, so the current season and week cannot be "
-            "resolved. Pass --season and --week explicitly, or run "
-            "`python -m worker.jobs.ingest_reference` first."
+            f"No {sport} games are ingested, so the current season and week "
+            f"cannot be resolved. Pass --season and --week explicitly, or "
+            f"ingest that sport's schedule first."
         )
     return (season if season is not None else slate.season,
             week if week is not None else slate.week)

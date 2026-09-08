@@ -157,3 +157,63 @@ class TestCalibrationProvenance:
         from worker.core.calibration import StoredCalibration
 
         assert StoredCalibration({"mean": {"a": 1.0}}).sport == "cfb"
+
+
+class TestWriteWeekIsSportScoped:
+    """`write_week` replaces ONE sport's week, not the week itself.
+
+    THIS DESTROYED PRODUCTION DATA ON 2026-09-08. `projections` has no sport
+    column -- downstream tables inherit sport through their foreign keys -- so
+    `delete from projections where season = %s and week = %s` reads as "replace
+    week 1" and means "replace week 1 of BOTH sports". Running the NFL week 1
+    job deleted every college week 1 projection and, by cascade, its picks. The
+    run reported a clean success; nothing raised.
+
+    The SQL is asserted rather than the effect because the effect needs two
+    sports' rows in a real database, and the property that matters -- that the
+    statement is constrained by sport at all -- is visible in the text.
+    """
+
+    def _delete_sql(self, monkeypatch):
+        import uuid
+
+        from worker.jobs import run_projections
+
+        statements: list[tuple[str, tuple]] = []
+
+        class _Cur:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def execute(self, sql, params=None):
+                statements.append((" ".join(str(sql).split()), params or ()))
+            def fetchall(self): return []
+            def fetchone(self): return None
+
+        class _Conn:
+            def cursor(self, *a, **k): return _Cur()
+
+        monkeypatch.setattr(run_projections, "_market_meta", lambda c: {})
+        monkeypatch.setattr(run_projections, "_insert_projections", lambda *a: {})
+        monkeypatch.setattr(
+            run_projections, "_insert_picks",
+            lambda *a, **k: {"total": 0, "with_book_line": 0},
+        )
+        run_projections.write_week(
+            _Conn(), uuid.uuid4(), 2026, 1, [], [], sport="nfl"
+        )
+        return next(s for s in statements if s[0].startswith("delete from projections"))
+
+    def test_the_delete_names_the_sport(self, monkeypatch):
+        sql, params = self._delete_sql(monkeypatch)
+        assert "g.sport = %s" in sql, sql
+        assert "nfl" in params, params
+
+    def test_the_delete_reaches_sport_through_games(self, monkeypatch):
+        """projections carries no sport of its own -- it inherits one."""
+        sql, _ = self._delete_sql(monkeypatch)
+        assert "using games g" in sql and "g.id = p.game_id" in sql, sql
+
+    def test_season_and_week_alone_never_scope_the_delete(self, monkeypatch):
+        """The exact statement that deleted the college week."""
+        sql, _ = self._delete_sql(monkeypatch)
+        assert sql != "delete from projections where season = %s and week = %s"

@@ -295,7 +295,7 @@ def load_calibration(
 # Lines
 # -----------------------------------------------------------------------------
 def latest_lines(
-    conn: psycopg.Connection, season: int, week: int
+    conn: psycopg.Connection, season: int, week: int, sport: str = "cfb"
 ) -> dict[tuple[int, int, str], list[dict[str, Any]]]:
     """Current book lines for the week, keyed by (game, player, market).
 
@@ -315,12 +315,13 @@ def latest_lines(
     with conn.cursor() as cur:
         cur.execute(
             """
-            select line_id, game_id, player_id, market_key, sportsbook_id,
-                   line, over_price, under_price
-              from v_latest_prop_lines
-             where season = %s and week = %s
+            select l.line_id, l.game_id, l.player_id, l.market_key,
+                   l.sportsbook_id, l.line, l.over_price, l.under_price
+              from v_latest_prop_lines l
+              join games g on g.id = l.game_id
+             where l.season = %s and l.week = %s and g.sport = %s
             """,
-            (season, week),
+            (season, week, sport),
         )
         for row in cur.fetchall():
             key = (int(row["game_id"]), int(row["player_id"]), str(row["market_key"]))
@@ -357,6 +358,7 @@ def _write_synthetic_lines(
     week: int,
     projected: list[ProjectedRow],
     markets: dict[str, MarketMeta],
+    sport: str = "cfb",
 ) -> int:
     """DEVELOPMENT ONLY. Post fake lines so the call path can be exercised.
 
@@ -411,11 +413,14 @@ def _write_synthetic_lines(
         # every feature obeys.
         selects = ", ".join(f"avg({c}::numeric) as {c}" for c in stat_columns)
         cur.execute(
-            f"select player_id, {selects}, "
-            "       (array_agg(position_group order by week desc))[1]::text as position_group "
-            "  from player_game_stats "
-            " where season = %s and week < %s group by player_id",
-            (season, week),
+            f"select s.player_id, {selects}, "
+            "       (array_agg(s.position_group order by s.week desc))[1]::text "
+            "         as position_group "
+            "  from player_game_stats s "
+            "  join players p on p.id = s.player_id "
+            " where s.season = %s and s.week < %s and p.sport = %s "
+            " group by s.player_id",
+            (season, week, sport),
         )
         for row in cur.fetchall():
             player_id = int(row["player_id"])
@@ -428,9 +433,10 @@ def _write_synthetic_lines(
         # real quote would destroy the line history the closing-line hit-rate
         # basis depends on.
         cur.execute(
-            "delete from player_prop_lines where season = %s and week = %s "
-            "and source_adapter = %s",
-            (season, week, SYNTHETIC_ADAPTER),
+            "delete from player_prop_lines l using games g "
+            " where g.id = l.game_id and g.sport = %s "
+            "   and l.season = %s and l.week = %s and l.source_adapter = %s",
+            (sport, season, week, SYNTHETIC_ADAPTER),
         )
 
     floors = _anchor_floors(averages, positions, stat_columns)
@@ -539,23 +545,45 @@ def write_week(
     projected: list[ProjectedRow],
     catalogue: list[dict[str, Any]],
     *,
+    sport: str = "cfb",
     synthetic_lines: bool = False,
 ) -> dict[str, int]:
     """Replace one week's projections and picks. Caller owns the transaction."""
     markets = _market_meta(catalogue)
 
     with conn.cursor() as cur:
-        # Picks cascade from projections, so this clears both.
+        # SPORT-SCOPED, AND THIS ONE DESTROYS DATA WITHOUT IT.
+        #
+        # `projections` has no sport column -- downstream tables inherit sport
+        # through their foreign keys (CLAUDE.md §3 amendment) -- so the filter
+        # has to reach it through `games`. Without the join this reads "replace
+        # week N" and MEANS "replace week N of BOTH sports": running the NFL
+        # week 1 job deleted every college week 1 projection and, by cascade,
+        # its picks. That is exactly what happened on production on 2026-09-08,
+        # and nothing raised -- the run reported a clean success and the college
+        # rows were simply gone.
+        #
+        # Both sports number their weeks from 1 in the same seasons, so
+        # (season, week) has not identified a slate since NFL rows landed. This
+        # is the fourth place that assumption has leaked; the others only read
+        # too much, and this one deleted.
         cur.execute(
-            "delete from projections where season = %s and week = %s", (season, week)
+            "delete from projections p using games g "
+            " where g.id = p.game_id and g.sport = %s "
+            "   and p.season = %s and p.week = %s",
+            (sport, season, week),
         )
 
     synthetic = 0
     if synthetic_lines:
-        synthetic = _write_synthetic_lines(conn, season, week, projected, markets)
+        synthetic = _write_synthetic_lines(
+            conn, season, week, projected, markets, sport
+        )
 
     projection_ids = _insert_projections(conn, model_run_id, projected)
-    picks = _insert_picks(conn, season, week, projected, projection_ids, markets)
+    picks = _insert_picks(
+        conn, season, week, projected, projection_ids, markets, sport
+    )
 
     return {
         "projections": len(projection_ids),
@@ -636,9 +664,10 @@ def _insert_picks(
     projected: list[ProjectedRow],
     projection_ids: dict[tuple[int, int, str], int],
     markets: dict[str, MarketMeta],
+    sport: str = "cfb",
 ) -> dict[str, int]:
     """Derive the over/under call wherever there is a line to call against."""
-    lines = latest_lines(conn, season, week)
+    lines = latest_lines(conn, season, week, sport)
 
     rows: list[tuple[Any, ...]] = []
     with_book_line = 0
@@ -1100,6 +1129,7 @@ def main(argv: list[str] | None = None) -> int:
                         week,
                         projected,
                         catalogue,
+                        sport=args.sport,
                         synthetic_lines=args.synthetic_lines,
                     )
                     conn.commit()

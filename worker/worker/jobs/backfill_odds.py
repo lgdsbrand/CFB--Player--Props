@@ -2,6 +2,7 @@
 
     python -m worker.jobs.backfill_odds --season 2025 --weeks 6,7,8 --dry-run
     python -m worker.jobs.backfill_odds --season 2025 --weeks 6,7,8 --max-credits 4000
+    python -m worker.jobs.backfill_odds --season 2026 --weeks 1 --sport nfl
 
 WHY THIS EXISTS. Every backtest number the project has produced was graded
 against a SYNTHETIC line — each player's own trailing average (see the "Lines
@@ -47,6 +48,14 @@ FOUR THINGS IT REFUSES TO DO.
      is posted Yes-only by most books and dominates any sample it appears in —
      a blended number would say 94% and mean nothing.
 
+BOTH SPORTS, ONE FLAG. `--sport` selects the games read from our tables AND
+the provider's sport key, and they have to agree — asking
+`americanfootball_nfl` for a slate loaded with `sport='cfb'` resolves nothing
+and still pays a credit for every event list. It defaults to `cfb` because that
+is what this job was written for and what its credit estimates were measured on;
+NFL carry rates are near 100% against college's 48%, so a week of NFL costs
+roughly twice what the same number of college games did.
+
 WHAT IT WRITES. Append-only rows in `player_prop_lines`, stamped `captured_at`
 = the snapshot moment and `is_closing = true`. That combination is what unlocks
 the closing-line hit-rate basis CLAUDE.md §9.2 leaves open. Re-running the same
@@ -71,7 +80,11 @@ from worker.adapters.odds import (
     get_adapter,
 )
 from worker.adapters.odds.base import SupportsHistorical
-from worker.adapters.odds.markets import OUR_KEY_TO_PROVIDER
+from worker.adapters.odds.markets import (
+    OUR_KEY_TO_PROVIDER,
+    SPORT_KEY_BY_SPORT,
+    sport_key_for,
+)
 from worker.adapters.odds.null import ADAPTER_NAME as NULL_ADAPTER_NAME
 from worker.adapters.odds.theoddsapi import (
     ADAPTER_NAME as THEODDSAPI_ADAPTER_NAME,
@@ -417,14 +430,18 @@ def backfill_week(
     budget: CreditBudget,
     report: BackfillReport,
     dry_run: bool,
+    sport: str = "cfb",
     exclude_markets: tuple[str, ...] = (),
     refresh: bool = False,
 ) -> None:
     """Walk one week's kickoff clusters, buying what the books had posted."""
-    # CFB explicitly — see the note in ingest_odds.load_games. Before this was
-    # scoped, a week-1 backfill pulled 16 NFL games into the kickoff clusters.
-    teams = load_teams(conn, sport="cfb")
-    games = load_games(conn, season, week, sport="cfb")
+    # Scoped to one sport — see the note in ingest_odds.load_games. Before this
+    # was scoped, a week-1 backfill pulled 16 NFL games into the kickoff
+    # clusters, because both sports number their weeks from 1 in the same
+    # seasons and `(season, week)` alone stopped identifying a slate the moment
+    # NFL rows landed in these tables.
+    teams = load_teams(conn, sport=sport)
+    games = load_games(conn, season, week, sport=sport)
     if not games:
         log.warning(
             "No games stored for %s week %s — ingest the schedule first.",
@@ -591,6 +608,7 @@ def run(
     max_credits: int,
     min_remaining: int,
     dry_run: bool,
+    sport: str = "cfb",
     exclude_markets: tuple[str, ...] = (),
     refresh: bool = False,
 ) -> BackfillReport:
@@ -606,6 +624,10 @@ def run(
                 "cannot run without it."
             )
         kwargs["api_key"] = key
+        # The provider's sport key, not ours. Both halves have to agree: asking
+        # americanfootball_nfl for the events of a slate loaded with sport='cfb'
+        # would resolve nothing and still pay for every event list.
+        kwargs["sport_key"] = sport_key_for(sport)
 
     adapter = get_adapter(adapter_name, **kwargs)
     if not isinstance(adapter, SupportsHistorical):
@@ -630,6 +652,7 @@ def run(
                 budget=budget,
                 report=report,
                 dry_run=dry_run,
+                sport=sport,
                 exclude_markets=exclude_markets,
                 refresh=refresh,
             )
@@ -664,6 +687,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--weeks", required=True,
         help="Comma list or range: '8', '6,7,8', '6-8'.",
+    )
+    parser.add_argument(
+        "--sport", default="cfb", choices=sorted(SPORT_KEY_BY_SPORT),
+        help="Which sport's slate to buy. Selects BOTH the games read from our "
+             "tables and the provider's sport key, which have to agree. "
+             "Defaults to cfb, the sport this job was written for.",
     )
     parser.add_argument("--adapter", help="Override app_config.odds_adapter.")
     parser.add_argument(
@@ -750,6 +779,7 @@ def main(argv: list[str] | None = None) -> int:
             JOB_NAME,
             metadata={
                 "season": args.season,
+                "sport": args.sport,
                 "weeks": weeks,
                 "max_credits": args.max_credits,
                 "dry_run": args.dry_run,
@@ -760,6 +790,7 @@ def main(argv: list[str] | None = None) -> int:
                 season=args.season,
                 weeks=weeks,
                 adapter_name=adapter_name,
+                sport=args.sport,
                 lead_minutes=args.lead_minutes,
                 max_credits=args.max_credits,
                 min_remaining=args.min_remaining,
@@ -768,8 +799,9 @@ def main(argv: list[str] | None = None) -> int:
                 refresh=args.refresh,
             )
             log.info(
-                "Odds backfill (%s%s):\n%s",
+                "Odds backfill (%s, %s%s):\n%s",
                 adapter_name,
+                args.sport,
                 ", DRY RUN" if args.dry_run else "",
                 report.render(),
             )

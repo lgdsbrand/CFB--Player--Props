@@ -17,6 +17,7 @@ anytime TD is Yes-only at most books and dominates any blended figure.
 
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime, timedelta
 
 from worker.adapters.odds import NullOddsAdapter, SupportsHistorical
@@ -663,3 +664,99 @@ class TestWorstCaseRespectsExclusions:
         report = BackfillReport(dry_run=True, games_matched=81)
 
         assert report.markets_requested == len(OUR_KEY_TO_PROVIDER)
+
+
+class TestSportSelection:
+    """`--sport` picks our games AND the provider's sport key together.
+
+    They are two halves of one choice and a mismatch is silent-but-expensive:
+    asking `americanfootball_nfl` for a slate loaded with `sport='cfb'`
+    resolves no events, writes nothing, and still pays a credit per kickoff
+    cluster for every event list it asked for.
+    """
+
+    def test_both_football_sports_have_a_provider_key(self):
+        from worker.adapters.odds.markets import (
+            NCAAF_SPORT_KEY,
+            NFL_SPORT_KEY,
+            sport_key_for,
+        )
+
+        assert sport_key_for("cfb") == NCAAF_SPORT_KEY
+        assert sport_key_for("nfl") == NFL_SPORT_KEY
+
+    def test_an_unknown_sport_raises_rather_than_defaulting_to_college(self):
+        """A typo that quietly bought the wrong slate would cost money."""
+        import pytest
+
+        from worker.adapters.odds.markets import sport_key_for
+
+        with pytest.raises(KeyError, match="No Odds API sport key"):
+            sport_key_for("wnba")
+
+    def test_the_market_vocabulary_is_shared_between_the_two(self):
+        """A second sport is a sport key, not a second market table."""
+        from worker.adapters.odds.markets import (
+            OUR_KEY_TO_PROVIDER as table,
+        )
+
+        assert table["pass_yards"] == "player_pass_yds"
+        assert table["rush_yards"] == "player_rush_yds"
+
+    def test_the_cli_offers_exactly_the_sports_we_have_keys_for(self):
+        import pytest
+
+        from worker.adapters.odds.markets import SPORT_KEY_BY_SPORT
+        from worker.jobs import backfill_odds
+
+        with pytest.raises(SystemExit):
+            backfill_odds.main(["--season", "2026", "--weeks", "1", "--sport", "wnba"])
+        assert set(SPORT_KEY_BY_SPORT) == {"cfb", "nfl"}
+
+    def test_run_is_given_the_sport_the_caller_asked_for(self, monkeypatch):
+        """And defaults to cfb, which is what the credit estimates were measured on."""
+        from worker.jobs import backfill_odds
+
+        seen = {}
+
+        def fake_run(**kwargs):
+            seen.update(kwargs)
+            return _EmptyReport()
+
+        monkeypatch.setattr(backfill_odds, "run", fake_run)
+        monkeypatch.setattr(
+            backfill_odds, "resolve_adapter_name", lambda a: "theoddsapi"
+        )
+        monkeypatch.setattr(backfill_odds, "get_settings", lambda: _Settings())
+        monkeypatch.setattr(backfill_odds, "configure_logging", lambda *a, **k: None)
+        monkeypatch.setattr(backfill_odds, "pipeline_run", _null_run)
+        monkeypatch.setattr(backfill_odds, "set_rows_written", lambda *a, **k: None)
+
+        assert backfill_odds.main(["--season", "2026", "--weeks", "1"]) == 0
+        assert seen["sport"] == "cfb"
+
+        seen.clear()
+        assert backfill_odds.main(
+            ["--season", "2026", "--weeks", "1", "--sport", "nfl"]
+        ) == 0
+        assert seen["sport"] == "nfl"
+
+
+class _Settings:
+    log_level = "INFO"
+
+    def odds_key(self):
+        return "test-key"
+
+
+class _EmptyReport:
+    class ingest:
+        rows_written = 0
+
+    def render(self):
+        return ""
+
+
+@contextlib.contextmanager
+def _null_run(*args, **kwargs):
+    yield None

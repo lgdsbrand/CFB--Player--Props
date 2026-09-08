@@ -34,6 +34,33 @@ PROVIDER_TO_OUR_KEY: dict[str, str] = {
 # The provider's key for college football.
 NCAAF_SPORT_KEY = "americanfootball_ncaaf"
 
+# ...and for the NFL. The MARKET keys above are shared between the two -- The
+# Odds API names `player_pass_yds` the same in both -- so a second sport is this
+# one line plus a sport key, not a second vocabulary. That is the whole reason
+# the translation table sits in one module.
+NFL_SPORT_KEY = "americanfootball_nfl"
+
+SPORT_KEY_BY_SPORT: dict[str, str] = {
+    "cfb": NCAAF_SPORT_KEY,
+    "nfl": NFL_SPORT_KEY,
+}
+
+
+def sport_key_for(sport: str) -> str:
+    """Our `sport` -> the provider's sport key.
+
+    Raises on an unknown sport rather than defaulting to college. A backfill
+    spends real credits per call, so a typo that quietly bought the wrong
+    sport's slate would cost money to discover.
+    """
+    try:
+        return SPORT_KEY_BY_SPORT[sport]
+    except KeyError:
+        raise KeyError(
+            f"No Odds API sport key for sport {sport!r}. "
+            f"Known: {sorted(SPORT_KEY_BY_SPORT)}"
+        ) from None
+
 # Binary markets price their two sides as Yes/No rather than Over/Under. Our
 # schema stores anytime TD as "over 0.5 offensive TDs" (migration 0006), so Yes
 # maps to over and No to under — which is what keeps every market speaking the

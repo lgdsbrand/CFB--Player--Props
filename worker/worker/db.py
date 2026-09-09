@@ -251,9 +251,22 @@ def database_size_mb() -> float:
 # moving to Supabase Pro is a row edit rather than a deploy; these constants are
 # only the fallback for a database migrated before 20260813140000.
 #
-# RAISING OUR CAP DOES NOT RAISE SUPABASE'S. The free tier stops at 500 MB and
-# passing it makes the whole project READ-ONLY, which breaks every job and the
-# board with it. The cap is a place to notice the ceiling coming, not a licence.
+# RAISING OUR CAP DOES NOT RAISE SUPABASE'S. On the free tier that mattered
+# absolutely: it stops at 500 MB and passing it makes the whole project
+# READ-ONLY, which breaks every job and the board with it.
+#
+# THE PROJECT MOVED TO SUPABASE PRO ON 2026-09-09 and the cap went 600 -> 2000
+# on both databases (a row edit, no deploy — production was at 531 MB with 8.9
+# MB usable, and dev had already gone NEGATIVE at -11.4 MB, so its jobs were
+# refusing). Pro includes 8 GB, so 2000 is deliberately far below the ceiling:
+# what this guard now catches is not an imminent outage but RUNAWAY GROWTH —
+# a cascade that rewrites a season in place, the class of bug that once nearly
+# ate one — before it turns into a storage bill. Past 8 GB, Supabase charges
+# per GB rather than going read-only, so the failure mode is money, not
+# downtime, and a guard that notices is still worth having.
+#
+# The constant below is only the fallback for a database migrated before
+# 20260813140000; the live value is `app_config.db_size_cap_mb`.
 DEFAULT_SIZE_CAP_MB = 500.0
 SIZE_RESERVE_MB = 60.0
 

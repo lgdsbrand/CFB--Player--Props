@@ -1,0 +1,66 @@
+-- =============================================================================
+-- 0058 -- the index that stops v_slate_weeks timing out
+-- =============================================================================
+-- `v_slate_weeks` is the week strip above every board, and it is the single
+-- biggest source of intermittent 500s on this site. It aggregates the WHOLE
+-- `projections` table -- the caller wants every week, so there is no predicate
+-- to push down and no filter to add.
+--
+-- Measured on production 2026-09-09, before this index:
+--
+--   Seq Scan on projections     96,270 rows     1,716 ms
+--   Sort (season, week, game_id) 94,775 rows
+--   GroupAggregate                   29 rows
+--   Execution Time                            2,904 ms
+--
+-- **The `anon` role's `statement_timeout` is 3 s.** So the view was finishing
+-- with about 96 ms to spare, and any cold cache, any concurrent reader, any
+-- slightly unlucky plan pushed it over -- which is exactly the intermittent
+-- `canceling statement due to statement timeout` on `/props` and `/no-vig`.
+-- That timeout is a ROLE setting, not a plan setting: Supabase Pro does not
+-- change it, and buying Pro on 2026-09-09 did not move these numbers at all.
+--
+-- ---------------------------------------------------------------------------
+-- WHY THIS INDEX, AND WHY THE SORT DISAPPEARS
+-- ---------------------------------------------------------------------------
+-- The aggregate needs exactly four columns from `projections`: `season` and
+-- `week` to group by, `game_id` for `count(distinct)` and the join, and
+-- `player_id` for the other `count(distinct)`. All four in one index makes the
+-- scan INDEX-ONLY -- no heap access for 96,270 rows.
+--
+-- The column ORDER then does a second job. `(season, week, game_id)` is exactly
+-- the `Sort Key` the GroupAggregate was paying for, so the rows arrive already
+-- ordered and the sort node vanishes rather than merely getting cheaper. On dev
+-- that sort was spilling to disk (`external merge Disk: 3664kB`).
+--
+-- Measured on dev (81,198 projections, a fair proxy for production's 96,270),
+-- built inside a transaction and rolled back:
+--
+--   before   Seq Scan + Sort (external merge)      3,670 ms
+--   after    Index Only Scan, no Sort node           233 ms
+--
+-- 15.7x, and the plan shape changes rather than just the constant: the hash
+-- join to `games` becomes a nested loop on `games_pkey`, which is correct here
+-- because the outer side is already in the order the group needs.
+--
+-- ---------------------------------------------------------------------------
+-- NOT A MATERIALIZED VIEW, DELIBERATELY
+-- ---------------------------------------------------------------------------
+-- A matview of 29 rows would be faster still and storage is no longer scarce.
+-- It was rejected because THIS view decides which week the board opens on. A
+-- matview needs a refresh wired into `run_projections` and monitored, and when
+-- that refresh is missed the failure is silent and specific: the strip offers
+-- last week, the board opens on it, and everything renders perfectly. This
+-- project has already shipped a wrong-default-week bug once. An index cannot go
+-- stale.
+--
+-- Additive, so there is no deploy-ordering hazard -- unlike migration 0055
+-- earlier the same day, which dropped a column the running code still read and
+-- took the live page down.
+-- =============================================================================
+
+create index if not exists projections_slate_weeks_idx
+  on projections (season, week, game_id, player_id);
+
+comment on index projections_slate_weeks_idx is
+  'Covers v_slate_weeks entirely: season/week group by, game_id and player_id for its two count(distinct)s. Column order matches the aggregate''s Sort Key, so the sort node disappears and the scan is index-only. Before it, the view took 2.9s against the anon role''s 3s statement_timeout and 500d the week strip intermittently. Changing v_slate_weeks means rechecking this index.';

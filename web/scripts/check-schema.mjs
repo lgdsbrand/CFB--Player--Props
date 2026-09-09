@@ -139,12 +139,14 @@ const EXPECTED = {
     "consensus_prob_over", "line_prob_over_min", "line_prob_over_max",
     "consensus_delta_abs", "is_best_over", "is_best_under", "captured_at",
   ],
-  // The market filter's counts. `is_upcoming` and `conference_is_displayed` are
+  // The market filter's counts. `start_date` and `conference_is_displayed` are
   // filtered on, never selected — a predicate on a column anon cannot see fails
-  // exactly like a missing select column.
+  // exactly like a missing select column. `start_date` replaced an `is_upcoming`
+  // boolean in migration 0055: the caller cuts with its own slate-day cutoff, so
+  // the pills and the table below them agree about which games are still live.
   v_no_vig_markets: [
     "market_key", "market_label", "quotes",
-    "sport", "season", "week", "conference_is_displayed", "is_upcoming",
+    "sport", "season", "week", "conference_is_displayed", "start_date",
   ],
   v_slate_games: [
     "game_id", "sport", "season", "week", "start_date", "start_time_tbd",

@@ -282,12 +282,27 @@ export type NoVigMarket = { key: string; label: string; quotes: number };
  * A market with no quotes never appears: offering a filter that returns nothing
  * is the "tile with nothing behind it" trap, and `anytime_td` is permanently in
  * that position — one-way at every book, so it can never be de-vigged.
+ *
+ * CUT WITH THE CALLER'S CUTOFF, NOT THE DATABASE'S. The view used to carry an
+ * `is_upcoming` boolean of its own, computed as `start_date >= now()`, while the
+ * table below these pills cuts at `kickoffCutoff()` — 04:00 ET of the slate day,
+ * because a started game deliberately stays on the page until the day rolls over
+ * (`lib/core/kickoff.ts`, migration 0052). The two agree only while no game has
+ * kicked off. Measured on production for 2026 cfb week 1 at Sat 2026-09-05 20:00
+ * ET, the pills saw 84 rec_yards quotes where the table listed 343 — so a market
+ * whose games had all started could vanish from the filter while its rows stayed
+ * on screen, unselectable, and the pill order was sorted on a different row set
+ * than the one it ordered.
+ *
+ * Migration 0055 replaced that boolean with the kickoff itself, so the cut here
+ * is `upcomingOnly` — the same helper, the same predicate string, the same
+ * instant the table uses. The rule stays stated once, in `lib/core`.
  */
 export async function getNoVigMarkets(
   season: number,
   week: number,
   sport: Sport = DEFAULT_SPORT,
-  { upcomingOnly: onlyUpcoming = true }: { upcomingOnly?: boolean } = {},
+  { kickoffCutoff }: { kickoffCutoff?: Date } = {},
 ): Promise<NoVigMarket[]> {
   const supabase = createServerSupabaseClient();
 
@@ -299,18 +314,37 @@ export async function getNoVigMarkets(
     .eq("week", week)
     .eq("conference_is_displayed", true);
 
-  // Matches the table's own cut, so a pill cannot advertise a count the rows
-  // below it contradict.
-  if (onlyUpcoming) query = query.eq("is_upcoming", true);
+  if (kickoffCutoff) query = query.or(upcomingOnly(kickoffCutoff));
 
   const rows = unwrap<DbRow[]>(await query, "v_no_vig_markets");
 
-  return rows
-    .map((row) => ({
-      key: row.market_key as string,
-      label: row.market_label as string,
-      quotes: requireNum(row.quotes, "quotes"),
-    }))
+  // A TRUNCATED AGGREGATE WOULD DROP A MARKET FROM ITS OWN FILTER — the exact
+  // failure this function exists to avoid, and the one PostgREST's 1,000-row cap
+  // causes silently. The view is now one row per kickoff rather than one per
+  // market, so the count is bounded by distinct kickoff times (~120 rows for a
+  // college week, measured) and this should never fire; if it does, the fix is
+  // to aggregate in the database, not to raise the limit.
+  if (rows.length >= MAX_ROWS_PER_REQUEST) {
+    throw new Error(
+      `v_no_vig_markets returned ${rows.length} rows, at or past the ` +
+        `${MAX_ROWS_PER_REQUEST}-row cap: the market filter would be missing markets.`,
+    );
+  }
+
+  // One row per kickoff now, so the per-market totals are summed here.
+  const totals = new Map<string, NoVigMarket>();
+  for (const row of rows) {
+    const key = row.market_key as string;
+    const existing = totals.get(key);
+    const quotes = requireNum(row.quotes, "quotes");
+    if (existing) {
+      existing.quotes += quotes;
+    } else {
+      totals.set(key, { key, label: row.market_label as string, quotes });
+    }
+  }
+
+  return [...totals.values()]
     .filter((market) => market.quotes > 0)
     .sort((a, b) => b.quotes - a.quotes || a.key.localeCompare(b.key));
 }

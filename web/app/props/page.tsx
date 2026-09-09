@@ -159,7 +159,11 @@ export default async function Home({
   const view = resolveBoardView(resolved);
 
   const [counts, games, ratings] = await Promise.all([
+    // `sport` is not optional here in practice: without it these counted BOTH
+    // sports' rows for the season/week and the banner described a slate the
+    // board never shows.
     getBoardCounts(active.season, active.week, config.edgeThreshold, {
+      sport,
       kickoffCutoff: cutoff,
     }),
     getSlateGames(active.season, active.week, sport),

@@ -21,6 +21,7 @@ import { SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
 import {
   type DbRow,
   MAX_ROWS_PER_REQUEST,
+  requireNum,
   unwrap,
   upcomingOnly,
 } from "@/lib/data/query";
@@ -504,13 +505,31 @@ export type BoardCounts = {
 };
 
 /**
- * Headline counts for a week, without transferring the rows.
+ * Headline counts for a week, in ONE scan, without transferring the rows.
  *
- * `head: true` asks PostgREST for the count and no body. Cheap queries beat one
- * that ships 6,000 rows so the page can call `.length` on them — but each one is
- * still a round trip the board waits on, so nothing is counted here that nothing
- * renders. Two counts (`thin` and `ranked`) were dropped when the slate-level
- * evidence note was removed at the client's request; they had no other reader.
+ * WAS SIX PARALLEL `head: true` COUNTS, and that was the free half of the
+ * board's concurrency ceiling. Six exact counts over `v_board_rows` with the
+ * same base filter meant one render evaluated that view six times, so twelve
+ * concurrent readers meant seventy-two simultaneous evaluations. Measured on
+ * production 2026-09-09, cfb 2026 week 2: the six in parallel took 1.78-1.94 s
+ * EACH and 2,012 ms of wall clock, against ~100 ms for all six as
+ * `count(*) filter` in a single query — each is only ~100 ms alone, and they
+ * were competing with each other for the same CPU.
+ *
+ * The aggregate lives in `board_counts` (migration 0059) because PostgREST
+ * refuses aggregate functions for anon. A FUNCTION rather than a grouped view
+ * like `v_no_vig_markets`, because the edge threshold and the kickoff cutoff
+ * are only known at request time.
+ *
+ * IT ALSO TAKES A SPORT NOW, AND DID NOT BEFORE. The six counts filtered
+ * season, week, conference and cutoff — never sport — so on 2026 week 1 they
+ * returned 4,449, which is college's 2,954 plus the NFL's 1,495. Both boards
+ * printed banner numbers describing both sports summed. That is the sixth time
+ * a sport-blind read has shipped here; see `lib/core/sport.ts`.
+ *
+ * Nothing is counted here that nothing renders. Two counts (`thin` and
+ * `ranked`) were dropped when the slate-level evidence note was removed at the
+ * client's request; they had no other reader.
  *
  * THESE ARE RAW COUNTS OF DISJOINT CONDITIONS AND NOTHING ELSE. Turning them
  * into "how many are still waiting for a book" is `lineCoverage` in the core,
@@ -526,63 +545,47 @@ export async function getBoardCounts(
   week: number,
   edgeThreshold: number,
   {
+    sport = DEFAULT_SPORT,
     displayedConferencesOnly = true,
     kickoffCutoff,
-  }: { displayedConferencesOnly?: boolean; kickoffCutoff?: Date } = {},
+  }: {
+    sport?: Sport;
+    displayedConferencesOnly?: boolean;
+    kickoffCutoff?: Date;
+  } = {},
 ): Promise<BoardCounts> {
   const supabase = createServerSupabaseClient();
 
-  const base = () => {
-    let query = supabase
-      .from("v_board_rows")
-      .select("projection_id", { count: "exact", head: true })
-      .eq("season", season)
-      .eq("week", week);
-    if (displayedConferencesOnly) {
-      query = query.eq("conference_is_displayed", true);
-    }
+  const { data, error } = await supabase.rpc("board_counts", {
+    p_sport: sport,
+    p_season: season,
+    p_week: week,
+    p_edge_threshold: edgeThreshold,
+    p_synthetic_book_key: SYNTHETIC_BOOK_KEY,
+    p_displayed_only: displayedConferencesOnly,
     // Counted under the same cut the board lists under. These numbers feed the
     // pricing banners, and a banner counting settled rows would describe a
     // market the reader cannot see.
-    if (kickoffCutoff) query = query.or(upcomingOnly(kickoffCutoff));
-    return query;
-  };
+    p_kickoff_cutoff: kickoffCutoff ? kickoffCutoff.toISOString() : null,
+  });
 
-  const [all, withCall, withBookLine, withDevLine, withEvenBookPrice, overThreshold] =
-    await Promise.all([
-      base(),
-      base().eq("has_call", true),
-      base().eq("has_book_line", true),
-      base().eq("sportsbook_key", SYNTHETIC_BOOK_KEY),
-      // Exactly 0.500, not "close to it". The claim the caveat makes — that edge
-      // IS confidence minus 50% — is only exactly true at the midpoint, and a
-      // tolerance here would put rows under a notice that misdescribes them.
-      base()
-        .eq("book_prob_over", 0.5)
-        .neq("sportsbook_key", SYNTHETIC_BOOK_KEY),
-      base().gte("edge", edgeThreshold),
-    ]);
+  if (error) {
+    throw new Error(`Board counts failed: ${error.message}`);
+  }
 
-  for (const [result, label] of [
-    [all, "all"],
-    [withCall, "with call"],
-    [withBookLine, "with book line"],
-    [withDevLine, "with development line"],
-    [withEvenBookPrice, "with even book price"],
-    [overThreshold, "over threshold"],
-  ] as const) {
-    if (result.error) {
-      throw new Error(`Board count failed (${label}): ${result.error.message}`);
-    }
+  // `returns table` arrives as an array of one row.
+  const row = (Array.isArray(data) ? data[0] : data) as DbRow | undefined;
+  if (!row) {
+    throw new Error("Board counts returned no row");
   }
 
   return {
-    rows: all.count ?? 0,
-    withCall: withCall.count ?? 0,
-    withBookLine: withBookLine.count ?? 0,
-    withDevLine: withDevLine.count ?? 0,
-    withEvenBookPrice: withEvenBookPrice.count ?? 0,
-    overThreshold: overThreshold.count ?? 0,
+    rows: requireNum(row.rows_all, "rows_all"),
+    withCall: requireNum(row.with_call, "with_call"),
+    withBookLine: requireNum(row.with_book_line, "with_book_line"),
+    withDevLine: requireNum(row.with_dev_line, "with_dev_line"),
+    withEvenBookPrice: requireNum(row.with_even_book_price, "with_even_book_price"),
+    overThreshold: requireNum(row.over_threshold, "over_threshold"),
   };
 }
 

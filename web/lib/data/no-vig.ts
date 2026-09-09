@@ -58,10 +58,6 @@ const PAGE_LIMIT = MAX_ROWS_PER_REQUEST;
 
 export type NoVigPage = {
   rows: NoVigRow[];
-  /** True when more quotes matched than were returned. */
-  truncated: boolean;
-  /** Everything that matched, before the limit. */
-  total: number;
 };
 
 export type NoVigFilters = {
@@ -126,15 +122,88 @@ function buildNoVigQuery(
 /**
  * How many quotes match, without fetching any.
  *
+ * FOLDED INTO `getNoVigSummary` — this is kept only as the definition of what
+ * the total means, and as the thing a change to `no_vig_summary` must still
+ * agree with. It is not called on the page path.
+ *
  * `head: true` returns the count and no body, the same trick `getBoardCounts`
  * and `getBoardRowCount` use.
  */
-async function getNoVigCount(filters: NoVigFilters): Promise<number> {
+export async function getNoVigCount(filters: NoVigFilters): Promise<number> {
   const result = await buildNoVigQuery("line_id", filters, "exact", true);
   if (result.error) {
     throw new Error(`No-vig count failed: ${result.error.message}`);
   }
   return result.count ?? 0;
+}
+
+export type NoVigSummary = {
+  /** Everything matching the page's full filter, for the truncation banner. */
+  total: number;
+  /** The markets with two-way prices on the slate, for the filter pills. */
+  markets: NoVigMarket[];
+};
+
+/**
+ * The total AND the market pills, in ONE scan of `v_no_vig_rows`.
+ *
+ * WAS TWO STATEMENTS, and that was this page's share of the concurrency
+ * ceiling. `/no-vig` fired three heavy reads per render — the row page, an
+ * exact count, and `v_no_vig_markets` — all scanning a view that costs ~600 ms
+ * warm. Measured on the live site 2026-09-09: twelve concurrent readers failed
+ * 12 of 12, even after migrations 0058 and 0059 had taken `/props` to 24/24.
+ * Same diagnosis as the board's six banner counts, same fix.
+ *
+ * THE TWO NUMBERS ANSWER DIFFERENT QUESTIONS, deliberately. `quotes` is the
+ * base slate scope and ignores the position/market/shoppable filters, because
+ * the pills must: narrowing them with the filters would hide every market the
+ * selected position does not play, and the reader could never get back.
+ * `matching` applies the full filter and sums to the total — verified against
+ * `getNoVigCount` on production for no filter, position, shoppable and market
+ * (2511/765/2220/179, all exact).
+ */
+export async function getNoVigSummary(
+  filters: NoVigFilters,
+): Promise<NoVigSummary> {
+  const supabase = createServerSupabaseClient();
+
+  const { data, error } = await supabase.rpc("no_vig_summary", {
+    p_sport: filters.sport ?? DEFAULT_SPORT,
+    p_season: filters.season,
+    p_week: filters.week,
+    p_kickoff_cutoff: filters.kickoffCutoff
+      ? filters.kickoffCutoff.toISOString()
+      : null,
+    p_position_group: filters.positionGroup ?? null,
+    p_market_key: filters.marketKey ?? null,
+    p_shoppable_only: filters.shoppableOnly ?? false,
+  });
+
+  if (error) {
+    throw new Error(`No-vig summary failed: ${error.message}`);
+  }
+
+  const rows = (data ?? []) as DbRow[];
+
+  let total = 0;
+  const markets: NoVigMarket[] = [];
+  for (const row of rows) {
+    total += requireNum(row.matching, "matching");
+    const quotes = requireNum(row.quotes, "quotes");
+    // A market with no quotes never appears: offering a filter that returns
+    // nothing is the "tile with nothing behind it" trap, and `anytime_td` is
+    // permanently in that position — one-way at every book, never de-viggable.
+    if (quotes > 0) {
+      markets.push({
+        key: row.market_key as string,
+        label: row.market_label as string,
+        quotes,
+      });
+    }
+  }
+
+  markets.sort((a, b) => b.quotes - a.quotes || a.key.localeCompare(b.key));
+  return { total, markets };
 }
 
 /**
@@ -200,11 +269,7 @@ export async function getNoVigPage(filters: NoVigFilters): Promise<NoVigPage> {
               .order("line_id")
           : query.order("hold").order("line_id");
 
-  const [result, total] = await Promise.all([
-    ordered.limit(PAGE_LIMIT),
-    getNoVigCount(filters),
-  ]);
-
+  const result = await ordered.limit(PAGE_LIMIT);
   const rows = unwrap<DbRow[]>(result, "v_no_vig_rows").map(toNoVigRow);
 
   // The database decided WHICH rows survived the cap; this decides the order
@@ -212,7 +277,9 @@ export async function getNoVigPage(filters: NoVigFilters): Promise<NoVigPage> {
   // in the wrong sequence. The ORDER BY chain above is the same rule.
   rows.sort((a, b) => compareNoVigRows(a, b, sort));
 
-  return { rows, truncated: total > rows.length, total };
+  // The total and the truncation flag come from `getNoVigSummary`, which the
+  // page fetches alongside this one. They used to be a second statement here.
+  return { rows };
 }
 
 function toNoVigRow(row: DbRow): NoVigRow {

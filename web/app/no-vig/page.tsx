@@ -27,7 +27,7 @@ import {
   SPORT_LABEL,
   type Sport,
 } from "@/lib/core/sport";
-import { getNoVigMarkets, getNoVigPage } from "@/lib/data/no-vig";
+import { getNoVigPage, getNoVigSummary } from "@/lib/data/no-vig";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
 
 /**
@@ -101,19 +101,32 @@ export default async function NoVig({
 
   const cutoff = kickoffCutoff();
 
-  const [page, markets] = await Promise.all([
-    getNoVigPage({
-      sport,
-      season: active.season,
-      week: active.week,
-      positionGroup: params.position,
-      marketKey: market,
-      shoppableOnly,
-      kickoffCutoff: cutoff,
-      sort,
-    }),
-    getNoVigMarkets(active.season, active.week, sport, { kickoffCutoff: cutoff }),
+  const filters = {
+    sport,
+    season: active.season,
+    week: active.week,
+    positionGroup: params.position,
+    marketKey: market,
+    shoppableOnly,
+    kickoffCutoff: cutoff,
+  };
+
+  // TWO STATEMENTS, NOT THREE. The exact count and the market pills used to be
+  // separate reads, so a render scanned `v_no_vig_rows` three times — and that
+  // view costs ~600 ms warm. Twelve concurrent readers failed 12 of 12 on the
+  // live site. `getNoVigSummary` (migration 0060) returns both from one scan.
+  const [page, slate] = await Promise.all([
+    // `sport` is already in `filters` and is restated anyway: the guard in
+    // `sport-reads.test.ts` is a TEXT scan and cannot see a sport through a
+    // spread. One redundant key is a cheap price for a check that has caught
+    // this class six times — see `lib/core/sport.ts`.
+    getNoVigPage({ ...filters, sport, sort }),
+    getNoVigSummary(filters),
   ]);
+
+  const markets = slate.markets;
+  const total = slate.total;
+  const truncated = total > page.rows.length;
 
   // THE SUMMARY DESCRIBES EVERYTHING LOADED, NOT THE VISIBLE PAGE, and that is
   // why the rows below are paged in the render rather than in SQL. Four of the
@@ -292,12 +305,12 @@ export default async function NoVig({
             />
           </div>
 
-          {page.truncated ? (
+          {truncated ? (
             <p className="border-negative/40 bg-negative/5 text-muted rounded-xl border px-3 py-2 text-xs">
               <span className="text-negative font-bold uppercase tracking-label">
                 Partial slate
               </span>{" "}
-              — {formatCount(page.total)} quotes match and the first{" "}
+              — {formatCount(total)} quotes match and the first{" "}
               {formatCount(page.rows.length)} are loaded, paged below. Narrow by
               market or position to reach the rest. A &ldquo;best price&rdquo;
               mark is still trustworthy: it is decided across every book posting

@@ -5,6 +5,7 @@ import { BoardTable } from "@/components/board/board-table";
 import { PlayerCard } from "@/components/board/player-card";
 import { WeeklyTargets } from "@/components/board/weekly-targets";
 import { NotConfigured } from "@/components/not-configured";
+import { PageLink } from "@/components/page-link";
 import { SiteHeader } from "@/components/site-header";
 import { DayStrip } from "@/components/day-strip";
 import { WeekStrip } from "@/components/week-strip";
@@ -692,28 +693,3 @@ function Shell({
   );
 }
 
-function PageLink({
-  href,
-  disabled,
-  children,
-}: {
-  href: string;
-  disabled: boolean;
-  children: React.ReactNode;
-}) {
-  if (disabled) {
-    return (
-      <span className="text-dim px-3 py-1.5 text-[0.6875rem] font-bold uppercase tracking-label">
-        {children}
-      </span>
-    );
-  }
-  return (
-    <Link
-      href={href}
-      className="border-border-subtle text-muted hover:text-ink hover:border-border-strong rounded-full border px-3 py-1.5 text-[0.6875rem] font-bold uppercase tracking-label transition-colors"
-    >
-      {children}
-    </Link>
-  );
-}

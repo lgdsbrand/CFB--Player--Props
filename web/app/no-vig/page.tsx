@@ -1,10 +1,16 @@
 import Link from "next/link";
 
 import { NotConfigured } from "@/components/not-configured";
+import { PageLink } from "@/components/page-link";
 import { NoVigTable } from "@/components/no-vig/no-vig-table";
 import { SiteHeader } from "@/components/site-header";
 import { WeekStrip } from "@/components/week-strip";
-import { BOARD_PATH, parseBoardParams, type RawParams } from "@/lib/core/board-params";
+import {
+  BOARD_PATH,
+  parseBoardParams,
+  type RawParams,
+  ROWS_PER_PAGE,
+} from "@/lib/core/board-params";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount } from "@/lib/core/format";
 import { kickoffCutoff } from "@/lib/core/kickoff";
@@ -109,13 +115,38 @@ export default async function NoVig({
     getNoVigMarkets(active.season, active.week, sport, { kickoffCutoff: cutoff }),
   ]);
 
+  // THE SUMMARY DESCRIBES EVERYTHING LOADED, NOT THE VISIBLE PAGE, and that is
+  // why the rows below are paged in the render rather than in SQL. Four of the
+  // five stats — props, books, median hold, "with a rival quote" — can only be
+  // computed from the rows themselves, so a `range()` query would quietly
+  // reduce them to describing fifty rows while still sitting under a heading
+  // that reads like the slate. `summarise`'s own docstring calls that out.
   const summary = summarise(page.rows);
+
+  // PAGING THE RENDER IS THE FIX FOR PAGE WEIGHT. Measured on the live
+  // deployment 2026-09-09: every table row costs ~5.7 KB of HTML, so the 1,000
+  // rows this page used to render came to 5.56 MB and took 8-10 s, against the
+  // board's 101 rows and 0.58 MB. The database was never the bottleneck — the
+  // index in migration 0057 cut real query work and moved page time by nothing.
+  //
+  // So the fetch is unchanged and only the slice rendered changes. It costs a
+  // page view no extra query and no extra database load, and every number on
+  // screen means exactly what it meant before. What it does NOT do is reduce
+  // the work Postgres does per view; if that becomes the constraint, SQL
+  // pagination is the next step and the summary has to move into the database
+  // with it.
+  const perPage = ROWS_PER_PAGE;
+  const totalPages = Math.max(Math.ceil(page.rows.length / perPage), 1);
+  const currentPage = Math.min(params.page, totalPages);
+  const firstShown = (currentPage - 1) * perPage;
+  const visibleRows = page.rows.slice(firstShown, firstShown + perPage);
 
   const href = (changes: {
     sort?: NoVigSort;
     position?: PositionGroup | null;
     market?: string | null;
     shop?: boolean;
+    page?: number;
   }) => {
     const search = new URLSearchParams();
     search.set("season", String(active.season));
@@ -133,6 +164,13 @@ export default async function NoVig({
 
     const nextShop = changes.shop ?? shoppableOnly;
     if (nextShop) search.set("shop", "1");
+
+    // ANY CHANGE THAT IS NOT THE PAGER RESETS TO PAGE ONE. Every other caller
+    // here narrows or re-sorts, and carrying page 14 across a filter change
+    // lands the reader on an empty tail of a shorter list — the stale-deep-link
+    // failure the board's own pager guards against by clamping.
+    const nextPage = changes.page ?? 1;
+    if (nextPage > 1) search.set("page", String(nextPage));
 
     return `/no-vig?${search.toString()}`;
   };
@@ -259,14 +297,40 @@ export default async function NoVig({
               <span className="text-negative font-bold uppercase tracking-label">
                 Partial slate
               </span>{" "}
-              — {formatCount(page.total)} quotes match and{" "}
-              {formatCount(page.rows.length)} are shown. Narrow by market or
-              position to see the rest; a &ldquo;best price&rdquo; here is best
-              among the books on screen.
+              — {formatCount(page.total)} quotes match and the first{" "}
+              {formatCount(page.rows.length)} are loaded, paged below. Narrow by
+              market or position to reach the rest. A &ldquo;best price&rdquo;
+              mark is still trustworthy: it is decided across every book posting
+              that same line, not just the rows on screen.
             </p>
           ) : null}
 
-          <NoVigTable rows={page.rows} />
+          <NoVigTable rows={visibleRows} />
+
+          {totalPages > 1 ? (
+            <nav
+              aria-label="No-vig pages"
+              className="flex items-center justify-center gap-3 pt-1"
+            >
+              <PageLink
+                href={href({ page: currentPage - 1 })}
+                disabled={currentPage <= 1}
+              >
+                ← Prev
+              </PageLink>
+              <span className="text-muted text-xs">
+                {formatCount(firstShown + 1)}&ndash;
+                {formatCount(firstShown + visibleRows.length)} of{" "}
+                {formatCount(page.rows.length)}
+              </span>
+              <PageLink
+                href={href({ page: currentPage + 1 })}
+                disabled={currentPage >= totalPages}
+              >
+                Next →
+              </PageLink>
+            </nav>
+          ) : null}
         </>
       )}
 

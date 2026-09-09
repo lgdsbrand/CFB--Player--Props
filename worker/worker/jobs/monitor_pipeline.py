@@ -99,9 +99,31 @@ class JobExpectation:
     #: recurring mistake of this build rather than a one-off — see
     #: `web/lib/core/sport.ts` for the read side of the same discipline.
     sport: str = "cfb"
+    #: WHETHER BOTH SPORTS WRITE THIS `job_name`. `build_splits`,
+    #: `run_projections` and `ingest_odds` are one module run twice with
+    #: `--sport`, so they log under a single name and the staleness query has to
+    #: separate them on `metadata->>'sport'` or the newer run answers for both.
+    #: Measured on production 2026-09-09: NFL `build_splits` last succeeded
+    #: 09-06 23:43 and college's 09-08 08:02, so the shared check reported the
+    #: pair healthy while the NFL side had been dead for nearly three days.
+    #:
+    #: Jobs with a name of their own (`nfl_ingest_stats`, `ingest_reference`)
+    #: leave this False: filtering them by sport would buy nothing and would
+    #: break on the ones that log no sport at all.
+    sport_scoped: bool = False
     #: `app_config` key that must not read "none" for this job to be expected.
     enabled_key: str | None = None
     note: str = ""
+
+    @property
+    def label(self) -> str:
+        """How this expectation is named in an alert.
+
+        Sport-scoped jobs MUST carry it: two expectations share `name`, so a key
+        of `stale:build_splits` would collide and read as one finding about a
+        job that is actually two.
+        """
+        return f"{self.name} ({self.sport})" if self.sport_scoped else self.name
 
 
 MONITORED_JOBS: tuple[JobExpectation, ...] = (
@@ -132,12 +154,14 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
         name="build_splits",
         max_age_hours=36,
         severity="critical",
+        sport_scoped=True,
         note="daily 08:00 UTC — the position-split engine, CLAUDE.md §5",
     ),
     JobExpectation(
         name="run_projections",
         max_age_hours=36,
         severity="critical",
+        sport_scoped=True,
         note="daily 12:30 UTC (--current-week) plus Tuesday 09:00 (--all-weeks) "
              "— without this the board has nothing on it, and since 2026-09-04 "
              "it is also the only thing that turns a captured line into a "
@@ -147,6 +171,7 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
     JobExpectation(
         name="ingest_odds",
         max_age_hours=18,
+        sport_scoped=True,
         enabled_key="odds_adapter",
         note="every 6h — books post late, often Thu/Fri (CLAUDE.md §7). Was 3h "
              "until 2026-08-12; this is the only job spending metered credits "
@@ -184,15 +209,43 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
         in_season_only=False,
         note="daily 13:00 UTC — the data-integrity canary",
     ),
-    # NFL. These three have job names of their own, so their staleness is
-    # genuinely separable from the college pipeline's.
+    # The three jobs BOTH sports run under one module name. Each is listed
+    # twice — once per sport — and both entries carry `sport_scoped=True`, so
+    # the staleness query separates them on `metadata->>'sport'`.
     #
-    # `build_splits`, `run_projections` and `ingest_odds` DO NOT, and that is a
-    # real remaining gap: both sports write those rows under one `job_name`, so
-    # the `distinct on (job_name)` above cannot tell a dead NFL cron from a
-    # healthy college one. The sport is in each run's metadata; making the
-    # checks read it is a separate change, and until then a stopped
-    # `nfl-props-project-current` is invisible here.
+    # THIS CLOSED A GAP THAT WAS ALREADY HIDING A DEAD JOB. Measured on
+    # production 2026-09-09: NFL `build_splits` last succeeded 09-06 23:43,
+    # college's 09-08 08:02. The shared check read the newer college run and
+    # called the pair healthy while the NFL splits had been frozen for nearly
+    # three days — the exact failure `nfl_ingest_plays`'s note predicted.
+    JobExpectation(
+        name="build_splits",
+        max_age_hours=36,
+        severity="critical",
+        sport="nfl",
+        sport_scoped=True,
+        note="daily 08:20 UTC, last step of the NFL results chain — the NFL "
+             "position splits, and the thing that was silently stale",
+    ),
+    JobExpectation(
+        name="run_projections",
+        max_age_hours=36,
+        severity="critical",
+        sport="nfl",
+        sport_scoped=True,
+        note="daily 12:50 UTC (--current-week --sport nfl) — without it the NFL "
+             "board keeps showing last run's picks and looks entirely healthy",
+    ),
+    JobExpectation(
+        name="ingest_odds",
+        max_age_hours=18,
+        sport="nfl",
+        sport_scoped=True,
+        enabled_key="odds_adapter",
+        note="every 6h at :20 (--sport nfl) — the NFL half of the metered odds "
+             "spend, and a silent stop looks like a quiet market",
+    ),
+    # NFL jobs with names of their own, separable without any sport filter.
     JobExpectation(
         name="nfl_ingest_reference",
         max_age_hours=36,
@@ -285,44 +338,71 @@ def check_stuck_runs(report: MonitorReport, *, hours: float = STUCK_AFTER_HOURS)
 
 
 def check_latest_run_failed(report: MonitorReport) -> None:
-    """Jobs whose most recent run failed, and how many in a row."""
+    """Jobs whose most recent run failed, and how many in a row.
+
+    PER (JOB, SPORT), NOT PER JOB. `build_splits`, `run_projections` and
+    `ingest_odds` are one module run once per sport, so a bare
+    `distinct on (job_name)` returns whichever sport ran LAST — and college runs
+    later in the day than the NFL for two of the three. An NFL failure at 12:50
+    followed by a college success is not "the latest run", so the failure simply
+    disappeared. The sport is its own bucket here rather than something the
+    expectations table drives, because a failure is worth reporting whether or
+    not anyone wrote an expectation for it.
+
+    `metadata->>'sport'` is used RAW rather than coalesced: NULL is its own
+    bucket (Postgres treats NULLs as equal in DISTINCT ON), which keeps jobs
+    that log no sport at all — `nfl_ingest_stats` among them — reporting under
+    their own name instead of being mislabelled as college.
+    """
     report.checks_run += 1
     rows = fetch_all(
         """
-        with latest as (
-          select distinct on (job_name)
-                 job_name, status, started_at, error
+        with runs as (
+          select job_name,
+                 metadata ->> 'sport' as sport,
+                 status, started_at, error
             from pipeline_runs
-           order by job_name, started_at desc
+        ),
+        latest as (
+          select distinct on (job_name, sport)
+                 job_name, sport, status, started_at, error
+            from runs
+           order by job_name, sport, started_at desc
         ),
         streak as (
-          select p.job_name, count(*) as consecutive
-            from pipeline_runs p
+          select p.job_name, p.sport, count(*) as consecutive
+            from runs p
             join latest l on l.job_name = p.job_name
+                         and l.sport is not distinct from p.sport
            where p.status = 'failed'
              and p.started_at > coalesce(
-                   (select max(s.started_at) from pipeline_runs s
-                     where s.job_name = p.job_name and s.status = 'succeeded'),
+                   (select max(s.started_at) from runs s
+                     where s.job_name = p.job_name
+                       and s.sport is not distinct from p.sport
+                       and s.status = 'succeeded'),
                    '-infinity'::timestamptz)
-           group by p.job_name
+           group by p.job_name, p.sport
         )
         select l.job_name,
+               l.sport,
                l.started_at,
                coalesce(l.error, '(no error recorded)') as error,
                coalesce(s.consecutive, 1)               as consecutive
           from latest l
           left join streak s on s.job_name = l.job_name
+                            and s.sport is not distinct from l.sport
          where l.status = 'failed'
-         order by l.job_name
+         order by l.job_name, l.sport
         """
     )
     for row in rows:
+        label = row["job_name"] + (f" ({row['sport']})" if row["sport"] else "")
         # The monitor's own failures are reported by the NEXT monitor run, which
         # is why a critical finding here must not fail this run — see main().
         report.add(
             "critical",
-            f"failed:{row['job_name']}",
-            f"{row['job_name']} last run FAILED"
+            f"failed:{label}",
+            f"{label} last run FAILED"
             + (
                 f" ({row['consecutive']} consecutive)"
                 if int(row["consecutive"]) > 1
@@ -353,7 +433,7 @@ def check_staleness(
             configured = get_config_value(expectation.enabled_key)
             if configured is None or str(configured) == "none":
                 report.skipped.append(
-                    f"{expectation.name} ({expectation.enabled_key} is 'none')"
+                    f"{expectation.label} ({expectation.enabled_key} is 'none')"
                 )
                 continue
 
@@ -361,24 +441,46 @@ def check_staleness(
         # `finished_at where succeeded` — NOT started_at, and not the latest run
         # of any status. Both of the obvious alternatives report a job that is
         # reliably crashing, or reliably hanging, as fresh.
-        row = fetch_one(
-            """
-            select max(finished_at) as last_success,
-                   round(extract(epoch from (now() - max(finished_at))) / 3600.0, 1)
-                     as age_hours
-              from pipeline_runs
-             where job_name = %s
-               and status = 'succeeded'
-            """,
-            (expectation.name,),
-        )
+        #
+        # A NULL `sport` IN METADATA MEANS COLLEGE, and that is history rather
+        # than a guess: this pipeline was college-only until 2026-09-06, and
+        # nothing wrote the key before then. `coalesce(..., 'cfb')` therefore
+        # counts those old rows toward the college expectation and — because the
+        # comparison is to the sport being checked — excludes them from the NFL
+        # one. Matching `metadata->>'sport' = 'cfb'` strictly instead would make
+        # college look stale for every window that reaches back past the change.
+        if expectation.sport_scoped:
+            row = fetch_one(
+                """
+                select max(finished_at) as last_success,
+                       round(extract(epoch from (now() - max(finished_at))) / 3600.0, 1)
+                         as age_hours
+                  from pipeline_runs
+                 where job_name = %s
+                   and status = 'succeeded'
+                   and coalesce(metadata ->> 'sport', 'cfb') = %s
+                """,
+                (expectation.name, expectation.sport),
+            )
+        else:
+            row = fetch_one(
+                """
+                select max(finished_at) as last_success,
+                       round(extract(epoch from (now() - max(finished_at))) / 3600.0, 1)
+                         as age_hours
+                  from pipeline_runs
+                 where job_name = %s
+                   and status = 'succeeded'
+                """,
+                (expectation.name,),
+            )
         last_success = (row or {}).get("last_success")
 
         if last_success is None:
             report.add(
                 expectation.severity,
-                f"never-succeeded:{expectation.name}",
-                f"{expectation.name} has never recorded a successful run",
+                f"never-succeeded:{expectation.label}",
+                f"{expectation.label} has never recorded a successful run",
                 f"Expected at least every {expectation.max_age_hours:.0f}h "
                 f"({expectation.note}). Either the cron is not deployed or it "
                 "has never completed.",
@@ -389,8 +491,8 @@ def check_staleness(
         if age > expectation.max_age_hours:
             report.add(
                 expectation.severity,
-                f"stale:{expectation.name}",
-                f"{expectation.name} has not succeeded in {age:.0f}h",
+                f"stale:{expectation.label}",
+                f"{expectation.label} has not succeeded in {age:.0f}h",
                 f"Last success {last_success:%Y-%m-%d %H:%M UTC}; expected every "
                 f"{expectation.max_age_hours:.0f}h ({expectation.note}).",
             )

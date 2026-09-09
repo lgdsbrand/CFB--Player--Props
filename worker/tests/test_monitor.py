@@ -323,6 +323,43 @@ class TestSportGating:
             "that no slate is resolved for — they would be skipped every run"
         )
 
+    def test_the_shared_job_names_are_expected_once_per_sport(self) -> None:
+        """`build_splits`, `run_projections` and `ingest_odds` are ONE module
+        run per sport, so one expectation covers whichever ran last.
+
+        Measured on production 2026-09-09, before this was split: NFL
+        `build_splits` last succeeded 09-06 23:43 and college's 09-08 08:02, so
+        the single check read the college run and called both healthy while the
+        NFL splits had been frozen for nearly three days.
+        """
+        for name in ("build_splits", "run_projections", "ingest_odds"):
+            sports = {job.sport for job in MONITORED_JOBS if job.name == name}
+            assert sports == set(MONITORED_SPORTS), (
+                f"{name} is expected for {sorted(sports)} but runs for "
+                f"{sorted(MONITORED_SPORTS)} — the missing sport can stop and "
+                "the other sport's run will answer for it"
+            )
+
+    def test_every_shared_name_is_sport_scoped_and_no_other_is(self) -> None:
+        """`sport_scoped` is what puts `metadata->>'sport'` in the staleness
+        query. Setting it on a job only one sport writes would filter against a
+        key that job never logs, and it would go stale-forever silently."""
+        shared = {"build_splits", "run_projections", "ingest_odds"}
+        for job in MONITORED_JOBS:
+            assert job.sport_scoped == (job.name in shared), (
+                f"{job.name} (sport={job.sport}) has sport_scoped="
+                f"{job.sport_scoped}; expected {job.name in shared}"
+            )
+
+    def test_sport_scoped_expectations_get_distinct_alert_keys(self) -> None:
+        # Two expectations share `name`, so a key built from `name` alone would
+        # collide and read as one finding about a job that is actually two.
+        labels = [job.label for job in MONITORED_JOBS]
+        assert len(labels) == len(set(labels)), (
+            "two expectations produce the same alert label: "
+            f"{sorted(l for l in labels if labels.count(l) > 1)}"
+        )
+
     def test_the_nfl_crons_are_expected_as_nfl(self) -> None:
         by_name = {job.name: job for job in MONITORED_JOBS}
         for name in ("nfl_ingest_reference", "nfl_ingest_stats", "nfl_ingest_plays"):

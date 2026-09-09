@@ -77,13 +77,27 @@ export type NoVigFilters = {
   sort?: NoVigSort;
 };
 
-export async function getNoVigPage(filters: NoVigFilters): Promise<NoVigPage> {
+/**
+ * Build a filtered no-vig query.
+ *
+ * ONE definition of "which quotes match", shared by the row read and the count,
+ * exactly as `buildBoardQuery` is shared by the board's read and its card scan.
+ * The two must agree or the page prints a total the table below it contradicts.
+ *
+ * `count`/`head` are the split the 500 forced — see `getNoVigPage`.
+ */
+function buildNoVigQuery(
+  select: string,
+  filters: NoVigFilters,
+  count?: "exact",
+  /** Return the count and NO rows. Only meaningful alongside `count`. */
+  head?: boolean,
+) {
   const supabase = createServerSupabaseClient();
-  const sort: NoVigSort = filters.sort ?? "hold";
 
   let query = supabase
     .from("v_no_vig_rows")
-    .select(COLUMNS, { count: "exact" })
+    .select(select, count ? { count, head } : undefined)
     .eq("sport", filters.sport ?? DEFAULT_SPORT)
     .eq("season", filters.season)
     .eq("week", filters.week)
@@ -105,6 +119,62 @@ export async function getNoVigPage(filters: NoVigFilters): Promise<NoVigPage> {
   if (filters.shoppableOnly) {
     query = query.gt("books_at_line", 1);
   }
+
+  return query;
+}
+
+/**
+ * How many quotes match, without fetching any.
+ *
+ * `head: true` returns the count and no body, the same trick `getBoardCounts`
+ * and `getBoardRowCount` use.
+ */
+async function getNoVigCount(filters: NoVigFilters): Promise<number> {
+  const result = await buildNoVigQuery("line_id", filters, "exact", true);
+  if (result.error) {
+    throw new Error(`No-vig count failed: ${result.error.message}`);
+  }
+  return result.count ?? 0;
+}
+
+/**
+ * THE COUNT IS A SEPARATE STATEMENT, AND THAT IS THE WHOLE FIX FOR A 500.
+ *
+ * `select(COLUMNS, { count: "exact" })` asks PostgREST for the total AND the
+ * ordered page in ONE statement, so the two costs add up against a single
+ * `statement_timeout` — measured on production 2026-09-08, the ordered page is
+ * 0.9-1.2 s and the exact count is 1.1-1.5 s warm but 3.9 s cold, and together
+ * they cancelled: `canceling statement due to statement timeout`, GET
+ * /no-vig?sport=nfl 500.
+ *
+ * College was NOT healthy at the time, only empty: `v_no_vig_rows` held 2,376
+ * NFL rows for 2026 week 1 and ZERO college rows for week 2. The page would
+ * have 500d for college too the moment week 2's lines were captured.
+ *
+ * Splitting them changes no SQL and no total — the same predicates run, from
+ * `buildNoVigQuery` — but neither statement carries the other's cost, so each
+ * finishes inside the timeout. Run in parallel, because nothing here needs the
+ * total before the rows: unlike the board, this page cannot ask PostgREST for
+ * a range past the end.
+ *
+ * WHY NOT MAKE THE VIEW FASTER INSTEAD. Measured, with EXPLAIN ANALYZE on
+ * production: the planner estimates ONE row out of the windowed CTE (actual
+ * 2,496), so whichever reference table lands on top of the join tree is
+ * scanned whole and nested-looped against a Materialize of the real rows —
+ * 1,789,632 rows discarded on a join filter, 70,630 buffer accesses. Three
+ * rewrites were tried and all failed for the same reason: a LATERAL for the
+ * conference join was WORSE (214k buffers, 2.4 s), correlated scalar
+ * subqueries just moved the bad node from `team_seasons` to `teams o`, and
+ * moving every join below the window functions changed nothing (639 ms against
+ * a 630 ms baseline). The estimate is what is wrong, and no join shape fixes
+ * it. The real fix is an index on `player_prop_lines (season, week, game_id,
+ * player_id, market_key, sportsbook_id, captured_at desc)`, which removes the
+ * sort under the DISTINCT ON entirely — it is ~5 MB, and production had 9 MB
+ * of headroom on 2026-09-08, so it waits for Supabase Pro.
+ */
+export async function getNoVigPage(filters: NoVigFilters): Promise<NoVigPage> {
+  const sort: NoVigSort = filters.sort ?? "hold";
+  const query = buildNoVigQuery(COLUMNS, filters);
 
   // THE DATABASE HALF OF `compareNoVigRows`, written inline rather than in a
   // helper: the Supabase builder's type changes with every chained call, so a
@@ -130,10 +200,12 @@ export async function getNoVigPage(filters: NoVigFilters): Promise<NoVigPage> {
               .order("line_id")
           : query.order("hold").order("line_id");
 
-  const result = await ordered.limit(PAGE_LIMIT);
+  const [result, total] = await Promise.all([
+    ordered.limit(PAGE_LIMIT),
+    getNoVigCount(filters),
+  ]);
 
   const rows = unwrap<DbRow[]>(result, "v_no_vig_rows").map(toNoVigRow);
-  const total = result.count ?? rows.length;
 
   // The database decided WHICH rows survived the cap; this decides the order
   // they are read in, and the two must agree or the page shows the right rows

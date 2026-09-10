@@ -603,6 +603,7 @@ def run(
 
         if not dry_run:
             conn.commit()
+            refresh_no_vig_rows(conn)
 
     # Loud, because the alternative is a board that silently stops covering part
     # of the slate while every counter above still reads as a successful run.
@@ -619,6 +620,34 @@ def run(
 
     log.info("Provider quota: %s", adapter.quota.summary())
     return report
+
+
+def refresh_no_vig_rows(conn: psycopg.Connection) -> None:
+    """Rebuild `mv_no_vig_rows` — the last step of writing odds, not a chore.
+
+    THIS JOB IS THE ONLY WRITER of `player_prop_lines`, and `mv_no_vig_rows`
+    (migration 0062) is derived from nothing else. So the refresh belongs here,
+    in the same run as the write, rather than on a schedule of its own: two
+    cadences guessing at each other is how `/no-vig` would come to show a price
+    the books have already moved off, and dropping a stale quote rather than
+    serving it is the one guarantee that page makes.
+
+    CONCURRENTLY because the plain form takes an ACCESS EXCLUSIVE lock, which
+    would block every reader for the length of the rebuild — a 6-hourly job
+    becoming a 6-hourly outage. It needs the unique index on `line_id`, which
+    0062 creates.
+
+    NOT wrapped in a try/except. A refresh that fails leaves the page serving
+    the previous capture with no sign anything is wrong, so it must fail the
+    job and reach `monitor_pipeline`, which already watches `ingest_odds` per
+    sport. Likewise it is NOT skipped when this run wrote no rows: a run that
+    found nothing new still proves the MV should match the table, and skipping
+    would let one earlier failure persist silently until the next write.
+    """
+    with conn.cursor() as cur:
+        cur.execute("refresh materialized view concurrently mv_no_vig_rows")
+    conn.commit()
+    log.info("Refreshed mv_no_vig_rows")
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -65,7 +65,18 @@ RETRY_BASE_SECONDS = 2.0
 
 
 class NflverseError(RuntimeError):
-    """A release asset could not be fetched, or was not what it claimed."""
+    """A release asset could not be fetched, or was not what it claimed.
+
+    `status` carries the HTTP status when the failure WAS an HTTP status, and
+    is None for a transport failure or a content check. It exists so a caller
+    can tell "this asset does not exist yet" (404) from "the network broke" or
+    "the file came back wrong" WITHOUT parsing the message string -- the
+    message is for humans and is free to change.
+    """
+
+    def __init__(self, *args: object, status: int | None = None) -> None:
+        super().__init__(*args)
+        self.status = status
 
 
 def cache_enabled() -> bool:
@@ -121,7 +132,9 @@ class NflverseClient:
                     payload = response.read()
                 break
             except urllib.error.HTTPError as exc:
-                raise NflverseError(f"{url} -> HTTP {exc.code}") from None
+                raise NflverseError(
+                    f"{url} -> HTTP {exc.code}", status=exc.code
+                ) from None
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 last = exc
                 if attempt == DOWNLOAD_ATTEMPTS:

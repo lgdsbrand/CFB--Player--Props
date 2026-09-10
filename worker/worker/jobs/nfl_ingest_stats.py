@@ -45,6 +45,67 @@ JOB_NAME = "nfl_ingest_stats"
 REPORTED_TABLES = ("player_game_stats",)
 
 
+def _ingest_snaps_allowing_a_missing_current_season(
+    client,
+    season: int,
+    counts,
+    *,
+    max_age: float | None,
+    current_season: int | None,
+) -> None:
+    """Load snap counts, tolerating a 404 for the season being played.
+
+    WHY THIS EXISTS. On 2026-09-10, hours after the NFL opener, the daily
+    results chain failed:
+
+        nfl_ingest_stats -> snap_counts/snap_counts_2026.csv -> HTTP 404
+
+    That chain is `&&`-joined in render.yaml:
+
+        nfl_ingest_reference && nfl_ingest_stats
+          && nfl_ingest_plays && build_splits --sport nfl
+
+    so a non-zero exit here stopped the two steps that actually matter.
+    Measured that morning: **2026 held 17,096 college plays and ZERO NFL
+    plays**, because the chain had never once got past this step. No plays
+    means no NFL defensive splits, which is CLAUDE.md section 5's core signal.
+
+    Snap counts come from Pro Football Reference and are published on their own
+    cadence, so early in a season the file legitimately does not exist yet
+    while `stats_player_week_{season}.csv` already does. Nothing consumes snaps
+    -- verified by grep across `worker/core/` and the web read layer, they are
+    stored and unread -- so an optional asset was taking down the critical path.
+
+    WHY ONLY THE CURRENT SEASON, AND WHY ONLY 404. A missing snap file for a
+    COMPLETED season is a real fault: the data exists upstream, so a 404 there
+    means the asset name or the season is wrong -- the frozen-legacy-asset trap
+    in `assets.py` is exactly that shape. Narrowing the tolerance to the season
+    being played keeps that failure loud. Narrowing it to 404 keeps a transport
+    failure or a content-check failure loud too: `NflverseError.status` is None
+    for those, so they re-raise here.
+
+    A blanket `--skip-snaps` on the cron was the cruder alternative and is
+    rejected on purpose: it would never load snaps once they DO appear, and it
+    puts the decision in a schedule file nobody re-reads.
+    """
+    try:
+        run_nfl_snaps_ingest(client, season, counts, max_age=max_age)
+    except NflverseError as exc:
+        if exc.status != 404 or season != current_season:
+            raise
+        # WARNING, not info. This is a real gap in what was loaded, and the
+        # run still reports success -- so the log line is the only trace.
+        log.warning(
+            "%d: snap counts not published yet (HTTP 404). CONTINUING, because "
+            "this is the season being played and nothing downstream reads "
+            "snaps; the rest of the results chain must not be blocked by an "
+            "asset that upstream has simply not posted. This clears itself "
+            "once nflverse publishes snap_counts_%d.csv.",
+            season, season,
+        )
+        counts.skip("snap_counts_not_published")
+
+
 def _require_box_scores(season: int) -> None:
     """Refuse a `--snaps-only` season whose box scores are not loaded.
 
@@ -142,14 +203,26 @@ def main(argv: list[str] | None = None) -> int:
                         frame["player_id"].n_unique(),
                     )
                 if not args.skip_snaps:
-                    snaps = client.fetch(
-                        "snap_counts", season, max_age=max_age_for(season)
-                    )
-                    log.info(
-                        "%d: %d snap row(s), %d player(s)",
-                        season, snaps.height,
-                        snaps["pfr_player_id"].n_unique(),
-                    )
+                    # Same tolerance as the write path, or --dry-run would
+                    # report a failure the real run no longer has -- and a
+                    # dry run exists precisely to predict the real one.
+                    try:
+                        snaps = client.fetch(
+                            "snap_counts", season, max_age=max_age_for(season)
+                        )
+                    except NflverseError as exc:
+                        if exc.status != 404 or season != current_season:
+                            raise
+                        log.warning(
+                            "%d: snap counts not published yet (HTTP 404); the "
+                            "real run continues past this.", season,
+                        )
+                    else:
+                        log.info(
+                            "%d: %d snap row(s), %d player(s)",
+                            season, snaps.height,
+                            snaps["pfr_player_id"].n_unique(),
+                        )
         except NflverseError as exc:
             log.error("%s", exc)
             return 3
@@ -177,8 +250,10 @@ def main(argv: list[str] | None = None) -> int:
                         client, season, counts, max_age=max_age_for(season)
                     )
                 if not args.skip_snaps:
-                    run_nfl_snaps_ingest(
-                        client, season, counts, max_age=max_age_for(season)
+                    _ingest_snaps_allowing_a_missing_current_season(
+                        client, season, counts,
+                        max_age=max_age_for(season),
+                        current_season=current_season,
                     )
             set_rows_written(run_id, total)
     except (NflverseError, ValueError) as exc:

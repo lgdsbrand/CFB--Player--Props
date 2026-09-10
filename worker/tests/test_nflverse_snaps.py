@@ -189,3 +189,150 @@ class TestSnapsOnly:
             nfl_ingest_stats, "fetch_one", lambda *a, **k: {"n": 14_252}
         )
         nfl_ingest_stats._require_box_scores(2024)
+
+
+class TestAnUnpublishedSnapFileDoesNotBlockTheChain:
+    """A 404 on the CURRENT season's snap file must not fail the job.
+
+    THE INCIDENT. 2026-09-10, hours after the NFL opener:
+
+        nfl_ingest_stats -> snap_counts/snap_counts_2026.csv -> HTTP 404
+
+    `stats_player_week_2026.csv` had already been published, so box scores
+    loaded fine and the job still exited 3. render.yaml joins the results chain
+    with `&&`, so `nfl_ingest_plays` and `build_splits --sport nfl` never ran --
+    and 2026 held 17,096 college plays against ZERO NFL plays as a result.
+
+    Snap counts come from Pro Football Reference on their own cadence, nothing
+    downstream reads them, and the chain behind them carries the core defensive
+    signal. So the 404 is tolerated, but only exactly where it is expected.
+    """
+
+    def _counts(self):
+        return NflReferenceCounts()
+
+    def test_a_404_on_the_current_season_is_survived(self, monkeypatch):
+        from worker.adapters.nflverse.client import NflverseError
+        from worker.jobs import nfl_ingest_stats
+
+        def boom(*a, **k):
+            raise NflverseError("snap_counts_2026.csv -> HTTP 404", status=404)
+
+        monkeypatch.setattr(nfl_ingest_stats, "run_nfl_snaps_ingest", boom)
+        counts = self._counts()
+        nfl_ingest_stats._ingest_snaps_allowing_a_missing_current_season(
+            object(), 2026, counts, max_age=None, current_season=2026,
+        )
+        # Survived AND left a trace. A silent skip would be the same bug in a
+        # quieter costume.
+        assert counts.skipped["snap_counts_not_published"] == 1
+
+    def test_a_404_on_a_COMPLETED_season_still_raises(self, monkeypatch):
+        """The file exists upstream for a finished season, so 404 is a fault.
+
+        This is the frozen-legacy-asset shape from assets.py: a wrong asset
+        name or a wrong season answers 404 too, and swallowing that everywhere
+        would hide it.
+        """
+        import pytest
+
+        from worker.adapters.nflverse.client import NflverseError
+        from worker.jobs import nfl_ingest_stats
+
+        def boom(*a, **k):
+            raise NflverseError("snap_counts_2024.csv -> HTTP 404", status=404)
+
+        monkeypatch.setattr(nfl_ingest_stats, "run_nfl_snaps_ingest", boom)
+        with pytest.raises(NflverseError):
+            nfl_ingest_stats._ingest_snaps_allowing_a_missing_current_season(
+                object(), 2024, self._counts(),
+                max_age=None, current_season=2026,
+            )
+
+    def test_a_TRANSPORT_failure_on_the_current_season_still_raises(
+        self, monkeypatch
+    ):
+        """`status is None` means the network broke, not "not posted yet".
+
+        Tolerating this would turn an nflverse outage into a run that reports
+        success with no snaps and no explanation.
+        """
+        import pytest
+
+        from worker.adapters.nflverse.client import NflverseError
+        from worker.jobs import nfl_ingest_stats
+
+        def boom(*a, **k):
+            raise NflverseError("snap_counts_2026.csv -> [WinError 10060]")
+
+        monkeypatch.setattr(nfl_ingest_stats, "run_nfl_snaps_ingest", boom)
+        with pytest.raises(NflverseError):
+            nfl_ingest_stats._ingest_snaps_allowing_a_missing_current_season(
+                object(), 2026, self._counts(),
+                max_age=None, current_season=2026,
+            )
+
+    def test_a_non_404_http_status_still_raises(self, monkeypatch):
+        """A 500 is upstream being broken, which is worth failing over."""
+        import pytest
+
+        from worker.adapters.nflverse.client import NflverseError
+        from worker.jobs import nfl_ingest_stats
+
+        def boom(*a, **k):
+            raise NflverseError("snap_counts_2026.csv -> HTTP 500", status=500)
+
+        monkeypatch.setattr(nfl_ingest_stats, "run_nfl_snaps_ingest", boom)
+        with pytest.raises(NflverseError):
+            nfl_ingest_stats._ingest_snaps_allowing_a_missing_current_season(
+                object(), 2026, self._counts(),
+                max_age=None, current_season=2026,
+            )
+
+    def test_no_current_season_means_no_tolerance(self, monkeypatch):
+        """`--seasons 2026` without `--current` makes no in-season claim.
+
+        `current_season` is None there, so nothing is the season being played
+        and the 404 is a fault like any other. This is what stops a backfill
+        from quietly skipping a snap file it should have found.
+        """
+        import pytest
+
+        from worker.adapters.nflverse.client import NflverseError
+        from worker.jobs import nfl_ingest_stats
+
+        def boom(*a, **k):
+            raise NflverseError("snap_counts_2026.csv -> HTTP 404", status=404)
+
+        monkeypatch.setattr(nfl_ingest_stats, "run_nfl_snaps_ingest", boom)
+        with pytest.raises(NflverseError):
+            nfl_ingest_stats._ingest_snaps_allowing_a_missing_current_season(
+                object(), 2026, self._counts(),
+                max_age=None, current_season=None,
+            )
+
+    def test_a_successful_pass_records_no_skip(self, monkeypatch):
+        from worker.jobs import nfl_ingest_stats
+
+        monkeypatch.setattr(
+            nfl_ingest_stats, "run_nfl_snaps_ingest", lambda *a, **k: None
+        )
+        counts = self._counts()
+        nfl_ingest_stats._ingest_snaps_allowing_a_missing_current_season(
+            object(), 2026, counts, max_age=None, current_season=2026,
+        )
+        assert counts.skipped == {}
+
+
+class TestTheErrorCarriesItsStatus:
+    """The 404 branch keys on `.status`, never on the message text."""
+
+    def test_an_http_failure_records_the_code(self):
+        from worker.adapters.nflverse.client import NflverseError
+
+        assert NflverseError("x", status=404).status == 404
+
+    def test_a_transport_failure_has_no_status(self):
+        from worker.adapters.nflverse.client import NflverseError
+
+        assert NflverseError("x").status is None

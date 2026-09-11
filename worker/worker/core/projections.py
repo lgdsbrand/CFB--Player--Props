@@ -171,10 +171,12 @@ def first_quarter_catalogue(catalogue: Sequence[dict[str, Any]]) -> list[dict[st
     from the first. Anything a position gets for the full game it gets for the
     first quarter, and nothing else.
 
-    NOT IN THE DATABASE CATALOGUE YET, on purpose. These markets are being
+    NOT IN THE ACTIVE CATALOGUE YET, on purpose. These markets are being
     measured, not published; `market_catalogue` is what the board and the weekly
     run read, and it stays untouched until the backtest says they are worth
-    showing. The parent's `ladder_step` is dropped for the same reason -- a
+    showing. The yardage three do have `markets` rows since migration 0065, but
+    INACTIVE -- they exist so DraftKings' first-quarter lines can be stored.
+    The parent's `ladder_step` is dropped for the same reason -- a
     first-quarter ladder is a display decision for when they ship.
     """
     parents = {parent: q1 for q1, parent in FIRST_QUARTER_PARENTS.items()}

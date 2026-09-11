@@ -1116,10 +1116,17 @@ check(G, "every market/position pair resolves to a family", """
      where resolve_distribution_family(mp.market_key, mp.position_group) is null
 """, lambda r: r["unresolved"] == 0)
 
-check(G, "all 9 markets and 17 market/position pairs present", """
-    select (select count(*) from markets) as markets,
-           (select count(*) from market_positions) as pairs
-""", lambda r: r["markets"] == 9 and r["pairs"] == 17)
+# ACTIVE markets, because 0065 added three inactive first-quarter rows that
+# exist only so DraftKings' Q1 lines have a key to reference. The third count
+# is the guard on that: a Q1 market switched on before `markets` can say which
+# sport it belongs to would put first-quarter tabs on the college board.
+check(G, "9 active markets, 17 market/position pairs, no first-quarter market active", """
+    select (select count(*) from markets where is_active) as markets,
+           (select count(*) from market_positions) as pairs,
+           (select count(*) from markets
+             where left(key, 3) = 'q1_' and is_active) as q1_active
+""", lambda r: r["markets"] == 9 and r["pairs"] == 17 and r["q1_active"] == 0,
+      ["markets", "pairs", "q1_active"])
 
 # The override mechanism has to be doing work. If every pair resolved to its
 # market default, the Phase 3d measurement would have been silently discarded

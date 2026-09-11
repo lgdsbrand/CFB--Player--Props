@@ -33,8 +33,10 @@ from worker.adapters.odds.http import (
     redact,
 )
 from worker.adapters.odds.markets import (
+    FIRST_QUARTER_KEY_TO_PROVIDER,
     OUR_KEY_TO_PROVIDER,
     PROVIDER_TO_OUR_KEY,
+    markets_for,
     our_key,
     provider_keys,
 )
@@ -59,8 +61,10 @@ def _book(key: str, title: str, markets: list[dict]) -> dict:
 class TestMarketMapping:
     def test_mapping_is_bijective(self):
         # A collision would make provider->ours lossy and silently merge two
-        # markets into one.
-        assert len(PROVIDER_TO_OUR_KEY) == len(OUR_KEY_TO_PROVIDER)
+        # markets into one. Counted across every market we can ask for.
+        assert len(PROVIDER_TO_OUR_KEY) == (
+            len(OUR_KEY_TO_PROVIDER) + len(FIRST_QUARTER_KEY_TO_PROVIDER)
+        )
 
     def test_every_seeded_market_is_mapped(self):
         # Mirrors the nine rows seeded in migration 0009. If a market is added
@@ -90,6 +94,100 @@ class TestMarketMapping:
 
     def test_our_key_returns_none_for_unrecognized(self):
         assert our_key("player_field_goals") is None
+
+
+class TestFirstQuarterMarkets:
+    """NFL-only, opt-in first-quarter markets (step 2c).
+
+    The property that matters most is the negative one: nothing that ran before
+    these existed asks for anything new, because the crons bill a shared pool.
+    """
+
+    FULL_GAME = sorted({
+        "pass_yards", "pass_tds", "pass_attempts", "pass_completions",
+        "rush_yards", "rush_attempts", "receptions", "rec_yards", "anytime_td",
+    })
+
+    def test_the_default_request_is_unchanged_for_both_sports(self):
+        assert markets_for("cfb") == self.FULL_GAME
+        assert markets_for("nfl") == self.FULL_GAME
+
+    def test_nfl_may_opt_in_by_name(self):
+        assert markets_for(
+            "nfl", ["q1_rec_yards", "q1_pass_yards", "q1_rec_yards"]
+        ) == ["q1_pass_yards", "q1_rec_yards"]
+
+    def test_nfl_may_mix_full_game_and_first_quarter(self):
+        assert markets_for("nfl", ["rec_yards", "q1_rec_yards"]) == [
+            "q1_rec_yards", "rec_yards",
+        ]
+
+    def test_college_cannot_ask_for_a_first_quarter_market(self):
+        # No book posts one. The run would bill nothing, store nothing, and
+        # read as "no lines yet".
+        with pytest.raises(ValueError, match="q1_rec_yards"):
+            markets_for("cfb", ["q1_rec_yards"])
+
+    def test_unknown_market_empty_request_and_unknown_sport_all_raise(self):
+        with pytest.raises(ValueError, match="no_such_market"):
+            markets_for("nfl", ["no_such_market"])
+        with pytest.raises(ValueError, match="No markets"):
+            markets_for("nfl", [])
+        with pytest.raises(KeyError, match="wnba"):
+            markets_for("wnba")
+
+    def test_provider_keys_translate_first_quarter(self):
+        assert provider_keys(["q1_pass_yards", "q1_rush_yards", "q1_rec_yards"]) == [
+            "player_pass_yds_q1", "player_rush_yds_q1", "player_reception_yds_q1",
+        ]
+
+    def test_one_way_first_quarter_anytime_td_is_deliberately_unmapped(self):
+        assert our_key("player_anytime_td_q1") is None
+
+    def test_a_first_quarter_response_parses_to_our_key(self):
+        payload = _event([
+            _book("draftkings", "DraftKings", [{
+                "key": "player_reception_yds_q1",
+                "outcomes": [
+                    {"name": "Over", "description": "A.J. Brown",
+                     "price": -120, "point": 14.5},
+                    {"name": "Under", "description": "A.J. Brown",
+                     "price": -110, "point": 14.5},
+                ],
+            }]),
+        ])
+        quotes, diagnostics = parse_event_odds(payload)
+
+        assert diagnostics.markets_unmapped == set()
+        assert [q.market_key for q in quotes] == ["q1_rec_yards"]
+        price = quotes[0].prices[0]
+        assert price.is_two_way
+        assert (price.line, price.over_price, price.under_price) == (14.5, -120, -110)
+
+    def test_mapping_migration_and_model_agree(self):
+        """Three definitions of one set, pinned together.
+
+        A mapped key with no `markets` row fails every insert on the foreign
+        key -- after the credits are spent. A row whose family differs from the
+        model's would describe a distribution the projector never builds.
+        """
+        import re
+        from pathlib import Path
+
+        from worker.core.projections import FIRST_QUARTER_FAMILIES
+
+        sql = (
+            Path(__file__).resolve().parents[2]
+            / "supabase" / "migrations" / "20260911090100_first_quarter_markets.sql"
+        ).read_text(encoding="utf-8")
+        rows = dict(re.findall(
+            r"\('(q1_\w+)',\s*'[^']*',\s*'[^']*',\s*'[^']*',\s*'q1_\w+',\s*'(\w+)'",
+            sql,
+        ))
+
+        assert set(rows) == set(FIRST_QUARTER_KEY_TO_PROVIDER)
+        for key, family in rows.items():
+            assert FIRST_QUARTER_FAMILIES[key] == family
 
 
 class TestParseTwoWay:

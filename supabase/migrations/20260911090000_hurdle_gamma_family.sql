@@ -1,0 +1,27 @@
+-- =============================================================================
+-- 0064 — Add the hurdle-gamma distribution family
+-- =============================================================================
+-- Deliberately alone in its own migration, for the reason 0014 gives: Postgres
+-- permits ALTER TYPE ... ADD VALUE inside a transaction but forbids USING the
+-- new value in that same transaction, and the Supabase CLI wraps each migration
+-- file in one. 0065 is the first use.
+--
+-- WHY THIS FAMILY EXISTS
+-- ----------------------
+-- First-quarter yardage is half zeros. Measured on NFL player-games 2023-25:
+--
+--     WR rec yds 49.4%   TE rec yds 53.4%   RB rec yds 64.2%
+--     QB rush yds 50.6%  RB rush yds 14.6%  QB pass yds 3.6%
+--
+-- A gamma has no mass at zero at all, and a normal spreads it across negative
+-- numbers the stat cannot take. A hurdle gamma is a point mass at zero plus a
+-- gamma for the games with any yards -- `worker/core/probability.py`, params
+-- (p_zero, shape, scale, optional loc). Scored in the NFL 2024-25 walk
+-- (docs/nfl-q1-calibration-report.html): q1_rec_yards ECE 0.0090, q1_rush_yards
+-- 0.0191, with learned widths of 0.961 and 1.027 -- right out of the box.
+--
+-- Python already implements it, so audit_data's "every distribution_family
+-- enum value is implemented in Python" stays green.
+-- =============================================================================
+
+alter type distribution_family add value if not exists 'hurdle_gamma';

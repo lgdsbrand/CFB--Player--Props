@@ -124,7 +124,7 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 ### Markets and odds
 | Table | Notes |
 |---|---|
-| `markets` | Catalogue. `stat_column` maps a market to the column it grades against; `ladder_step` the rung spacing |
+| `markets` | Catalogue. `stat_column` maps a market to the column it grades against; `ladder_step` the rung spacing. Readers take `is_active` rows only: the three `q1_*` yardage rows (0065) are **inactive**, there only so DraftKings' first-quarter lines can be stored, and they surface on `/no-vig` alone |
 | `market_positions` | Drives the position tabs and stat selector |
 | `sportsbooks` | |
 | `player_prop_lines` | **Append-only** line history; a moved line is a new row |

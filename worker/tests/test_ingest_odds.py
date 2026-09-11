@@ -100,6 +100,40 @@ class TestBothTeamsResolve:
             Event("Florida State Seminoles", "Stanford Cardinal"), games, RESOLVER
         ) is None
 
+    def test_a_rematch_months_away_does_not_take_the_only_loaded_game(self):
+        """Regression, measured on the NFL 2026 week-1 slate.
+
+        Only one week's games are loaded, so a division rematch in November
+        finds the September meeting as its ONLY candidate. The pair used to be
+        trusted outright there, and four real events matched week-1 games.
+        """
+        games = [_game(100, 2, 1, KICK, week=1)]
+        rematch = Event(
+            "Stanford Cardinal", "Florida State Seminoles",
+            commence=KICK + timedelta(days=49),
+        )
+        assert match_event_to_game(rematch, games, RESOLVER) is None
+
+    def test_the_lone_pair_drift_ceiling_is_inclusive(self):
+        ceiling = timedelta(hours=ingest_odds.SAME_PAIR_MAX_DRIFT_HOURS)
+        event = Event("Florida State Seminoles", "Stanford Cardinal")
+        at = [_game(100, 2, 1, KICK + ceiling)]
+        past = [_game(100, 2, 1, KICK + ceiling + timedelta(minutes=1))]
+        assert match_event_to_game(event, at, RESOLVER) is not None
+        assert match_event_to_game(event, past, RESOLVER) is None
+
+    def test_the_ceiling_covers_the_drift_already_pinned_and_misses_a_rematch(self):
+        assert 48 < ingest_odds.SAME_PAIR_MAX_DRIFT_HOURS < 7 * 24
+
+    def test_a_lone_pair_without_a_kickoff_still_matches(self):
+        """Unchanged: with nothing to measure, the pair is all there is."""
+        games = [_game(100, 2, 1, KICK)]
+        out = match_event_to_game(
+            Event("Florida State Seminoles", "Stanford Cardinal", commence=None),
+            games, RESOLVER,
+        )
+        assert out is not None and out[0]["id"] == 100
+
 
 class TestOneTeamResolves:
     """The provider sends a bare school with no mascot; we hold two Albanys."""
@@ -554,3 +588,96 @@ class TestOddsIngestSportSelection:
         assert 'load_games(conn, season, week, sport=sport)' in source
         assert 'sport_key_for(sport)' in source
         assert 'sport="cfb"' not in source
+
+
+class _QuotaStub:
+    def summary(self) -> str:
+        return "n/a"
+
+
+class _RecordingAdapter:
+    """Records what each call asked for. One matchable event, no quotes."""
+
+    def __init__(self) -> None:
+        self.asked: list[list[str]] = []
+        self.event_lists = 0
+        self.quota = _QuotaStub()
+
+    def list_events(self):
+        self.event_lists += 1
+        return [Event("Florida State Seminoles", "Stanford Cardinal")]
+
+    def fetch_props(self, event_id, market_keys):
+        self.asked.append(list(market_keys))
+        return []
+
+
+class TestMarketsFlag:
+    """`--markets` narrows ONE run to named markets. The crons never pass it.
+
+    It exists for the first-quarter capture: three DraftKings-only NFL markets,
+    run by hand on the free key just before kickoff, so that capture spends
+    nothing from the shared paid pool and changes no scheduled job's bill.
+    """
+
+    def _run(self, monkeypatch, **kw) -> _RecordingAdapter:
+        import contextlib
+
+        adapter = _RecordingAdapter()
+        monkeypatch.setattr(ingest_odds, "get_settings", lambda: _settings_free())
+        monkeypatch.setattr(ingest_odds, "get_adapter", lambda name, **_: adapter)
+        monkeypatch.setattr(
+            ingest_odds, "connect", lambda: contextlib.nullcontext(object())
+        )
+        monkeypatch.setattr(ingest_odds, "load_teams", lambda conn, sport: RESOLVER)
+        monkeypatch.setattr(
+            ingest_odds, "load_games",
+            lambda conn, season, week, sport: [_game(100, 2, 1, KICK)],
+        )
+        ingest_odds.run(
+            season=2025, week=8, adapter_name="theoddsapi", dry_run=True,
+            event_limit=None, **kw,
+        )
+        return adapter
+
+    def test_default_is_the_full_game_set_for_both_sports(self, monkeypatch):
+        """What every cron requested before first-quarter markets existed."""
+        from worker.adapters.odds.markets import OUR_KEY_TO_PROVIDER
+
+        for sport in ("cfb", "nfl"):
+            adapter = self._run(monkeypatch, sport=sport)
+            assert adapter.asked == [sorted(OUR_KEY_TO_PROVIDER)]
+
+    def test_named_markets_are_all_that_is_asked_for(self, monkeypatch):
+        adapter = self._run(
+            monkeypatch, sport="nfl",
+            markets=["q1_rec_yards", "q1_pass_yards", "q1_rush_yards"],
+        )
+        assert adapter.asked == [["q1_pass_yards", "q1_rec_yards", "q1_rush_yards"]]
+
+    def test_college_first_quarter_is_refused_before_any_call(self, monkeypatch):
+        """No book posts it, so a run asking would succeed and store nothing."""
+        adapter = _RecordingAdapter()
+        monkeypatch.setattr(ingest_odds, "get_adapter", lambda name, **_: adapter)
+        with pytest.raises(ValueError, match="q1_rec_yards"):
+            ingest_odds.run(
+                season=2026, week=2, adapter_name="theoddsapi", dry_run=True,
+                event_limit=None, sport="cfb", markets=["q1_rec_yards"],
+            )
+        assert adapter.event_lists == 0
+        assert adapter.asked == []
+
+    def test_cli_refuses_a_bad_market_before_reading_settings(self, monkeypatch):
+        def settings_must_not_load():
+            raise AssertionError("settings were read before the markets were checked")
+
+        monkeypatch.setattr(ingest_odds, "get_settings", settings_must_not_load)
+        assert ingest_odds.main(["--sport", "cfb", "--markets", "q1_rec_yards"]) == 2
+        assert ingest_odds.main(["--sport", "nfl", "--markets", "no_such_market"]) == 2
+        assert ingest_odds.main(["--sport", "nfl", "--markets", " , "]) == 2
+
+    def test_the_flag_is_comma_separated_and_forgiving_about_spaces(self):
+        assert ingest_odds._parse_markets(
+            " q1_rec_yards, q1_pass_yards ,,q1_rush_yards"
+        ) == ["q1_rec_yards", "q1_pass_yards", "q1_rush_yards"]
+        assert ingest_odds._parse_markets(None) is None

@@ -481,6 +481,35 @@ Three things it refuses to do:
 **Monitored:** warning, `max_age_hours=18`, gated on `app_config.odds_adapter`
 not being `"none"`.
 
+##### First-quarter NFL lines — by hand, `--markets`, free key
+
+```powershell
+# from worker/, against PRODUCTION (a bare run writes to DEV -- see below)
+$env:SUPABASE_DB_URL = (Select-String -Path ..\.env -Pattern '^MIGRATION_TARGET_DB_URL=').Line.Split('=',2)[1].Trim('"')
+.\.venv\Scripts\python.exe -m worker.jobs.ingest_odds --sport nfl --season 2026 --week 1 --free --markets q1_pass_yards,q1_rush_yards,q1_rec_yards
+Remove-Item Env:SUPABASE_DB_URL
+```
+
+`--markets` narrows one run to named markets. **No cron passes it**, so every
+scheduled capture still requests the nine full-game markets and nothing else.
+The three first-quarter keys are NFL-only (`markets_for` refuses them for
+college, before any call) and DraftKings is the only book posting them.
+
+- **When:** about 30 minutes before the first kickoff of a window (Sunday
+  12:30 ET for the 13:00 slate; Monday ~20:00 ET for Monday night). The
+  6-hourly cron's last capture before a 13:00 ET slate is 08:20 ET, too early
+  to stand in for a closing line.
+- **Cost:** at most 3 credits per event, on `ODDS_API_KEY_FREE` (500/month,
+  separate from the client's shared pool). A 13-game Sunday is at most 39.
+  The event list is free.
+- **`--season`/`--week` explicitly**, so a Monday-evening run cannot resolve to
+  the following week's slate.
+- **Where the lines show:** `/no-vig` only. The `markets` rows are inactive
+  (migration 0065), so neither board reads them. They are stored
+  `is_closing = false`, like every live capture.
+- **Why by hand:** a line not captured before kickoff can only be bought later
+  from the historical endpoint at 10x the credits.
+
 #### `generate_ai_reads` — Wednesday 14:00 UTC
 
 ```bash

@@ -52,8 +52,8 @@ from worker.adapters.odds import (
     get_adapter,
 )
 from worker.adapters.odds.markets import (
-    OUR_KEY_TO_PROVIDER,
     SPORT_KEY_BY_SPORT,
+    markets_for,
     sport_key_for,
 )
 from worker.adapters.odds.null import ADAPTER_NAME as NULL_ADAPTER_NAME
@@ -79,6 +79,23 @@ JOB_NAME = "ingest_odds"
 # between the same pair of teams, which cannot happen inside one season anyway.
 # Six hours comfortably covers the drift without reaching the next slate.
 KICKOFF_TOLERANCE_HOURS = 6
+
+# How far kickoff may sit from ours when the team pair leaves ONE candidate game.
+#
+# The pair used to be trusted outright here, on the reasoning that two FBS teams
+# meet at most once in a regular season. THE NFL BREAKS THAT: division rivals
+# meet twice. `load_games` loads one week, so a November rematch event found the
+# September game as its only candidate and matched it. Measured 2026-09-11 on
+# the NFL week-1 slate: 18 events matched 14 upcoming games -- KC@DEN (1 Nov),
+# PHI@WAS (2 Nov), MIN@GB (15 Nov) and NYG@DAL (3 Jan) each pinned onto the
+# week-1 meeting. They carried no props yet, so nothing was billed or written;
+# once a rematch is priced its lines would land on the wrong game, and every
+# check would pass because season and week agree with the game they point at.
+# College has the same shape in a conference title rematch.
+#
+# 72 hours keeps the tolerance `test_kickoff_drift_does_not_break_the_match`
+# pins (48h of TV-window drift) and sits far below the gap to any rematch.
+SAME_PAIR_MAX_DRIFT_HOURS = 72
 
 
 @dataclass
@@ -290,13 +307,21 @@ def _nearest_kickoff(
     """
     if not candidates:
         return None
-    if len(candidates) == 1 and not require_unique_window:
-        return candidates[0]
     if event.commence_time is None:
+        # Nothing to measure with: a lone pair still matches, and anything that
+        # needs kickoff to decide does not.
+        if len(candidates) == 1 and not require_unique_window:
+            return candidates[0]
         return None
 
     def distance(game: dict) -> float:
         return abs((game["start_date"] - event.commence_time).total_seconds())
+
+    # A LONE CANDIDATE IS STILL BOUNDED. See SAME_PAIR_MAX_DRIFT_HOURS: the
+    # pair is a key within one week's games, never across a season.
+    if len(candidates) == 1 and not require_unique_window:
+        game = candidates[0]
+        return game if distance(game) <= SAME_PAIR_MAX_DRIFT_HOURS * 3600 else None
 
     within = [
         g for g in candidates
@@ -470,8 +495,14 @@ def run(
     event_limit: int | None,
     prefer_free: bool = False,
     sport: str = "cfb",
+    markets: list[str] | None = None,
 ) -> IngestReport:
     report = IngestReport()
+    # Resolved FIRST, before the key or the event list: a market this sport
+    # cannot carry must cost nothing to refuse. None is the full-game set every
+    # cron has always requested.
+    market_keys = markets_for(sport, markets)
+    log.info("Requesting %d market(s): %s", len(market_keys), ", ".join(market_keys))
     settings = get_settings()
 
     kwargs = {}
@@ -580,9 +611,7 @@ def run(
             processed += 1
 
             try:
-                quotes = adapter.fetch_props(
-                    event.event_id, sorted(OUR_KEY_TO_PROVIDER)
-                )
+                quotes = adapter.fetch_props(event.event_id, market_keys)
             except OddsQuotaError:
                 log.error(
                     "Out of credits after %d event(s). Stopping; what was "
@@ -650,6 +679,13 @@ def refresh_no_vig_rows(conn: psycopg.Connection) -> None:
     log.info("Refreshed mv_no_vig_rows")
 
 
+def _parse_markets(value: str | None) -> list[str] | None:
+    """`--markets` text -> keys. Blanks between commas are ignored; None stays None."""
+    if value is None:
+        return None
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     # Both default to the current slate so this can run on a cron, which has
@@ -687,7 +723,26 @@ def main(argv: list[str] | None = None) -> int:
              "has already run out mid-month once; this is the fallback for a "
              "slate that needs lines while that pool is empty.",
     )
+    parser.add_argument(
+        "--markets",
+        help="Comma-separated market keys to request INSTEAD of the full-game "
+             "set, e.g. q1_pass_yards,q1_rush_yards,q1_rec_yards (NFL only). "
+             "No cron passes this: it is for the by-hand first-quarter capture "
+             "just before kickoff. Checked against the sport before any call.",
+    )
     args = parser.parse_args(argv)
+
+    # Checked BEFORE settings, the adapter or the database: a market the sport
+    # cannot carry is refused for free, with nothing to connect to.
+    try:
+        markets = (
+            None if args.markets is None
+            else markets_for(args.sport, _parse_markets(args.markets))
+        )
+    except (ValueError, KeyError) as exc:
+        configure_logging("INFO")
+        log.error("%s", exc)
+        return 2
 
     try:
         settings = get_settings()
@@ -725,7 +780,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with pipeline_run(
             JOB_NAME,
-            metadata={"season": season, "sport": args.sport, "week": week},
+            metadata={
+                "season": season, "sport": args.sport, "week": week,
+                # Only when narrowed, so a by-hand first-quarter capture is
+                # distinguishable from a cron run in pipeline_runs.
+                **({"markets": markets} if markets is not None else {}),
+            },
         ) as run_id:
             report = run(
                 season=season,
@@ -735,6 +795,7 @@ def main(argv: list[str] | None = None) -> int:
                 event_limit=args.event_limit,
                 prefer_free=args.free,
                 sport=args.sport,
+                markets=markets,
             )
             log.info(
                 "Odds ingest (%s, %s%s):\n%s",

@@ -1,0 +1,205 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Calibration report — CFB player props</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.55 -apple-system, "Segoe UI", system-ui, sans-serif;
+         max-width: 60rem; margin: 2rem auto; padding: 0 1.25rem; }
+  h1 { font-size: 1.6rem; margin-bottom: .2rem; }
+  h2 { margin-top: 2.4rem; border-bottom: 1px solid #8884; padding-bottom: .3rem; }
+  h3 { margin-top: 1.6rem; font-size: 1.05rem; }
+  .sub { opacity: .7; margin-top: 0; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: .4rem .55rem; text-align: right; border-bottom: 1px solid #8883; }
+  th:first-child, td.name { text-align: left; }
+  th { font-weight: 600; font-size: .82rem; text-transform: uppercase;
+        letter-spacing: .04em; opacity: .75; }
+  .scroll { overflow-x: auto; }
+  .good { color: #15803d; font-weight: 600; }
+  .bad  { color: #b91c1c; font-weight: 600; }
+  @media (prefers-color-scheme: dark) {
+    .good { color: #4ade80; } .bad { color: #f87171; }
+  }
+  .reliability { width: min(408px, 100%); height: auto; }
+  .grid { stroke: #8884; stroke-width: 1; }
+  .ideal { stroke: #8888; stroke-width: 1.5; stroke-dasharray: 5 4; }
+  .curve { fill: none; stroke: #6366f1; stroke-width: 2; }
+  .pt { fill: #6366f1cc; stroke: #6366f1; }
+  .tick, .axis { font-size: 11px; fill: currentColor; opacity: .7; }
+  .axis { font-size: 12px; }
+  .note { background: #8881; border-left: 3px solid #6366f1;
+           padding: .8rem 1rem; border-radius: 0 6px 6px 0; }
+  .warn { border-left-color: #f5a623; }
+  ul { padding-left: 1.1rem; }
+  li { margin: .4rem 0; }
+  code { background: #8882; padding: .1rem .3rem; border-radius: 3px; }
+</style>
+
+<h1>Calibration report</h1>
+<p class="sub">College football player props &middot; seasons
+2024, 2025 &middot; generated 2026-09-11 04:46 UTC</p>
+
+<div class="note">
+<strong>What this measures.</strong> When the model says 60%, does it hit ~60%?
+Every prediction is made walk-forward with a knowledge cutoff at the week being
+predicted, so no feature draws on the week it is forecasting or anything after it.
+</div>
+
+<div class="note warn" style="margin-top:.8rem">
+<strong>What this does not measure.</strong> Whether the edge threshold makes
+money. Edge is <code>model probability &minus; de-vigged book probability</code>,
+and no historical book prices are available &mdash; historical player props sit
+behind a paid plan whose monthly allowance is shared with the client's other
+models, making a full-season backfill unaffordable. Calibration and edge are
+separate claims and this report only supports the first. Edge validation accrues
+from live weeks once odds ingestion starts.
+</div>
+
+<h2>Overall</h2>
+<div class="scroll">
+<table>
+  <thead><tr>
+    <th>group</th><th>n</th><th>base</th><th>Brier</th><th>skill</th>
+    <th>log loss</th><th>ECE</th><th>sharpness</th><th>worst bin</th>
+  </tr></thead>
+  <tbody><tr><td class='name'>all predictions</td><td>192,817</td><td>0.357</td><td>0.1835</td><td class='good'>+0.201</td><td>0.5476</td><td class='good'>0.0050</td><td>0.231</td><td>0.94&rarr;0.83 (-0.11)</td></tr></tbody>
+</table>
+</div>
+
+<h3>Reliability</h3>
+<svg viewBox="0 0 408 408" role="img" aria-label="Overall reliability" class="reliability"><title>Overall reliability</title><line x1="44.0" y1="44" x2="44.0" y2="364" class="grid"/><line x1="44" y1="364.0" x2="364" y2="364.0" class="grid"/><text x="44.0" y="380" class="tick" text-anchor="middle">0.0</text><text x="36" y="364.0" class="tick" text-anchor="end" dominant-baseline="middle">0.0</text><line x1="108.0" y1="44" x2="108.0" y2="364" class="grid"/><line x1="44" y1="300.0" x2="364" y2="300.0" class="grid"/><text x="108.0" y="380" class="tick" text-anchor="middle">0.2</text><text x="36" y="300.0" class="tick" text-anchor="end" dominant-baseline="middle">0.2</text><line x1="172.0" y1="44" x2="172.0" y2="364" class="grid"/><line x1="44" y1="236.0" x2="364" y2="236.0" class="grid"/><text x="172.0" y="380" class="tick" text-anchor="middle">0.4</text><text x="36" y="236.0" class="tick" text-anchor="end" dominant-baseline="middle">0.4</text><line x1="236.0" y1="44" x2="236.0" y2="364" class="grid"/><line x1="44" y1="172.0" x2="364" y2="172.0" class="grid"/><text x="236.0" y="380" class="tick" text-anchor="middle">0.6</text><text x="36" y="172.0" class="tick" text-anchor="end" dominant-baseline="middle">0.6</text><line x1="300.0" y1="44" x2="300.0" y2="364" class="grid"/><line x1="44" y1="108.0" x2="364" y2="108.0" class="grid"/><text x="300.0" y="380" class="tick" text-anchor="middle">0.8</text><text x="36" y="108.0" class="tick" text-anchor="end" dominant-baseline="middle">0.8</text><line x1="364.0" y1="44" x2="364.0" y2="364" class="grid"/><line x1="44" y1="44.0" x2="364" y2="44.0" class="grid"/><text x="364.0" y="380" class="tick" text-anchor="middle">1.0</text><text x="36" y="44.0" class="tick" text-anchor="end" dominant-baseline="middle">1.0</text><line x1="44" y1="364.0" x2="364" y2="44.0" class="ideal"/><path d="M60.0,344.7 L94.5,312.9 L123.0,285.0 L155.2,255.0 L187.2,220.0 L219.5,187.0 L251.3,157.3 L283.7,124.8 L313.1,102.9 L345.6,97.4" class="curve"/><circle cx="60.0" cy="344.7" r="7.2" class="pt"><title>predicted 0.050, observed 0.060, n=14,741</title></circle><circle cx="94.5" cy="312.9" r="10.0" class="pt"><title>predicted 0.158, observed 0.160, n=40,020</title></circle><circle cx="123.0" cy="285.0" r="10.0" class="pt"><title>predicted 0.247, observed 0.247, n=40,232</title></circle><circle cx="155.2" cy="255.0" r="8.8" class="pt"><title>predicted 0.347, observed 0.341, n=27,982</title></circle><circle cx="187.2" cy="220.0" r="8.0" class="pt"><title>predicted 0.448, observed 0.450, n=20,602</title></circle><circle cx="219.5" cy="187.0" r="7.5" class="pt"><title>predicted 0.548, observed 0.553, n=16,304</title></circle><circle cx="251.3" cy="157.3" r="7.0" class="pt"><title>predicted 0.648, observed 0.646, n=13,174</title></circle><circle cx="283.7" cy="124.8" r="6.7" class="pt"><title>predicted 0.749, observed 0.748, n=11,199</title></circle><circle cx="313.1" cy="102.9" r="5.9" class="pt"><title>predicted 0.841, observed 0.816, n=6,742</title></circle><circle cx="345.6" cy="97.4" r="4.5" class="pt"><title>predicted 0.942, observed 0.833, n=1,821</title></circle><text x="204.0" y="402" class="axis" text-anchor="middle">model probability</text><text x="14" y="204.0" class="axis" text-anchor="middle" transform="rotate(-90 14 204.0)">observed rate</text></svg>
+
+
+<div class="note warn" style="margin-top:.8rem">
+<strong>Where it is reliable, and where it is not.</strong> The headline ECE
+averages the whole curve, and this curve is not uniform. Around
+0.25 the model is close to exact
+(0.247 stated against 0.247 observed,
+-0.000). At
+0.94 it is overconfident by
+0.109 &mdash; it states 0.942 and hits
+0.833 across 1,821 predictions. The projected
+distributions have tails that are too thin, so extreme lines draw more certainty
+than the outcomes support.
+<br><br>
+This matters more than the aggregate suggests, because
+<strong>the board sorts by edge</strong>: the picks it surfaces first, and the
+only ones an EDGES ONLY filter leaves, are drawn disproportionately from exactly
+these confident bins. 16,562 predictions (8.6%) sit
+past 0.9 or below 0.1.
+<br><br>
+<strong>How much to discount it.</strong> Part of this is the synthetic lines
+rather than the model: an offset a full standard deviation below a projection
+mechanically produces a near-certain over, and a book would not post that line.
+The extreme bins are therefore over-represented here relative to a real board,
+and the aggregate ECE is correspondingly pessimistic. The direction of the
+error is real regardless, and widening the tails is the first thing to try
+before this reaches production.
+</div>
+
+<p><strong>Reading it.</strong> The dashed diagonal is perfect calibration.
+Points above it mean the model was too cautious at that confidence; below, too
+confident. Point size scales with how many predictions landed in the bin, so a
+sparse bin does not shout as loudly as a well-populated one.
+<strong>ECE</strong> is the average gap between stated and observed probability,
+weighted by bin size &mdash; the single number closest to "when it says 60%, does
+it hit 60%". <strong>Brier skill</strong> compares against always predicting the
+base rate: positive means the model beats that, zero means it adds nothing.
+<strong>Sharpness</strong> is how far from a coin flip the model is willing to
+go; a perfectly calibrated model that always says 50% is useless, so calibration
+and sharpness have to be read together.</p>
+
+<h2>By market</h2>
+
+<h3>Market</h3>
+<div class="scroll">
+<table>
+  <thead><tr>
+    <th>group</th><th>n</th><th>base</th><th>Brier</th><th>skill</th>
+    <th>log loss</th><th>ECE</th><th>sharpness</th><th>worst bin</th>
+  </tr></thead>
+  <tbody><tr><td class='name'>anytime_td</td><td>10,182</td><td>0.206</td><td>0.1520</td><td class='good'>+0.070</td><td>0.4752</td><td class='good'>0.0149</td><td>0.303</td><td>0.64&rarr;0.47 (-0.16)</td></tr><tr><td class='name'>pass_attempts</td><td>5,307</td><td>0.500</td><td>0.1926</td><td class='good'>+0.229</td><td>0.5904</td><td class=''>0.0348</td><td>0.220</td><td>0.96&rarr;0.79 (-0.16)</td></tr><tr><td class='name'>pass_completions</td><td>5,306</td><td>0.488</td><td>0.1955</td><td class='good'>+0.218</td><td>0.5884</td><td class=''>0.0308</td><td>0.221</td><td>0.95&rarr;0.77 (-0.18)</td></tr><tr><td class='name'>pass_tds</td><td>4,360</td><td>0.378</td><td>0.1917</td><td class='good'>+0.185</td><td>0.5668</td><td class=''>0.0283</td><td>0.230</td><td>0.84&rarr;0.78 (-0.06)</td></tr><tr><td class='name'>pass_yards</td><td>5,267</td><td>0.499</td><td>0.1931</td><td class='good'>+0.228</td><td>0.5702</td><td class='good'>0.0133</td><td>0.216</td><td>0.93&rarr;0.85 (-0.08)</td></tr><tr><td class='name'>q1_anytime_td</td><td>10,182</td><td>0.048</td><td>0.0446</td><td class='good'>+0.023</td><td>0.1829</td><td class='good'>0.0035</td><td>0.455</td><td>0.23&rarr;0.14 (-0.09)</td></tr><tr><td class='name'>q1_pass_yards</td><td>5,291</td><td>0.476</td><td>0.2078</td><td class='good'>+0.167</td><td>0.6138</td><td class=''>0.0400</td><td>0.212</td><td>0.94&rarr;0.71 (-0.23)</td></tr><tr><td class='name'>q1_rec_yards</td><td>31,623</td><td>0.248</td><td>0.1723</td><td class='good'>+0.077</td><td>0.5244</td><td class='good'>0.0090</td><td>0.253</td><td>0.64&rarr;0.72 (+0.08)</td></tr><tr><td class='name'>q1_rush_yards</td><td>14,052</td><td>0.333</td><td>0.1879</td><td class='good'>+0.154</td><td>0.5597</td><td class='good'>0.0191</td><td>0.211</td><td>0.84&rarr;0.89 (+0.04)</td></tr><tr><td class='name'>rec_yards</td><td>38,366</td><td>0.415</td><td>0.2089</td><td class='good'>+0.140</td><td>0.6070</td><td class='good'>0.0200</td><td>0.196</td><td>0.94&rarr;0.83 (-0.11)</td></tr><tr><td class='name'>receptions</td><td>36,407</td><td>0.392</td><td>0.1872</td><td class='good'>+0.214</td><td>0.5563</td><td class='good'>0.0124</td><td>0.210</td><td>0.75&rarr;0.78 (+0.03)</td></tr><tr><td class='name'>rush_attempts</td><td>11,288</td><td>0.458</td><td>0.2092</td><td class='good'>+0.157</td><td>0.6107</td><td class=''>0.0329</td><td>0.205</td><td>0.95&rarr;0.82 (-0.13)</td></tr><tr><td class='name'>rush_yards</td><td>15,186</td><td>0.422</td><td>0.2032</td><td class='good'>+0.167</td><td>0.5942</td><td class=''>0.0406</td><td>0.179</td><td>0.06&rarr;0.15 (+0.09)</td></tr></tbody>
+</table>
+</div>
+
+<h2>By position</h2>
+
+<h3>Position</h3>
+<div class="scroll">
+<table>
+  <thead><tr>
+    <th>group</th><th>n</th><th>base</th><th>Brier</th><th>skill</th>
+    <th>log loss</th><th>ECE</th><th>sharpness</th><th>worst bin</th>
+  </tr></thead>
+  <tbody><tr><td class='name'>QB</td><td>36,072</td><td>0.416</td><td>0.1881</td><td class='good'>+0.226</td><td>0.5636</td><td class='good'>0.0150</td><td>0.229</td><td>0.95&rarr;0.79 (-0.16)</td></tr><tr><td class='name'>RB</td><td>68,068</td><td>0.350</td><td>0.1868</td><td class='good'>+0.179</td><td>0.5555</td><td class='good'>0.0105</td><td>0.226</td><td>0.94&rarr;0.84 (-0.10)</td></tr><tr><td class='name'>TE</td><td>30,762</td><td>0.337</td><td>0.1779</td><td class='good'>+0.204</td><td>0.5323</td><td class='good'>0.0128</td><td>0.241</td><td>0.93&rarr;0.89 (-0.05)</td></tr><tr><td class='name'>WR</td><td>57,915</td><td>0.341</td><td>0.1796</td><td class='good'>+0.200</td><td>0.5364</td><td class='good'>0.0080</td><td>0.231</td><td>0.94&rarr;0.90 (-0.04)</td></tr></tbody>
+</table>
+</div>
+
+<h2>Opening, early and late season</h2>
+<p>College projections lean hardest on priors early, when roster turnover from
+the transfer portal means last year's production often happened at another
+school and the opponent adjustment is fitted on a barely-connected schedule
+graph. Averaging the season together would hide exactly that.</p>
+<p><strong>Weeks 1-2 are reported apart from the rest of the early season</strong>
+because they are a different regime rather than a harder version of the same
+one: no current-season game has been played, so the projection is prior season
+and position baseline throughout; the players are admitted by a different rule
+(a full prior season in place of two current games); and the opponent adjustment
+is neutral, there being no defensive ratings to adjust with until week 2. Read
+this row on its own when deciding whether the board opens with the season.</p>
+
+<h3>Phase</h3>
+<div class="scroll">
+<table>
+  <thead><tr>
+    <th>group</th><th>n</th><th>base</th><th>Brier</th><th>skill</th>
+    <th>log loss</th><th>ECE</th><th>sharpness</th><th>worst bin</th>
+  </tr></thead>
+  <tbody><tr><td class='name'>wk1-2 opening</td><td>20,264</td><td>0.332</td><td>0.1761</td><td class='good'>+0.205</td><td>0.5313</td><td class='good'>0.0175</td><td>0.243</td><td>0.95&rarr;0.81 (-0.14)</td></tr><tr><td class='name'>wk3-6 early</td><td>39,815</td><td>0.378</td><td>0.1875</td><td class='good'>+0.202</td><td>0.5571</td><td class=''>0.0229</td><td>0.237</td><td>0.94&rarr;0.89 (-0.05)</td></tr><tr><td class='name'>wk7+ late</td><td>132,738</td><td>0.355</td><td>0.1834</td><td class='good'>+0.200</td><td>0.5472</td><td class='good'>0.0069</td><td>0.227</td><td>0.94&rarr;0.79 (-0.15)</td></tr></tbody>
+</table>
+</div>
+
+<h2>Transfers, in the opening weeks and after</h2>
+<p>A weeks 1-2 projection <em>is</em> last season's production, and last season's
+production does not travel evenly. Measured year over year, a wide receiver who
+stayed carries a receptions correlation of 0.402 and one who moved 0.112; running
+back rush attempts, 0.481 against 0.208. Anytime touchdown is the exception — it
+holds up for both, because scoring propensity belongs to the player while target
+share belongs to the offense around him. Roughly a quarter to a third of the
+opening-weekend pool changed school.</p>
+<p>The later weeks are here as the control. If the same gap appears there, it is
+not an opening-weekend problem; if it appears only at the top, the honest
+opening board is a narrower one — returning starters on the same team — rather
+than no board at all.</p>
+
+<h3>Phase and transfer</h3>
+<div class="scroll">
+<table>
+  <thead><tr>
+    <th>group</th><th>n</th><th>base</th><th>Brier</th><th>skill</th>
+    <th>log loss</th><th>ECE</th><th>sharpness</th><th>worst bin</th>
+  </tr></thead>
+  <tbody><tr><td class='name'>wk1-2 changed team</td><td>4,205</td><td>0.319</td><td>0.1791</td><td class='good'>+0.176</td><td>0.5393</td><td class=''>0.0328</td><td>0.243</td><td>0.95&rarr;0.76 (-0.19)</td></tr><tr><td class='name'>wk1-2 same team</td><td>16,059</td><td>0.335</td><td>0.1754</td><td class='good'>+0.213</td><td>0.5292</td><td class='good'>0.0143</td><td>0.243</td><td>0.95&rarr;0.83 (-0.12)</td></tr><tr><td class='name'>wk3+ changed team</td><td>33,032</td><td>0.341</td><td>0.1845</td><td class='good'>+0.179</td><td>0.5519</td><td class=''>0.0231</td><td>0.230</td><td>0.95&rarr;0.76 (-0.19)</td></tr><tr><td class='name'>wk3+ same team</td><td>139,521</td><td>0.365</td><td>0.1843</td><td class='good'>+0.205</td><td>0.5489</td><td class='good'>0.0074</td><td>0.229</td><td>0.94&rarr;0.86 (-0.08)</td></tr></tbody>
+</table>
+</div>
+
+<h2>By season</h2>
+
+<h3>Season</h3>
+<div class="scroll">
+<table>
+  <thead><tr>
+    <th>group</th><th>n</th><th>base</th><th>Brier</th><th>skill</th>
+    <th>log loss</th><th>ECE</th><th>sharpness</th><th>worst bin</th>
+  </tr></thead>
+  <tbody><tr><td class='name'>2024</td><td>96,622</td><td>0.359</td><td>0.1847</td><td class='good'>+0.198</td><td>0.5513</td><td class='good'>0.0097</td><td>0.234</td><td>0.94&rarr;0.82 (-0.13)</td></tr><tr><td class='name'>2025</td><td>96,195</td><td>0.356</td><td>0.1823</td><td class='good'>+0.205</td><td>0.5438</td><td class='good'>0.0084</td><td>0.227</td><td>0.94&rarr;0.85 (-0.09)</td></tr></tbody>
+</table>
+</div>
+
+<h2>Caveats</h2>
+<ul><li><strong>Correlated observations.</strong> Each projection is graded at about 3.2 lines, and those share one outcome. The effective sample is therefore smaller than the row count: treat the point estimates as sound and any implied precision as optimistic.</li><li><strong>Lines are synthetic.</strong> No historical book lines exist, so each line is the player's own trailing average through the previous week, offset in units of the projected standard deviation and rounded to a half-point. That is knowable before kickoff and independent of the model, which is what calibration requires — but it is not what a book would have posted, and a real line carries information a trailing average does not.</li><li><strong>Anytime-TD clustering constants were fitted in-sample.</strong> The per-position parameters mapping expected touchdowns to P(scored) were measured on these same seasons. They are four scalars describing a structural fact rather than a per-player fit, so the leakage is small — but it is not zero, and anytime-TD calibration here will look slightly better than it would out of sample.</li><li><strong>2 seasons (2024, 2025).</strong> Cells split by market and position get thin at the extremes; bins under 30 predictions are excluded from the worst-bin column for that reason. A further full season is affordable if any cell needs it.</li><li><strong>Observed weather, not forecast.</strong> Entering a week you would have had a forecast; the model reads what actually happened. The bias runs in the flattering direction. Temperature and wind forecast well a day or two out so the effect should be small, and <code>include_weather=False</code> exists to measure rather than assume it.</li><li><strong>Usage filter.</strong> Only players reaching 50% of their position's typical output are graded, matching the population a book would post lines for. Including everyone would improve every aggregate while saying nothing about the picks the product actually shows.</li><li><strong>Weeks 1-2 are a different population.</strong> With no current-season game behind them they are admitted by a prior season of at least 4 games instead of 2 games played, their lines are anchored on last season's average rather than this one's, and no defensive ratings exist yet to adjust the matchup with. The overall figure now averages them in; the phase table is where they can be judged on their own.</li><li><strong>First-quarter lines are synthetic twice over.</strong> A first-quarter line is the player's trailing full-game average scaled by last season's first-quarter share at that position, rounded to a half-point. DraftKings posts real first-quarter yardage lines; none were bought for this run.</li><li><strong>The first-quarter blank-quarter dispersions were chosen in-sample.</strong> How many blank first quarters an expected volume implies was picked from a four-value grid on 2023-2025 player-games, which include the seasons graded here. Five scalars on a coarse grid, with the same standing as the anytime-TD clustering constants.</li><li><strong>First-quarter actuals are derived, not published.</strong> They come from play-by-play (<code>build_quarter_stats</code>), whose derivation reproduces the full-game box score on at least 99.47% of player-games for every stat in 2023-2025.</li></ul>
+
+<h2>Run configuration</h2>
+<div class="scroll">
+<table><tbody><tr><td class='name'>calibration</td><td>{&#x27;mean&#x27;: {&#x27;anytime_td&#x27;: {&#x27;multiplier&#x27;: 1.036, &#x27;raw&#x27;: 1.0459, &#x27;n&#x27;: 10182, &#x27;applied&#x27;: True}, &#x27;pass_attempts&#x27;: {&#x27;multiplier&#x27;: 1.0, &#x27;raw&#x27;: 1.001, &#x27;n&#x27;: 1069, &#x27;applied&#x27;: True}, &#x27;pass_completions&#x27;: {&#x27;multiplier&#x27;: 1.0, &#x27;raw&#x27;: 1.0027, &#x27;n&#x27;: 1070, &#x27;applied&#x27;: True}, &#x27;pass_tds&#x27;: {&#x27;multiplier&#x27;: 1.07, &#x27;raw&#x27;: 1.0795, &#x27;n&#x27;: 1065, &#x27;applied&#x27;: True}, &#x27;pass_yards&#x27;: {&#x27;multiplier&#x27;: 1.0041, &#x27;raw&#x27;: 1.0143, &#x27;n&#x27;: 1067, &#x27;applied&#x27;: True}, &#x27;q1_anytime_td&#x27;: {&#x27;multiplier&#x27;: 1.0072, &#x27;raw&#x27;: 1.0498, &#x27;n&#x27;: 10182, &#x27;applied&#x27;: True}, &#x27;q1_pass_yards&#x27;: {&#x27;multiplier&#x27;: 1.0, &#x27;raw&#x27;: 1.0184, &#x27;n&#x27;: 1065, &#x27;applied&#x27;: True}, &#x27;q1_rec_yards&#x27;: {&#x27;multiplier&#x27;: 1.0261, &#x27;raw&#x27;: 1.0372, &#x27;n&#x27;: 8121, &#x27;applied&#x27;: True}, &#x27;q1_rush_yards&#x27;: {&#x27;multiplier&#x27;: 1.1096, &#x27;raw&#x27;: 1.1146, &#x27;n&#x27;: 3255, &#x27;applied&#x27;: True}, &#x27;rec_yards&#x27;: {&#x27;multiplier&#x27;: 1.0468, &#x27;raw&#x27;: 1.0489, &#x27;n&#x27;: 8114, &#x27;applied&#x27;: True}, &#x27;receptions&#x27;: {&#x27;multiplier&#x27;: 1.0264, &#x27;raw&#x27;: 1.0287, &#x27;n&#x27;: 8272, &#x27;applied&#x27;: True}, &#x27;rush_attempts&#x27;: {&#x27;multiplier&#x27;: 1.0428, &#x27;raw&#x27;: 1.0459, &#x27;n&#x27;: 2339, &#x27;applied&#x27;: True}, &#x27;rush_yards&#x27;: {&#x27;multiplier&#x27;: 1.0757, &#x27;raw&#x27;: 1.0785, &#x27;n&#x27;: 3206, &#x27;applied&#x27;: True}, &#x27;anytime_td@building&#x27;: {&#x27;multiplier&#x27;: 1.0126, &#x27;raw&#x27;: 1.0526, &#x27;n&#x27;: 2502, &#x27;applied&#x27;: True}, &#x27;anytime_td@established&#x27;: {&#x27;multiplier&#x27;: 1.035, &#x27;raw&#x27;: 1.0518, &#x27;n&#x27;: 4852, &#x27;applied&#x27;: True}, &#x27;anytime_td@thin&#x27;: {&#x27;multiplier&#x27;: 1.002, &#x27;raw&#x27;: 1.0554, &#x27;n&#x27;: 1869, &#x27;applied&#x27;: True}, &#x27;q1_anytime_td@building&#x27;: {&#x27;multiplier&#x27;: 0.89, &#x27;raw&#x27;: 0.8417, &#x27;n&#x27;: 2502, &#x27;applied&#x27;: True}, &#x27;q1_anytime_td@established&#x27;: {&#x27;multiplier&#x27;: 1.0607, &#x27;raw&#x27;: 1.1022, &#x27;n&#x27;: 4852, &#x27;applied&#x27;: True}, &#x27;q1_anytime_td@thin&#x27;: {&#x27;multiplier&#x27;: 1.0607, &#x27;raw&#x27;: 1.1575, &#x27;n&#x27;: 1869, &#x27;applied&#x27;: True}, &#x27;q1_rec_yards@building&#x27;: {&#x27;multiplier&#x27;: 1.0677, &#x27;raw&#x27;: 1.0907, &#x27;n&#x27;: 1859, &#x27;applied&#x27;: True}, &#x27;q1_rec_yards@established&#x27;: {&#x27;multiplier&#x27;: 1.0, &#x27;raw&#x27;: 1.0134, &#x27;n&#x27;: 3982, &#x27;applied&#x27;: True}, &#x27;q1_rec_yards@thin&#x27;: {&#x27;multiplier&#x27;: 1.0, &#x27;raw&#x27;: 1.0353, &#x27;n&#x27;: 1391, &#x27;applied&#x27;: True}, &#x27;q1_rush_yards@established&#x27;: {&#x27;multiplier&#x27;: 1.1596, &#x27;raw&#x27;: 1.1664, &#x27;n&#x27;: 1589, &#x27;applied&#x27;: True}, &#x27;rec_yards@building&#x27;: {&#x27;multiplier&#x27;: 1.0979, &#x27;raw&#x27;: 1.1028, &#x27;n&#x27;: 1854, &#x27;applied&#x27;: True}, &#x27;rec_yards@established&#x27;: {&#x27;multiplier&#x27;: 1.0399, &#x27;raw&#x27;: 1.0444, &#x27;n&#x27;: 3982, &#x27;applied&#x27;: True}, &#x27;rec_yards@thin&#x27;: {&#x27;multiplier&#x27;: 1.0, &#x27;raw&#x27;: 1.0109, &#x27;n&#x27;: 1389, &#x27;applied&#x27;: True}, &#x27;receptions@building&#x27;: {&#x27;multiplier&#x27;: 1.043, &#x27;raw&#x27;: 1.0489, &#x27;n&#x27;: 1898, &#x27;applied&#x27;: True}, &#x27;receptions@established&#x27;: {&#x27;multiplier&#x27;: 1.0233, &#x27;raw&#x27;: 1.0279, &#x27;n&#x27;: 4046, &#x27;applied&#x27;: True}, &#x27;receptions@thin&#x27;: {&#x27;multiplier&#x27;: 1.0, &#x27;raw&#x27;: 1.0103, &#x27;n&#x27;: 1418, &#x27;applied&#x27;: True}, &#x27;rush_yards@established&#x27;: {&#x27;multiplier&#x27;: 1.0645, &#x27;raw&#x27;: 1.0702, &#x27;n&#x27;: 1572, &#x27;applied&#x27;: True}}, &#x27;width&#x27;: {&#x27;anytime_td&#x27;: {&#x27;scale&#x27;: 1.2686, &#x27;raw&#x27;: 1.2695, &#x27;n&#x27;: 10182, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;pass_attempts&#x27;: {&#x27;scale&#x27;: 1.1789, &#x27;raw&#x27;: 1.1849, &#x27;n&#x27;: 1069, &#x27;applied&#x27;: True}, &#x27;pass_completions&#x27;: {&#x27;scale&#x27;: 1.1357, &#x27;raw&#x27;: 1.1412, &#x27;n&#x27;: 1070, &#x27;applied&#x27;: True}, &#x27;pass_tds&#x27;: {&#x27;scale&#x27;: 1.0459, &#x27;raw&#x27;: 1.0579, &#x27;n&#x27;: 1065, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;pass_yards&#x27;: {&#x27;scale&#x27;: 1.1188, &#x27;raw&#x27;: 1.1254, &#x27;n&#x27;: 1069, &#x27;applied&#x27;: True}, &#x27;q1_anytime_td&#x27;: {&#x27;scale&#x27;: 0.9239, &#x27;raw&#x27;: 0.9185, &#x27;n&#x27;: 10182, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;q1_pass_yards&#x27;: {&#x27;scale&#x27;: 1.1449, &#x27;raw&#x27;: 1.1514, &#x27;n&#x27;: 1069, &#x27;applied&#x27;: True}, &#x27;q1_rec_yards&#x27;: {&#x27;scale&#x27;: 0.9611, &#x27;raw&#x27;: 0.9552, &#x27;n&#x27;: 8216, &#x27;applied&#x27;: True}, &#x27;q1_rush_yards&#x27;: {&#x27;scale&#x27;: 1.0268, &#x27;raw&#x27;: 1.0413, &#x27;n&#x27;: 3321, &#x27;applied&#x27;: True}, &#x27;rec_yards&#x27;: {&#x27;scale&#x27;: 1.2198, &#x27;raw&#x27;: 1.2208, &#x27;n&#x27;: 8216, &#x27;applied&#x27;: True}, &#x27;receptions&#x27;: {&#x27;scale&#x27;: 1.0686, &#x27;raw&#x27;: 1.0704, &#x27;n&#x27;: 8272, &#x27;applied&#x27;: True}, &#x27;rush_attempts&#x27;: {&#x27;scale&#x27;: 1.2664, &#x27;raw&#x27;: 1.2688, &#x27;n&#x27;: 2339, &#x27;applied&#x27;: True}, &#x27;rush_yards&#x27;: {&#x27;scale&#x27;: 1.2776, &#x27;raw&#x27;: 1.2796, &#x27;n&#x27;: 3321, &#x27;applied&#x27;: True}, &#x27;anytime_td@building&#x27;: {&#x27;scale&#x27;: 1.2725, &#x27;raw&#x27;: 1.2763, &#x27;n&#x27;: 2502, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;anytime_td@established&#x27;: {&#x27;scale&#x27;: 1.2981, &#x27;raw&#x27;: 1.2997, &#x27;n&#x27;: 4852, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;anytime_td@thin&#x27;: {&#x27;scale&#x27;: 1.2155, &#x27;raw&#x27;: 1.2216, &#x27;n&#x27;: 1869, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;q1_anytime_td@building&#x27;: {&#x27;scale&#x27;: 0.8303, &#x27;raw&#x27;: 0.8197, &#x27;n&#x27;: 2502, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;q1_anytime_td@established&#x27;: {&#x27;scale&#x27;: 0.9622, &#x27;raw&#x27;: 0.9462, &#x27;n&#x27;: 4852, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;q1_anytime_td@thin&#x27;: {&#x27;scale&#x27;: 0.9562, &#x27;raw&#x27;: 0.923, &#x27;n&#x27;: 1869, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;q1_rec_yards@building&#x27;: {&#x27;scale&#x27;: 1.0, &#x27;raw&#x27;: 0.9842, &#x27;n&#x27;: 1885, &#x27;applied&#x27;: True}, &#x27;q1_rec_yards@established&#x27;: {&#x27;scale&#x27;: 0.9438, &#x27;raw&#x27;: 0.9362, &#x27;n&#x27;: 4028, &#x27;applied&#x27;: True}, &#x27;q1_rec_yards@thin&#x27;: {&#x27;scale&#x27;: 0.9656, &#x27;raw&#x27;: 0.9394, &#x27;n&#x27;: 1402, &#x27;applied&#x27;: True}, &#x27;q1_rush_yards@established&#x27;: {&#x27;scale&#x27;: 1.0317, &#x27;raw&#x27;: 1.053, &#x27;n&#x27;: 1621, &#x27;applied&#x27;: True}, &#x27;rec_yards@building&#x27;: {&#x27;scale&#x27;: 1.2687, &#x27;raw&#x27;: 1.2722, &#x27;n&#x27;: 1885, &#x27;applied&#x27;: True}, &#x27;rec_yards@established&#x27;: {&#x27;scale&#x27;: 1.167, &#x27;raw&#x27;: 1.1692, &#x27;n&#x27;: 4028, &#x27;applied&#x27;: True}, &#x27;rec_yards@thin&#x27;: {&#x27;scale&#x27;: 1.3226, &#x27;raw&#x27;: 1.3274, &#x27;n&#x27;: 1402, &#x27;applied&#x27;: True}, &#x27;receptions@building&#x27;: {&#x27;scale&#x27;: 1.0745, &#x27;raw&#x27;: 1.082, &#x27;n&#x27;: 1898, &#x27;applied&#x27;: True}, &#x27;receptions@established&#x27;: {&#x27;scale&#x27;: 1.0614, &#x27;raw&#x27;: 1.0651, &#x27;n&#x27;: 4046, &#x27;applied&#x27;: True}, &#x27;receptions@thin&#x27;: {&#x27;scale&#x27;: 1.0825, &#x27;raw&#x27;: 1.0902, &#x27;n&#x27;: 1418, &#x27;applied&#x27;: True}, &#x27;rush_yards@established&#x27;: {&#x27;scale&#x27;: 1.1856, &#x27;raw&#x27;: 1.1909, &#x27;n&#x27;: 1621, &#x27;applied&#x27;: True}, &#x27;anytime_td@established:RB&#x27;: {&#x27;scale&#x27;: 1.4304, &#x27;raw&#x27;: 1.4344, &#x27;n&#x27;: 1406, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;anytime_td@established:WR&#x27;: {&#x27;scale&#x27;: 1.2282, &#x27;raw&#x27;: 1.2326, &#x27;n&#x27;: 1962, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;q1_anytime_td@established:RB&#x27;: {&#x27;scale&#x27;: 0.9734, &#x27;raw&#x27;: 0.9369, &#x27;n&#x27;: 1406, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;q1_anytime_td@established:WR&#x27;: {&#x27;scale&#x27;: 1.0, &#x27;raw&#x27;: 0.9939, &#x27;n&#x27;: 1962, &#x27;applied&#x27;: False, &#x27;reason&#x27;: &#x27;family has no free width parameter&#x27;}, &#x27;q1_rec_yards@established:RB&#x27;: {&#x27;scale&#x27;: 0.9287, &#x27;raw&#x27;: 0.9067, &#x27;n&#x27;: 1270, &#x27;applied&#x27;: True}, &#x27;q1_rec_yards@established:WR&#x27;: {&#x27;scale&#x27;: 1.0, &#x27;raw&#x27;: 0.9787, &#x27;n&#x27;: 1818, &#x27;applied&#x27;: True}, &#x27;rec_yards@established:RB&#x27;: {&#x27;scale&#x27;: 1.1814, &#x27;raw&#x27;: 1.19, &#x27;n&#x27;: 1270, &#x27;applied&#x27;: True}, &#x27;rec_yards@established:WR&#x27;: {&#x27;scale&#x27;: 1.1625, &#x27;raw&#x27;: 1.1671, &#x27;n&#x27;: 1818, &#x27;applied&#x27;: True}, &#x27;receptions@established:RB&#x27;: {&#x27;scale&#x27;: 1.0089, &#x27;raw&#x27;: 1.0318, &#x27;n&#x27;: 1275, &#x27;applied&#x27;: True}, &#x27;receptions@established:WR&#x27;: {&#x27;scale&#x27;: 1.0809, &#x27;raw&#x27;: 1.087, &#x27;n&#x27;: 1829, &#x27;applied&#x27;: True}}}</td></tr><tr><td class='name'>changed_team_prior_multiplier</td><td>0.8</td></tr><tr><td class='name'>devig_method</td><td>shin</td></tr><tr><td class='name'>first_quarter</td><td>True</td></tr><tr><td class='name'>first_week</td><td>1</td></tr><tr><td class='name'>git_sha</td><td>ad7c11b</td></tr><tr><td class='name'>hit_rate_basis</td><td>threshold</td></tr><tr><td class='name'>lines_per_projection</td><td>3.247</td></tr><tr><td class='name'>max_week</td><td>None</td></tr><tr><td class='name'>model_version</td><td>3f.1</td></tr><tr><td class='name'>prior_season_weight_max</td><td>0.75</td></tr><tr><td class='name'>seasons</td><td>[2024, 2025]</td></tr><tr><td class='name'>sport</td><td>nfl</td></tr><tr><td class='name'>universe</td><td>2+ games played, or 4+ prior-season games in weeks 1-2</td></tr><tr><td class='name'>usage_filter</td><td>50% of position baseline</td></tr></tbody></table>
+</div>

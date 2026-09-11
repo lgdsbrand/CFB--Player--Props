@@ -49,10 +49,13 @@ from worker.core.features import (
     CHANGED_TEAM_PRIOR_MULTIPLIER,
     AsOf,
     build_feature_frame,
+    first_quarter_profile,
 )
 from worker.core.ladder import build_ladder, ladder_json
 from worker.core.models import (
+    FIRST_QUARTER_PARENTS,
     Projection,
+    attach_first_quarter_profile,
     position_baselines,
     project,
     rescale,
@@ -149,6 +152,90 @@ def market_catalogue() -> list[dict[str, Any]]:
     )
 
 
+#: The family each first-quarter market is fitted with; see
+#: `models.project_first_quarter` for why.
+FIRST_QUARTER_FAMILIES: dict[str, str] = {
+    "q1_pass_yards": "gamma",
+    "q1_rush_yards": "hurdle_gamma",
+    "q1_rec_yards": "hurdle_gamma",
+    "q1_anytime_td": "bernoulli",
+}
+
+
+def first_quarter_catalogue(catalogue: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The first-quarter markets, derived from the full-game rows they scale.
+
+    DERIVED, NOT LISTED. A first-quarter market applies to exactly the positions
+    its parent does and grades against the parent's column prefixed `q1_`, so
+    writing those out a second time would be a second definition free to drift
+    from the first. Anything a position gets for the full game it gets for the
+    first quarter, and nothing else.
+
+    NOT IN THE DATABASE CATALOGUE YET, on purpose. These markets are being
+    measured, not published; `market_catalogue` is what the board and the weekly
+    run read, and it stays untouched until the backtest says they are worth
+    showing. The parent's `ladder_step` is dropped for the same reason -- a
+    first-quarter ladder is a display decision for when they ship.
+    """
+    parents = {parent: q1 for q1, parent in FIRST_QUARTER_PARENTS.items()}
+    derived: list[dict[str, Any]] = []
+    for market in catalogue:
+        q1_key = parents.get(str(market["market_key"]))
+        if q1_key is None:
+            continue
+        derived.append({
+            **market,
+            "market_key": q1_key,
+            "stat_column": f"q1_{market['stat_column']}",
+            "distribution_family": FIRST_QUARTER_FAMILIES[q1_key],
+            "ladder_step": None,
+            "parent_market_key": market["market_key"],
+            "parent_stat_column": market["stat_column"],
+        })
+    return derived
+
+
+def usage_floor(
+    market: dict[str, Any], baselines: dict[str, float]
+) -> float | None:
+    """The mean a projection must reach to be published, or None if unmeasured.
+
+    SHARED BY THE WEEKLY RUN AND THE BACKTEST, for the reason every universe rule
+    here is: the report has to score the population the board shows.
+
+    A FIRST-QUARTER MARKET IS HELD TO ITS PARENT'S FLOOR, SCALED BY THE SAME
+    SHARE ITS MEAN IS. The floor asks whether a book would price this role, and
+    books price the first quarter of the players they price the game for. A
+    first-quarter mean is about a fifth of the full game's, so comparing it with
+    the full-game floor unscaled would reject every one of them.
+    """
+    parent = market.get("parent_stat_column")
+    floor = baselines.get(f"{parent or market['stat_column']}_pg")
+    if not floor:
+        return None
+    if parent:
+        share = baselines.get(f"q1_share_{parent}")
+        if not share:
+            return None
+        floor *= share
+    return MIN_USAGE_FRACTION_OF_BASELINE * floor
+
+
+def attach_quarter_profile(
+    as_of: AsOf,
+    catalogue: Sequence[dict[str, Any]],
+    baselines: dict[str, dict[str, float]],
+) -> None:
+    """Load last season's first-quarter profile into `baselines`, if it is needed.
+
+    A no-op for a catalogue without first-quarter markets, so a run that asks
+    for none pays for no query.
+    """
+    if not any(market.get("parent_market_key") for market in catalogue):
+        return
+    attach_first_quarter_profile(baselines, first_quarter_profile(as_of))
+
+
 @dataclass
 class ProjectedRow:
     """One distribution, with everything `projections` needs to store it.
@@ -202,6 +289,7 @@ def project_slate(
 
     rows = frame.to_dicts()
     baselines = position_baselines(rows)
+    attach_quarter_profile(as_of, catalogue, baselines)
 
     by_position: dict[str, list[dict[str, Any]]] = {}
     for market in catalogue:
@@ -222,8 +310,8 @@ def project_slate(
             if projection is None:
                 continue
 
-            floor = baselines.get(position, {}).get(f"{market['stat_column']}_pg")
-            if floor and projection.mean < MIN_USAGE_FRACTION_OF_BASELINE * floor:
+            threshold = usage_floor(market, baselines.get(position, {}))
+            if threshold is not None and projection.mean < threshold:
                 skipped_usage += 1
                 continue
 

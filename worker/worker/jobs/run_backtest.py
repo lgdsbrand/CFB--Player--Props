@@ -54,6 +54,7 @@ from worker.core.projections import (
     LAST_OPENING_WEEK,
     MIN_GAMES_TO_PROJECT,
     MIN_PRIOR_GAMES_TO_PROJECT,
+    first_quarter_catalogue,
 )
 from worker.db import (
     execute,
@@ -72,6 +73,33 @@ MODEL_VERSION = "3f.1"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REPORT_PATH = REPO_ROOT / "docs" / "calibration-report.html"
+# A first-quarter walk writes its own report. The file above is the college
+# calibration report the client reviewed, and an NFL walk must not overwrite it.
+FIRST_QUARTER_REPORT_PATH = REPO_ROOT / "docs" / "nfl-q1-calibration-report.html"
+
+
+def _report_path(first_quarter: bool) -> Path:
+    return FIRST_QUARTER_REPORT_PATH if first_quarter else REPORT_PATH
+
+
+FIRST_QUARTER_CAVEATS = [
+    "<strong>First-quarter lines are synthetic twice over.</strong> A "
+    "first-quarter line is the player's trailing full-game average scaled by "
+    "last season's first-quarter share at that position, rounded to a "
+    "half-point. DraftKings posts real first-quarter yardage lines; none were "
+    "bought for this run.",
+
+    "<strong>The first-quarter blank-quarter dispersions were chosen "
+    "in-sample.</strong> How many blank first quarters an expected volume "
+    "implies was picked from a four-value grid on 2023-2025 player-games, which "
+    "include the seasons graded here. Five scalars on a coarse grid, with the "
+    "same standing as the anytime-TD clustering constants.",
+
+    "<strong>First-quarter actuals are derived, not published.</strong> They "
+    "come from play-by-play (<code>build_quarter_stats</code>), whose derivation "
+    "reproduces the full-game box score on at least 99.47% of player-games for "
+    "every stat in 2023-2025.",
+]
 
 # Rows written per statement when persisting predictions.
 BATCH = 2000
@@ -118,10 +146,16 @@ def _lines_per_projection(predictions: list[Prediction]) -> float:
 
 def _stored_caveats(config: dict[str, Any], seasons: list[int]) -> list[str]:
     """Caveats for a run being re-rendered from the database."""
-    return _caveats(float(config.get("lines_per_projection") or 0.0), seasons)
+    return _caveats(
+        float(config.get("lines_per_projection") or 0.0),
+        seasons,
+        first_quarter=bool(config.get("first_quarter")),
+    )
 
 
-def _caveats(lines_per_projection: float, seasons: list[int]) -> list[str]:
+def _caveats(
+    lines_per_projection: float, seasons: list[int], *, first_quarter: bool = False
+) -> list[str]:
     """Everything a reader needs in order not to over-read the numbers."""
     opening_uncalibrated = (
         len(seasons) == 1 and MIN_BACKTEST_WEEK <= LAST_OPENING_WEEK
@@ -189,7 +223,7 @@ def _caveats(lines_per_projection: float, seasons: list[int]) -> list[str]:
         ]
         if opening_uncalibrated
         else []
-    )
+    ) + (FIRST_QUARTER_CAVEATS if first_quarter else [])
 
 
 def _persist(
@@ -443,6 +477,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Re-render the report from a stored run instead of walking. "
              "Defaults to the most recent run that has stored metrics.",
     )
+    parser.add_argument(
+        "--first-quarter", action="store_true",
+        help="Also grade the first-quarter markets beside the full-game ones. "
+             "NFL only. Writes docs/nfl-q1-calibration-report.html rather than "
+             "the college report.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -454,6 +494,13 @@ def main(argv: list[str] | None = None) -> int:
 
     configure_logging(settings.log_level)
 
+    if args.first_quarter and args.sport != "nfl":
+        log.error(
+            "--first-quarter is NFL only: first-quarter actuals are derived and "
+            "verified for the NFL alone. Pass --sport nfl."
+        )
+        return 2
+
     if args.render_only:
         target = None if args.render_only == "latest" else uuid.UUID(args.render_only)
         stored = _load_run(target)
@@ -463,8 +510,9 @@ def main(argv: list[str] | None = None) -> int:
                 "runs that wrote backtest_metrics can be re-rendered."
             )
             return 1
-        REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        REPORT_PATH.write_text(
+        report_path = _report_path(bool(stored["config"].get("first_quarter")))
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
             report_module.render(
                 overall=stored["overall"],
                 by_market=stored["groups"].get("market", {}),
@@ -478,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             encoding="utf-8",
         )
-        log.info("Rendered %s from stored run (no walk)", REPORT_PATH)
+        log.info("Rendered %s from stored run (no walk)", report_path)
         return 0
 
     seasons = resolve_seasons(args.seasons)
@@ -516,21 +564,36 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "model_version": MODEL_VERSION,
         "git_sha": _git_sha(),
+        "first_quarter": args.first_quarter,
     }
 
     model_run_id = uuid.uuid4()
     backtest_id = uuid.uuid4()
 
+    # A FIRST-QUARTER WALK STORES NOTHING, and the reason is not tidiness.
+    # `run_projections` takes its corrections from the newest stored backtest for
+    # the sport, so storing an NFL walk -- which has never been done -- would
+    # swap the live NFL board's borrowed college calibration for this one, as a
+    # side effect of measuring markets nobody has decided to publish. It would
+    # also fail outright: `calibration_bins.market_key` references `markets`,
+    # and the first-quarter markets are deliberately not in it yet. The report
+    # file is the whole output.
+    persist = not args.first_quarter
+    if args.first_quarter and args.persist_predictions:
+        log.error("--persist-predictions cannot be combined with --first-quarter.")
+        return 2
+
     try:
         with pipeline_run(JOB_NAME, metadata={"seasons": seasons}):
-            execute(
-                """
-                insert into model_runs
-                  (id, run_type, model_version, git_sha, config, status)
-                values (%s, 'backtest', %s, %s, %s::jsonb, 'running')
-                """,
-                (model_run_id, MODEL_VERSION, config["git_sha"], _json(config)),
-            )
+            if persist:
+                execute(
+                    """
+                    insert into model_runs
+                      (id, run_type, model_version, git_sha, config, status)
+                    values (%s, 'backtest', %s, %s, %s::jsonb, 'running')
+                    """,
+                    (model_run_id, MODEL_VERSION, config["git_sha"], _json(config)),
+                )
 
             if len(seasons) == 1 and MIN_BACKTEST_WEEK <= LAST_OPENING_WEEK:
                 # See `_caveats`. Measured on a 2025-only walk: weeks 1-2 land
@@ -555,6 +618,7 @@ def main(argv: list[str] | None = None) -> int:
                 changed_team_prior_multiplier=changed_team_multiplier,
                 calibration=calibration,
                 sport=args.sport,
+                first_quarter=args.first_quarter,
             )
             if not predictions:
                 log.error("No predictions produced.")
@@ -565,9 +629,12 @@ def main(argv: list[str] | None = None) -> int:
                 # but not corrected, so say which those are rather than printing
                 # a scale that was never applied. The MEAN correction has no
                 # such limit — every family can be moved.
+                graded = market_catalogue()
+                if args.first_quarter:
+                    graded = [*graded, *first_quarter_catalogue(graded)]
                 fixed_width = {
                     m["market_key"]
-                    for m in market_catalogue()
+                    for m in graded
                     if not can_rescale(m["distribution_family"])
                 }
                 learned = calibration.snapshot()
@@ -629,52 +696,60 @@ def main(argv: list[str] | None = None) -> int:
                 _lines_per_projection(predictions), 3
             )
 
-            execute(
-                """
-                insert into backtests
-                  (id, model_run_id, name, seasons, hit_rate_basis, config)
-                values (%s, %s, %s, %s, %s, %s::jsonb)
-                """,
-                (
+            if persist:
+                execute(
+                    """
+                    insert into backtests
+                      (id, model_run_id, name, seasons, hit_rate_basis, config)
+                    values (%s, %s, %s, %s, %s, %s::jsonb)
+                    """,
+                    (
+                        backtest_id,
+                        model_run_id,
+                        f"walk-forward {'/'.join(str(s) for s in seasons)}",
+                        seasons,
+                        hit_rate_basis,
+                        _json(config),
+                    ),
+                )
+                _store_bins(backtest_id, "overall", overall)
+                for market, metrics in by_market.items():
+                    _store_bins(backtest_id, f"market:{market}", metrics)
+
+                written = _store_metrics(
                     backtest_id,
-                    model_run_id,
-                    f"walk-forward {'/'.join(str(s) for s in seasons)}",
-                    seasons,
-                    hit_rate_basis,
-                    _json(config),
-                ),
-            )
-            _store_bins(backtest_id, "overall", overall)
-            for market, metrics in by_market.items():
-                _store_bins(backtest_id, f"market:{market}", metrics)
+                    overall,
+                    {
+                        "market": by_market,
+                        "position": by_position,
+                        "phase": by_phase,
+                        "transfer": by_transfer,
+                        "season": {str(k): v for k, v in by_season.items()},
+                    },
+                )
+                log.info("stored %d metric rows", written)
+                _log_comparison(backtest_id)
 
-            written = _store_metrics(
-                backtest_id,
-                overall,
-                {
-                    "market": by_market,
-                    "position": by_position,
-                    "phase": by_phase,
-                    "transfer": by_transfer,
-                    "season": {str(k): v for k, v in by_season.items()},
-                },
-            )
-            log.info("stored %d metric rows", written)
-            _log_comparison(backtest_id)
+                if args.persist_predictions:
+                    written = _persist(backtest_id, predictions, devig_method)
+                    log.info("persisted %d predictions", written)
 
-            if args.persist_predictions:
-                written = _persist(backtest_id, predictions, devig_method)
-                log.info("persisted %d predictions", written)
-
-            execute(
-                "update model_runs set status='succeeded', finished_at=now() "
-                "where id=%s",
-                (model_run_id,),
-            )
+                execute(
+                    "update model_runs set status='succeeded', finished_at=now() "
+                    "where id=%s",
+                    (model_run_id,),
+                )
+            else:
+                log.info(
+                    "First-quarter walk: nothing stored in the database, so no "
+                    "live calibration can pick this run up. The report is the "
+                    "output."
+                )
 
             if not args.no_report:
-                REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-                REPORT_PATH.write_text(
+                report_path = _report_path(args.first_quarter)
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text(
                     report_module.render(
                         overall=overall,
                         by_market=by_market,
@@ -685,18 +760,21 @@ def main(argv: list[str] | None = None) -> int:
                         seasons=seasons,
                         config=config,
                         caveats=_caveats(
-                            _lines_per_projection(predictions), seasons
+                            _lines_per_projection(predictions),
+                            seasons,
+                            first_quarter=args.first_quarter,
                         ),
                     ),
                     encoding="utf-8",
                 )
-                log.info("Wrote %s", REPORT_PATH)
+                log.info("Wrote %s", report_path)
     except Exception as exc:
         log.error("Backtest failed: %s", exc, exc_info=True)
-        execute(
-            "update model_runs set status='failed', finished_at=now() where id=%s",
-            (model_run_id,),
-        )
+        if persist:
+            execute(
+                "update model_runs set status='failed', finished_at=now() where id=%s",
+                (model_run_id,),
+            )
         return 1
 
     return 0

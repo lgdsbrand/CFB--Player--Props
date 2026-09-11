@@ -69,9 +69,12 @@ from worker.core.probability import distribution_sd
 from worker.core.projections import (
     LAST_OPENING_WEEK,
     MIN_USAGE_FRACTION_OF_BASELINE,
+    attach_quarter_profile,
+    first_quarter_catalogue,
     is_projectable,
     market_catalogue,
     project_row,
+    usage_floor,
 )
 from worker.db import fetch_all
 from worker.logging_setup import get_logger
@@ -225,7 +228,8 @@ def load_actuals(season: int, week: int) -> dict[tuple[int, int], dict[str, Any]
         """
         select player_id, game_id, pass_yards, pass_tds, pass_attempts,
                pass_completions, rush_yards, rush_attempts, receptions,
-               rec_yards, offensive_tds
+               rec_yards, offensive_tds,
+               q1_pass_yards, q1_rush_yards, q1_rec_yards, q1_offensive_tds
           from player_game_stats
          where season = %(season)s and week = %(week)s
         """,
@@ -262,6 +266,7 @@ def backtest_week(
 
     rows = frame.to_dicts()
     baselines = position_baselines(rows)
+    attach_quarter_profile(as_of, catalogue, baselines)
     actuals = load_actuals(as_of.season, as_of.week)
     if not actuals:
         log.warning("%s: no actuals to grade against", as_of)
@@ -294,11 +299,11 @@ def backtest_week(
             if projection is None:
                 continue
 
-            floor = baselines.get(position, {}).get(f"{market['stat_column']}_pg")
-            if floor and projection.mean < MIN_USAGE_FRACTION_OF_BASELINE * floor:
+            threshold = usage_floor(market, baselines.get(position, {}))
+            if threshold is not None and projection.mean < threshold:
                 continue
 
-            centre = _trailing_centre(row, market["stat_column"])
+            centre = line_centre(row, market, baselines.get(position, {}))
             if centre is None and not market["is_binary"]:
                 continue
 
@@ -376,6 +381,29 @@ def backtest_week(
     return predictions, observations
 
 
+def line_centre(
+    row: dict[str, Any], market: dict[str, Any], baselines: dict[str, float]
+) -> float | None:
+    """Where one projection's synthetic lines are anchored.
+
+    A FIRST-QUARTER MARKET IS ANCHORED ON ITS PARENT: the player's trailing
+    full-game average, scaled by last season's first-quarter share at his
+    position. The frame carries no trailing first-quarter average, and it would
+    be the wrong anchor if it did -- measured, it predicts the first quarter
+    worse than the scaled full-game average in every market. Both inputs are
+    knowable before kickoff and neither depends on the model's projection, which
+    are the two things a line anchor has to be.
+    """
+    parent = market.get("parent_stat_column")
+    if not parent:
+        return _trailing_centre(row, market["stat_column"])
+    centre = _trailing_centre(row, parent)
+    share = baselines.get(f"q1_share_{parent}")
+    if centre is None or not share:
+        return None
+    return centre * float(share)
+
+
 def _trailing_centre(row: dict[str, Any], stat_column: str) -> float | None:
     """The player's own trailing average, which is the line's anchor.
 
@@ -419,6 +447,7 @@ def walk_forward(
     changed_team_prior_multiplier: float = CHANGED_TEAM_PRIOR_MULTIPLIER,
     calibration: Calibration | None = None,
     sport: str = "cfb",
+    first_quarter: bool = False,
 ) -> list[Prediction]:
     """Run the whole backtest, one week at a time, in order.
 
@@ -426,10 +455,23 @@ def walk_forward(
     a width learned only from the weeks before it. Pass a fresh instance to
     learn from scratch; pass None to disable the correction entirely, which is
     how the before/after comparison is made.
+
+    `first_quarter` adds the first-quarter markets beside the full-game ones, so
+    both are graded over the same players and weeks and the comparison between
+    them means something. NFL only: the first-quarter actuals they grade against
+    are verified against NFL box scores and derived for nothing else.
     """
+    if first_quarter and sport != "nfl":
+        raise ValueError(
+            f"first-quarter markets are graded on the NFL only, not {sport!r}: "
+            "their actuals are derived and verified for the NFL alone "
+            "(build_quarter_stats --reconcile)"
+        )
     catalogue = market_catalogue()
     if not catalogue:
         raise RuntimeError("no active markets — did the seed migration run?")
+    if first_quarter:
+        catalogue = [*catalogue, *first_quarter_catalogue(catalogue)]
 
     predictions: list[Prediction] = []
     for season in seasons:

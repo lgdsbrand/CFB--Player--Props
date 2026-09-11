@@ -373,7 +373,7 @@ def finalize(
 # measured miscalibration is real information but not something a rescale can
 # act on — it has to be reported rather than silently dropped.
 RESCALABLE_FAMILIES = frozenset(
-    {"normal", "gamma", "lognormal", "negative_binomial", "beta_binomial"}
+    {"normal", "gamma", "lognormal", "negative_binomial", "beta_binomial", "hurdle_gamma"}
 )
 
 
@@ -482,6 +482,9 @@ def rescale(projection: Projection, scale: float) -> Projection:
             "b": max((1.0 - p) * total_new, 1e-6),
         }
 
+    elif distribution == "hurdle_gamma":
+        params = _rescale_hurdle(params, scale)
+
     else:
         return projection
 
@@ -495,6 +498,47 @@ def rescale(projection: Projection, scale: float) -> Projection:
         efficiency=projection.efficiency,
         matchup_multiplier=projection.matchup_multiplier,
     )
+
+
+def _rescale_hurdle(params: dict[str, float], scale: float) -> dict[str, float]:
+    """Widen a hurdle's OVERALL spread by `scale`, holding its mean and its zero.
+
+    The zero mass is a claim about volume -- how likely a blank quarter is --
+    not about width, so it stays put. What moves is the positive part, and by
+    exactly enough that the whole distribution's SD scales by `scale`, which is
+    the quantity the calibration layer measured. Widening only the positive part
+    by `scale` would under-correct every week, because the gap between the zero
+    and the positive values carries variance of its own that does not move.
+
+        var = (1-p)(v + m^2) - ((1-p) m)^2   =>   v' = s^2 var / (1-p) - p m^2
+
+    for positive-part mean m and variance v. The positive part is then moved by
+    the same location-scale identity `rescale` applies to a gamma, which keeps m
+    -- and therefore the overall mean -- exactly.
+    """
+    p_zero = float(params["p_zero"])
+    shape, gamma_scale = float(params["shape"]), float(params["scale"])
+    loc = float(params.get("loc", 0.0))
+    positive_mean = loc + shape * gamma_scale
+    positive_variance = shape * gamma_scale * gamma_scale
+    total_sd = distribution_sd("hurdle_gamma", params)
+    if positive_variance <= 0 or total_sd <= 0 or p_zero >= 1.0:
+        return params
+
+    target = (scale * scale * total_sd * total_sd) / (1.0 - p_zero) - (
+        p_zero * positive_mean * positive_mean
+    )
+    # A narrowing can ask for less positive-part variance than the zero leaves
+    # room for. Keep a sliver of spread rather than collapse the positive
+    # outcomes onto a single number.
+    target = max(target, (0.5 * MIN_RELATIVE_SD * positive_mean) ** 2, 1e-9)
+    factor = math.sqrt(target / positive_variance)
+    return {
+        "p_zero": p_zero,
+        "shape": shape,
+        "scale": max(gamma_scale * factor, 1e-9),
+        "loc": factor * loc + positive_mean * (1.0 - factor),
+    }
 
 
 def _lift_location_to_positive_median(
@@ -605,6 +649,14 @@ def shift_mean(projection: Projection, multiplier: float) -> Projection:
         scaled_n = max(math.ceil(n * multiplier), 1)
         p = min(max((n * a / total) * multiplier / scaled_n, 1e-4), 1 - 1e-3)
         params = {"n": float(scaled_n), "a": p * total, "b": (1.0 - p) * total}
+    elif distribution == "hurdle_gamma":
+        # The positive part moves; the chance of a blank quarter does not.
+        params = {
+            "p_zero": float(params["p_zero"]),
+            "shape": float(params["shape"]),
+            "scale": max(float(params["scale"]) * multiplier, 1e-9),
+            "loc": float(params.get("loc", 0.0)) * multiplier,
+        }
     elif distribution == "bernoulli":
         params = {"p": min(max(float(params["p"]) * multiplier, 1e-4), 1 - 1e-4)}
         mean = params["p"]
@@ -1327,6 +1379,214 @@ DEFAULT_OPEN_FIELD_CONVERSION = 0.03
 
 
 # -----------------------------------------------------------------------------
+# First quarter
+# -----------------------------------------------------------------------------
+#: First-quarter market -> the full-game market it is scaled from.
+FIRST_QUARTER_PARENTS: dict[str, str] = {
+    "q1_pass_yards": "pass_yards",
+    "q1_rush_yards": "rush_yards",
+    "q1_rec_yards": "rec_yards",
+    "q1_anytime_td": "anytime_td",
+}
+
+#: The count whose "none in the quarter" is a yardage market's blank. Passing
+#: has none: a starting quarterback is blank in 3.6% of first quarters, too few
+#: to model as a separate mass.
+FIRST_QUARTER_VOLUME_STAT: dict[str, str] = {
+    "rush_yards": "rush_attempts",
+    "rec_yards": "receptions",
+}
+
+# Variance/mean of the first-quarter volume count, per (stat, position), setting
+# how many blank quarters its expected volume implies.
+#
+# A Poisson is too few. Measured on 2023-2025 NFL player-games with three or more
+# prior games, observed zero-or-less first quarters against the zero implied by
+# expected Q1 volume:
+#
+#   market       observed   poisson   d=1.3   d=1.6   d=2.0
+#   rec  WR        49.4%     46.2%    50.0%   53.1%   56.6%
+#   rec  TE        53.4%     51.1%    54.4%   57.1%   60.1%
+#   rec  RB        64.2%     58.9%    61.3%   63.4%   65.7%
+#   rush RB        14.6%      8.0%    14.3%   20.2%   26.8%
+#   rush QB        50.6%     44.2%    48.2%   51.5%   55.1%
+#
+# RB rushing is the telling row: a carry for zero or less is also a blank, so
+# the Poisson on carries alone misses by half.
+#
+# CHOSEN IN-SAMPLE, on a four-value grid, over the seasons the backtest grades.
+# Five scalars on a coarse grid, the same standing as `TD_CLUSTERING_K`, and the
+# first-quarter report says so.
+FIRST_QUARTER_ZERO_DISPERSION: dict[tuple[str, str], float] = {
+    ("rec_yards", "WR"): 1.3,
+    ("rec_yards", "TE"): 1.3,
+    ("rec_yards", "RB"): 1.6,
+    ("rush_yards", "RB"): 1.3,
+    ("rush_yards", "QB"): 1.6,
+}
+DEFAULT_FIRST_QUARTER_ZERO_DISPERSION = 1.3
+
+# A projection this likely to be blank is not a market anyone prices.
+MAX_FIRST_QUARTER_ZERO = 0.95
+
+
+def count_zero_probability(mean: float, dispersion: float) -> float:
+    """P(a count is zero) for a negative binomial with variance/mean `dispersion`.
+
+    Dispersion 1 is the Poisson limit, exp(-mean); larger values put more mass
+    on zero at the same mean, which is what game-to-game usage does.
+    """
+    mean = max(mean, 0.0)
+    if dispersion <= 1.0 + 1e-9:
+        return math.exp(-mean)
+    return (1.0 + mean * (dispersion - 1.0)) ** (-1.0 / (dispersion - 1.0))
+
+
+def project_first_quarter(
+    row: dict[str, Any],
+    market_key: str,
+    baselines: dict[str, float],
+    league: dict[str, dict[str, float]] | None = None,
+) -> Projection | None:
+    """A first-quarter market, scaled from the full-game projection.
+
+    THE MEAN IS THE FULL-GAME PROJECTION TIMES LAST SEASON'S POSITION SHARE, and
+    not a model of the first quarter on its own. Measured on 2023-2025 NFL
+    player-games before building anything:
+
+      * A PLAYER'S OWN FIRST-QUARTER SHARE IS NOT A TRAIT. Year over year it
+        correlates -0.01 for QBs, 0.04 for WRs, 0.05 for TEs and 0.29 for RBs.
+        Shrinking toward the player's share bought nothing over the position's.
+      * HIS OWN TRAILING FIRST-QUARTER AVERAGE IS THE WORST PREDICTOR TRIED:
+        higher error than full-game average x position share in every market
+        (WR r 0.230 against 0.275, TE 0.187 against 0.239). A quarter is a
+        quarter of the evidence at roughly twice the relative noise, so the
+        full-game model -- with its opponent adjustment, blending and priors --
+        carries far more information about the first quarter than the first
+        quarter does.
+
+    YARDAGE IS A HURDLE: a blank quarter with the probability the expected
+    first-quarter volume implies, and a gamma for the rest. Receivers are blank
+    in 49-64% of first quarters and QB rushing in 51%; a continuous family puts
+    no mass on zero at all. The positive part's mean is set so the overall mean
+    is exactly the scaled full-game mean, and its spread is last season's
+    coefficient of variation of positive first quarters at the position.
+
+    PASSING IS A PLAIN GAMMA, blank too rarely (3.6%) to need the mass.
+
+    ANYTIME TD IS A POISSON on the full game's expected touchdowns times the
+    position's first-quarter share of them. Measured against a player's own
+    first-quarter scoring rate, that scored Brier skill +0.003 where the own rate
+    scored -0.088 -- barely better than the base rate, which is the honest size
+    of the signal in a single quarter's touchdowns.
+
+    The full-game projection is taken RAW. The first-quarter market has its own
+    calibration cells, so correcting the parent first would compound two
+    corrections into one number neither measured.
+    """
+    parent_key = FIRST_QUARTER_PARENTS[market_key]
+    # The parent's family does not change its mean or volume, only the params
+    # this function discards, so any valid one will do.
+    parent = project(
+        row,
+        parent_key,
+        "bernoulli" if parent_key == "anytime_td" else "normal",
+        baselines,
+        league,
+    )
+    if parent is None:
+        return None
+    position = str(row.get("position_group") or "")
+
+    if parent_key == "anytime_td":
+        share = baselines.get("q1_share_offensive_tds")
+        if not share or share <= 0:
+            return None
+        expected = parent.mean * share
+        probability = min(max(1.0 - math.exp(-expected), 1e-4), 1.0 - 1e-4)
+        return finalize(
+            market_key,
+            "bernoulli",
+            {"p": probability},
+            expected,
+            volume=parent.volume,
+            efficiency=parent.efficiency,
+            matchup_multiplier=parent.matchup_multiplier,
+        )
+
+    share = baselines.get(f"q1_share_{parent_key}")
+    if not share or share <= 0:
+        return None
+    mean = parent.mean * share
+    if mean <= 0:
+        return None
+
+    if parent_key == "pass_yards":
+        cv = baselines.get("q1_cv_pass_yards")
+        sd = _sd(mean, cv * mean if cv else None)
+        return finalize(
+            market_key,
+            "gamma",
+            gamma_params(mean, sd, 0.0),
+            mean,
+            volume=parent.volume,
+            efficiency=parent.efficiency,
+            matchup_multiplier=parent.matchup_multiplier,
+        )
+
+    volume_share = baselines.get(
+        f"q1_share_{FIRST_QUARTER_VOLUME_STAT[parent_key]}"
+    )
+    if not volume_share or volume_share <= 0 or parent.volume is None:
+        return None
+    expected_volume = parent.volume * volume_share
+    p_zero = count_zero_probability(
+        expected_volume,
+        FIRST_QUARTER_ZERO_DISPERSION.get(
+            (parent_key, position), DEFAULT_FIRST_QUARTER_ZERO_DISPERSION
+        ),
+    )
+    p_zero = min(max(p_zero, 0.0), MAX_FIRST_QUARTER_ZERO)
+
+    positive_mean = mean / (1.0 - p_zero)
+    cv = baselines.get(f"q1_cv_positive_{parent_key}")
+    positive_sd = _sd(positive_mean, cv * positive_mean if cv else None)
+    return finalize(
+        market_key,
+        "hurdle_gamma",
+        {"p_zero": p_zero, **gamma_params(positive_mean, positive_sd, 0.0)},
+        mean,
+        volume=expected_volume,
+        efficiency=positive_mean,
+        matchup_multiplier=parent.matchup_multiplier,
+    )
+
+
+def attach_first_quarter_profile(
+    baselines: dict[str, dict[str, float]], profile: list[dict[str, Any]]
+) -> None:
+    """Fold last season's first-quarter shares and spreads into the baselines.
+
+    Position-level facts about a completed season, so they sit beside the other
+    position baselines rather than on every player's row. Only `q1_*` keys are
+    taken, and a NULL -- a position with nothing to divide by -- is left absent
+    rather than written as 0, which `project_first_quarter` would read as "this
+    position never produces anything in the first quarter".
+    """
+    for row in profile:
+        position = row.get("position_group")
+        if not position:
+            continue
+        bucket = baselines.setdefault(str(position), {})
+        for key, value in row.items():
+            if not key.startswith("q1_") or value is None:
+                continue
+            number = float(value)
+            if math.isfinite(number):
+                bucket[key] = number
+
+
+# -----------------------------------------------------------------------------
 # Per-market projection
 # -----------------------------------------------------------------------------
 def project(
@@ -1343,6 +1603,9 @@ def project(
     RECEIVERS, not to quarterbacks.
     """
     league = league or {}
+
+    if market_key in FIRST_QUARTER_PARENTS:
+        return project_first_quarter(row, market_key, baselines, league)
 
     def defensive_ratio(metric: str, positions: tuple[str, ...]) -> float:
         """Matchup multiplier against the league mean for the same positions."""

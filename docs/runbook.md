@@ -538,7 +538,8 @@ not being `"none"`.
 python -m worker.jobs.nfl_ingest_reference --current &&
 python -m worker.jobs.nfl_ingest_stats --current &&
 python -m worker.jobs.nfl_ingest_plays --current &&
-python -m worker.jobs.build_splits --current --sport nfl
+python -m worker.jobs.build_splits --current --sport nfl &&
+python -m worker.jobs.build_quarter_stats --current --sport nfl
 ```
 
 **Added 2026-09-08, and until then the NFL board did not learn.** The NFL had
@@ -685,6 +686,41 @@ here (implied catch rate 66.8%, which is the real one), so any comparison of a
 college conversion rate against an NFL one compares an artifact with a
 measurement.
 
+#### `build_quarter_stats`
+
+```bash
+python -m worker.jobs.build_quarter_stats --current --sport nfl                # what the cron runs
+python -m worker.jobs.build_quarter_stats --sport nfl --seasons 2023 2024 2025
+python -m worker.jobs.build_quarter_stats --sport nfl --seasons 2025 --reconcile
+```
+
+First-quarter actuals into `player_game_stats.q1_*` (migration 0063), derived
+from `plays.period` and `play_player_stats`. Database only, so it is free to
+re-run. Needs `nfl_ingest_plays` for the same seasons first. These columns are
+what the NFL first-quarter markets grade against.
+
+**Last in the chain, after `build_splits`, though it needs only the plays.** It
+is the newest step, and with `&&` a failure stops everything after it; placed
+earlier, a fault here would freeze the NFL defensive ratings.
+
+**`--sport` is required.** The derivation has been checked against NFL box
+scores only, so a default would make the unchecked sport the silent path.
+**`--reconcile` writes nothing:** it runs the same derivation over every quarter
+against the box score and exits 1 if any stat matches on under 99% of
+player-games. Run it before trusting a new sport or season. Measured on 2025 NFL
+(19,400 player-games): completions, pass TDs, carries, rush TDs, receptions and
+receiving TDs exact on every row; passing and rushing yards 99.99%; receiving
+yards 99.90% (worst 33, a lateral); targets 99.54%, all within 2.
+
+**NULL means not derived, 0 means nothing in the quarter.** A game without
+play-by-play keeps NULL, so a hit rate skips it rather than grading a zero.
+**There is no Q1 pass attempts column**: a sack carries the passer's
+`Incompletion` row here, so an attempts count would include ~1,371 sacks a
+season. Only rows whose values change are rewritten, so the daily re-derivation
+of the whole season leaves almost no dead tuples.
+
+**Monitored:** warning, `max_age_hours=36`, gated on the **NFL** season.
+
 ---
 
 ## Jobs run by hand
@@ -698,7 +734,22 @@ python -m worker.jobs.run_backtest
 python -m worker.jobs.run_backtest --seasons 2024 --max-week 8
 python -m worker.jobs.run_backtest --render-only          # from stored metrics, no walk
 python -m worker.jobs.run_backtest --persist-predictions  # hundreds of thousands of rows
+python -m worker.jobs.run_backtest --sport nfl --seasons 2024 2025 --first-quarter
 ```
+
+**`--first-quarter` (NFL only) grades the first-quarter markets beside the
+full-game ones and STORES NOTHING in the database.** It writes
+[nfl-q1-calibration-report.html](nfl-q1-calibration-report.html) and that is the
+whole output. Two reasons, the second the important one: the first-quarter
+markets are not in `markets`, which `calibration_bins.market_key` references, and
+`run_projections.load_calibration` takes the newest stored backtest for the sport
+**without checking it finished** — so a stored NFL walk would silently replace
+the live NFL board's borrowed college calibration as a side effect of measuring
+markets nobody has decided to publish. Measured on 2026-09-11 when a smoke run
+did exactly that on dev before the flag stopped persisting. The first-quarter
+markets are derived from their full-game parents in code
+(`projections.first_quarter_catalogue`) and modelled in
+`models.project_first_quarter`.
 
 The walk-forward backtest and the calibration report. Produces
 [calibration-report.html](calibration-report.html) — the Phase 3 deliverable and

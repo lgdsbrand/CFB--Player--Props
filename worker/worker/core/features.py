@@ -647,6 +647,76 @@ def _goal_line_usage(
     return rows
 
 
+# Pass attempts a game needs before its first quarter describes a starter's
+# spread. Without it the coefficient of variation is set by backups throwing two
+# passes, whose first quarters are nearly all blank.
+FIRST_QUARTER_CV_MIN_PASS_ATTEMPTS = 15
+
+
+def first_quarter_profile(as_of: AsOf) -> list[dict[str, Any]]:
+    """Last season's first-quarter shares and spreads, by position.
+
+    What `models.project_first_quarter` scales and shapes a full-game projection
+    with. Shares are ratios of SUMS -- first-quarter yards over full-game yards
+    at the position -- so they are weighted by production rather than dominated
+    by players with a handful of touches.
+
+    THE WHOLE PRIOR SEASON, AND ONLY IT. A completed season was knowable before
+    this one began, which is the same standing `prior_season_usage` reads with,
+    and the shares barely move between seasons (first-quarter passing yards
+    22.2%, 21.0%, 21.6% for 2023-2025), so nothing is lost by not updating them
+    within a season. No runtime guard: `season` is an equality on a parameter,
+    and a check that reads it back would pass by construction. The call site is
+    pinned by test instead.
+
+    ONE SPORT, through the game. Only derived rows count (`q1_receptions is not
+    null`, migration 0063), so a season without play-by-play produces no rows at
+    all rather than shares of zero.
+    """
+    return fetch_all(
+        """
+        select s.position_group::text as position_group,
+               sum(s.q1_pass_yards)::numeric
+                 / nullif(sum(s.pass_yards), 0)    as q1_share_pass_yards,
+               sum(s.q1_rush_attempts)::numeric
+                 / nullif(sum(s.rush_attempts), 0) as q1_share_rush_attempts,
+               sum(s.q1_rush_yards)::numeric
+                 / nullif(sum(s.rush_yards), 0)    as q1_share_rush_yards,
+               sum(s.q1_receptions)::numeric
+                 / nullif(sum(s.receptions), 0)    as q1_share_receptions,
+               sum(s.q1_rec_yards)::numeric
+                 / nullif(sum(s.rec_yards), 0)     as q1_share_rec_yards,
+               sum(s.q1_offensive_tds)::numeric
+                 / nullif(sum(s.offensive_tds), 0) as q1_share_offensive_tds,
+               stddev_samp(s.q1_pass_yards)
+                 filter (where s.pass_attempts >= %(min_attempts)s)
+                 / nullif(avg(s.q1_pass_yards)
+                   filter (where s.pass_attempts >= %(min_attempts)s), 0)
+                                                   as q1_cv_pass_yards,
+               stddev_samp(s.q1_rush_yards) filter (where s.q1_rush_yards > 0)
+                 / nullif(avg(s.q1_rush_yards)
+                   filter (where s.q1_rush_yards > 0), 0)
+                                                   as q1_cv_positive_rush_yards,
+               stddev_samp(s.q1_rec_yards) filter (where s.q1_rec_yards > 0)
+                 / nullif(avg(s.q1_rec_yards)
+                   filter (where s.q1_rec_yards > 0), 0)
+                                                   as q1_cv_positive_rec_yards
+          from player_game_stats s
+          join games g on g.id = s.game_id and g.sport = %(sport)s
+         where s.season = %(prior_season)s
+           and s.position_group = any(%(positions)s::position_group[])
+           and s.q1_receptions is not null
+         group by s.position_group
+        """,
+        {
+            "prior_season": as_of.prior_season,
+            "sport": as_of.sport,
+            "positions": list(SKILL_POSITIONS),
+            "min_attempts": FIRST_QUARTER_CV_MIN_PASS_ATTEMPTS,
+        },
+    )
+
+
 def team_context(as_of: AsOf) -> list[dict[str, Any]]:
     """Offensive volume and pass/run balance per team, season to date.
 

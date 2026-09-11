@@ -506,6 +506,10 @@ class TestDistributionQuantile:
         ("negative_binomial", {"r": 1.5, "p": 0.6}, 1.0),
         ("beta_binomial", {"n": 9.0, "a": 3.0, "b": 2.0}, 5.4),
         ("beta_binomial", {"n": 3.0, "a": 0.8, "b": 4.0}, 0.5),
+        # First-quarter receiving yards: a blank quarter 45% of the time.
+        ("hurdle_gamma", {"p_zero": 0.45, "shape": 1.6, "scale": 12.0, "loc": 0.0}, 10.56),
+        # After a widening rescale, with positive-part mass BELOW the zero.
+        ("hurdle_gamma", {"p_zero": 0.2, "shape": 2.0, "scale": 8.0, "loc": -6.0}, 8.0),
     ]
 
     @pytest.mark.parametrize("distribution,params,mean", CASES)

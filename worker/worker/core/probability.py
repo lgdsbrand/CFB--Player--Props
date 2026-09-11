@@ -87,6 +87,7 @@ DistributionFamily = Literal[
     "negative_binomial",
     "beta_binomial",
     "bernoulli",
+    "hurdle_gamma",
 ]
 
 REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
@@ -97,6 +98,11 @@ REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
     "negative_binomial": ("r", "p"),
     "beta_binomial": ("n", "a", "b"),
     "bernoulli": ("p",),
+    # A point mass at zero plus a gamma for everything else. First-quarter
+    # yardage: about half of a receiver's first quarters are blank, and no
+    # continuous family can put probability ON zero. See
+    # `models.project_first_quarter`.
+    "hurdle_gamma": ("p_zero", "shape", "scale"),
 }
 
 # `loc` shifts a distribution's support along the x-axis. Optional, defaulting
@@ -107,7 +113,11 @@ REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
 # rushing yards at all. With a free location it fits, and beats the normal that
 # migration 0009 had chosen precisely because normal was the only seeded family
 # admitting negatives.
-OPTIONAL_LOCATION_FAMILIES = frozenset({"gamma", "lognormal"})
+#
+# `hurdle_gamma` carries one on its positive part, and only ever because
+# `models.rescale` widened it by the same location-scale identity it uses for a
+# plain gamma.
+OPTIONAL_LOCATION_FAMILIES = frozenset({"gamma", "lognormal", "hurdle_gamma"})
 
 
 # -----------------------------------------------------------------------------
@@ -404,6 +414,19 @@ def distribution_sd(distribution: str, params: dict[str, Any]) -> float:
         variance = n * p * (1.0 - p) * (n + total) / (1.0 + total)
         return math.sqrt(max(variance, 0.0))
 
+    if distribution == "hurdle_gamma":
+        # A mixture: 0 with probability p, the gamma G otherwise.
+        #   E[X]   = (1-p) E[G]
+        #   E[X^2] = (1-p) (var G + E[G]^2)
+        p_zero = float(params["p_zero"])
+        shape, scale = float(params["shape"]), float(params["scale"])
+        positive_mean = float(params.get("loc", 0.0)) + shape * scale
+        mean = (1.0 - p_zero) * positive_mean
+        second_moment = (1.0 - p_zero) * (
+            shape * scale * scale + positive_mean * positive_mean
+        )
+        return math.sqrt(max(second_moment - mean * mean, 0.0))
+
     raise ValueError(f"Unknown distribution family: {distribution!r}")
 
 
@@ -478,6 +501,27 @@ def distribution_quantile(
                 q, n=float(params["n"]), a=float(params["a"]), b=float(params["b"])
             )
         )
+
+    if distribution == "hurdle_gamma":
+        # Invert F(x) = p*[x >= 0] + (1-p)*G(x) piece by piece. The CDF jumps by
+        # p at zero, so every q inside that jump maps to exactly 0 -- the
+        # quantile of a blank first quarter is a blank first quarter.
+        p_zero = float(params["p_zero"])
+        if p_zero >= 1.0:
+            return 0.0
+        positive = _stats.gamma(
+            a=float(params["shape"]),
+            loc=float(params.get("loc", 0.0)),
+            scale=float(params["scale"]),
+        )
+        # Positive-part mass below zero. Zero unless a widening moved `loc`
+        # negative, but when it has, those values sit BELOW the point mass.
+        below_zero = (1.0 - p_zero) * float(positive.cdf(0.0))
+        if q <= below_zero:
+            return float(positive.ppf(q / (1.0 - p_zero)))
+        if q <= below_zero + p_zero:
+            return 0.0
+        return float(positive.ppf((q - p_zero) / (1.0 - p_zero)))
 
     raise ValueError(f"Unknown distribution family: {distribution!r}")
 
@@ -579,5 +623,19 @@ def prob_over(distribution: str, params: dict[str, Any], line: float) -> float:
                 b=float(params["b"]),
             )
         )
+
+    if distribution == "hurdle_gamma":
+        # The zero is over a line only when the line is negative, which no book
+        # posts; for every real line the over is the positive part alone.
+        p_zero = float(params["p_zero"])
+        positive = float(
+            _stats.gamma.sf(
+                line,
+                a=float(params["shape"]),
+                loc=float(params.get("loc", 0.0)),
+                scale=float(params["scale"]),
+            )
+        )
+        return (p_zero if line < 0 else 0.0) + (1.0 - p_zero) * positive
 
     raise ValueError(f"Unknown distribution family: {distribution!r}")

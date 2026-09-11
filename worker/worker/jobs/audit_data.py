@@ -833,6 +833,35 @@ check(G, "offensive_tds excludes passing TDs", """
        and offensive_tds <> 0
 """, lambda r: r["bad"] == 0)
 
+# First-quarter actuals (migration 0063, `build_quarter_stats`). Only the three
+# counts that reconciled EXACTLY against the box score on every 2023-2025 NFL
+# player-game are held to "never more than the full game": derived targets run
+# up to 2 above the box score and receiving TDs missed on one row, so either
+# could exceed its full-game figure on correct data and turn the canary red.
+check(G, "first-quarter counts never exceed the full game", """
+    select count(*) as bad from player_game_stats
+     where q1_rush_attempts > rush_attempts
+        or q1_receptions > receptions
+        or q1_rush_tds > rush_tds
+""", lambda r: r["bad"] == 0)
+
+check(G, "q1_offensive_tds = q1 rush + q1 rec TDs, NULL only when underived", """
+    select count(*) as bad from player_game_stats
+     where q1_offensive_tds is distinct from
+           case when q1_rush_tds is null and q1_rec_tds is null then null
+                else coalesce(q1_rush_tds, 0) + coalesce(q1_rec_tds, 0) end
+""", lambda r: r["bad"] == 0)
+
+# NFL only, because only the NFL chain derives them: college player-games are
+# NULL by design, and counting them would fail on correct data. A failure here
+# means plays landed and `build_quarter_stats` did not run after them.
+check(G, "NFL player-games with play-by-play have first-quarter actuals", """
+    select count(*) as underived from player_game_stats s
+      join games g on g.id = s.game_id and g.sport = 'nfl'
+     where s.q1_receptions is null
+       and exists (select 1 from plays p where p.game_id = s.game_id)
+""", lambda r: r["underived"] == 0)
+
 # Split by season_type since migration 0020. A single range over both would
 # have to be wide enough to admit a postseason week, which would stop it
 # catching the very thing it exists for — a regular-season week landing at 21.

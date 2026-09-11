@@ -334,6 +334,12 @@ services:
   # cron as a 168-hour period, which would push `max_age_hours` past a week and
   # leave the chain effectively unmonitored. The storage guard refuses loudly
   # when the room runs out; a silent staleness window would not.
+  #
+  # `build_quarter_stats` RUNS LAST, AFTER `build_splits`, though it needs only
+  # the plays. It is the newest step (first-quarter actuals, 2026-09-10), and
+  # with `&&` a failure stops everything after it: placed before the splits, a
+  # fault in Q1 stats would freeze the NFL defensive ratings the whole board
+  # depends on. Last, it can only cost itself.
   - type: cron
     name: nfl-props-ingest-results
     runtime: python
@@ -345,7 +351,8 @@ services:
       python -m worker.jobs.nfl_ingest_reference --current &&
       python -m worker.jobs.nfl_ingest_stats --current &&
       python -m worker.jobs.nfl_ingest_plays --current &&
-      python -m worker.jobs.build_splits --current --sport nfl
+      python -m worker.jobs.build_splits --current --sport nfl &&
+      python -m worker.jobs.build_quarter_stats --current --sport nfl
     envVars:
       - fromGroup: cfb-props-worker
 

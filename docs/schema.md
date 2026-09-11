@@ -109,7 +109,7 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 ### Facts
 | Table | Notes |
 |---|---|
-| `player_game_stats` | **The only home for actuals.** `offensive_tds` generated (rush+rec, excludes passing and return TDs) |
+| `player_game_stats` | **The only home for actuals.** `offensive_tds` generated (rush+rec, excludes passing and return TDs). `q1_*` are first-quarter actuals derived from play-by-play by `build_quarter_stats` (migration 0063); NULL means not derived, 0 means nothing in the quarter |
 | `plays` | PBP trimmed to what the split engine and goal-line model need |
 | `play_player_stats` | Per-play attribution. ~1M rows/season. `position_group` denormalized |
 

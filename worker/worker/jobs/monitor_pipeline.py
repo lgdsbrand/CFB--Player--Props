@@ -273,6 +273,14 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
              "stops, the splits quietly freeze while the splits job itself "
              "keeps reporting success from the college run.",
     ),
+    JobExpectation(
+        name="build_quarter_stats",
+        max_age_hours=36,
+        sport="nfl",
+        note="daily 08:20 UTC, LAST in the NFL results chain — the first-quarter "
+             "actuals behind the Q1 markets. A warning: a missed day leaves Q1 "
+             "hit rates one game behind while every full-game surface stands.",
+    ),
 )
 
 

@@ -27,6 +27,7 @@ import {
   resolveBoardView,
   ROWS_PER_PAGE,
   rowsPerPage,
+  scopedHref,
   type BoardParams,
 } from "./board-params.ts";
 
@@ -353,4 +354,51 @@ test("gamesHref omits the sport for college, like boardHref does", () => {
 test("gamesHref puts the sport first, so a truncated link still selects rows", () => {
   const href = gamesHref({ sport: "nfl", season: 2026, week: 3 });
   assert.ok(href.indexOf("sport=") < href.indexOf("season="));
+});
+
+// -----------------------------------------------------------------------------
+// scopedHref — every link that carries a sport, season and week
+// -----------------------------------------------------------------------------
+// REPORTED FROM THE LIVE SITE, 2026-09-11: pressing WEEK 2 on the NFL board
+// landed on college. The week strip built `${basePath}?season=..&week=..` by
+// hand. The same hand-built shape was then found on the player page's back
+// link, every home tile, and every pill and pager on the cheat sheet and no-vig
+// pages. `sport-links.test.ts` now refuses the shape outright; this pins the
+// helper that replaced it.
+test("scopedHref writes the sport first, then season and week, then the extras", () => {
+  assert.equal(
+    scopedHref(
+      "/no-vig",
+      { sport: "nfl", season: 2026, week: 2 },
+      { sort: "fair", market: undefined, position: null, page: "" },
+    ),
+    "/no-vig?sport=nfl&season=2026&week=2&sort=fair",
+  );
+});
+
+test("scopedHref omits college and whatever scope is absent", () => {
+  assert.equal(scopedHref("/props", { sport: "cfb", season: 2025, week: 9 }), "/props?season=2025&week=9");
+  assert.equal(scopedHref("/props", { sport: "cfb" }), "/props");
+  assert.equal(scopedHref("/props", { sport: "nfl" }), "/props?sport=nfl");
+});
+
+test("a week-strip link on the NFL board parses back to the NFL and that week", () => {
+  const href = scopedHref("/props", { sport: "nfl", season: 2026, week: 2 });
+  const back = parseBoardParams(
+    Object.fromEntries(new URLSearchParams(href.split("?")[1] ?? "")),
+    { edgesOnlyDefault: false },
+  );
+  assert.equal(back.sport, "nfl");
+  assert.equal(back.season, 2026);
+  assert.equal(back.week, 2);
+});
+
+test("gamesHref and scopedHref agree", () => {
+  // Two helpers for one shape would be two chances to drift.
+  for (const sport of ["cfb", "nfl"] as const) {
+    assert.equal(
+      gamesHref({ sport, season: 2026, week: 4 }),
+      scopedHref("/games", { sport, season: 2026, week: 4 }),
+    );
+  }
 });

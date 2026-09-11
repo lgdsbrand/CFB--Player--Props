@@ -50,7 +50,8 @@ function openingWeekend(): HomeCounts {
   };
 }
 
-const SCOPE = { season: 2026, week: 1 };
+const SCOPE = { sport: "cfb", season: 2026, week: 1 } as const;
+const NFL = { ...SCOPE, sport: "nfl" } as const;
 const find = (c: HomeCounts, key: string) =>
   homeTiles(c, SCOPE).find((t) => t.key === key)!;
 
@@ -61,6 +62,31 @@ test("every tile carries the season and week it is describing", () => {
     assert.match(tile.href!, /season=2026/, tile.key);
     assert.match(tile.href!, /week=1/, tile.key);
   }
+});
+
+test("every NFL tile carries the sport, first", () => {
+  // Found 2026-09-11 while chasing a reported week-strip bug: the scope here was
+  // `season=..&week=..` and nothing else, so every tile on the NFL home page led
+  // to the COLLEGE board, games index and cheat sheet.
+  for (const tile of homeTiles(counts(), NFL)) {
+    assert.match(tile.href!, /^[^?]+\?sport=nfl&/, tile.key);
+  }
+});
+
+test("college tiles keep the sport out of the URL", () => {
+  for (const tile of homeTiles(counts(), SCOPE)) {
+    assert.doesNotMatch(tile.href!, /sport=/, tile.key);
+  }
+});
+
+test("an NFL home page does not describe college books", () => {
+  const edges = homeTiles(openingWeekend(), NFL).find((t) => t.key === "edges")!;
+  assert.match(edges.unavailable!, /no sportsbook has posted/i);
+  assert.doesNotMatch(edges.unavailable!, /NCAAF|college|Saturday/i);
+
+  const note = pricingNote(counts({ developmentLine: 433, bookLine: 0 }), "nfl")!;
+  assert.doesNotMatch(note, /NCAAF|college|Saturday/i);
+  assert.match(note, /Top Edges is Best Plays/i);
 });
 
 test("nothing on the page is labelled +EV", () => {

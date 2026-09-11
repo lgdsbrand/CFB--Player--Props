@@ -3,7 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
+import { BOARD_PATH, scopedHref } from "@/lib/core/board-params";
 import { formatDateRange } from "@/lib/core/format";
+import type { Sport } from "@/lib/core/sport";
 import type { SlateWeek } from "@/lib/core/types";
 
 /**
@@ -69,10 +71,20 @@ const WEEKS_SHOWN_COLLAPSED = 2;
 export function WeekStrip({
   weeks,
   active,
-  basePath = "/",
+  sport,
+  basePath = BOARD_PATH,
 }: {
   weeks: SlateWeek[];
   active: SlateWeek | null;
+  /**
+   * The league these weeks belong to, carried on every card and season pill.
+   *
+   * REQUIRED, and that is the fix for a reported bug: the cards were built as
+   * `${basePath}?season=..&week=..`, so pressing WEEK 2 on the NFL board opened
+   * the college board (2026-09-11). Two sports share every season and week
+   * number, so a week link without a sport is not a week link at all.
+   */
+  sport: Sport;
   /**
    * Where a week card links. The strip appears above the board and above the
    * games index, and each must keep the reader on the page they are already on
@@ -136,7 +148,7 @@ export function WeekStrip({
             return (
               <Link
                 key={season}
-                href={`${basePath}?season=${season}&week=${landing.week}`}
+                href={scopedHref(basePath, { sport, season, week: landing.week })}
                 aria-current={isActive ? "true" : undefined}
                 className={
                   "rounded-full border px-2.5 py-1 text-[0.6875rem] font-bold tabular-nums transition-colors " +
@@ -164,7 +176,11 @@ export function WeekStrip({
             <Link
               key={`${week.season}-${week.week}`}
               ref={isActive ? current : undefined}
-              href={`${basePath}?season=${week.season}&week=${week.week}`}
+              href={scopedHref(basePath, {
+                sport,
+                season: week.season,
+                week: week.week,
+              })}
               aria-current={isActive ? "page" : undefined}
               className={
                 "flex min-w-30 shrink-0 flex-col gap-0.5 rounded-xl border px-3 py-2 transition-colors " +

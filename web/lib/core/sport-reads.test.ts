@@ -32,9 +32,16 @@ const APP = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", 
  * list would grow itself and quietly cover nothing.
  */
 const SPORT_AWARE_READS = [
+  "getBoardCounts",
   "getBoardRows",
+  // Added 2026-09-11, along with the four below. The cheat sheet called this
+  // without a sport, so the NFL sheet explained why it was empty from college's
+  // counts -- the eighth instance of this class, found while fixing the links.
+  "getCheatSheet",
+  "getCheatSheetContext",
   "getConferences",
   "getDefenseRatings",
+  "getHomeCounts",
   // Not a `sport` parameter, but the same failure: `includePriorSeason`
   // defaults to false, which is college's behaviour, so an NFL page that omits
   // `borrowsPriorSeasonForm(sport)` grades week 2's Last 5 off one game and
@@ -42,6 +49,7 @@ const SPORT_AWARE_READS = [
   "getGameLogsByPlayer",
   "getNoVigMarkets",
   "getNoVigPage",
+  "getNoVigSummary",
   "getPlayerGameLog",
   "getSlateGames",
   "getSlateWeeks",

@@ -50,6 +50,7 @@ export function PlayerCard({
   // the card is not a nest of links and the accessible name is the player's.
   const href = playerHref({
     playerId: card.playerId,
+    sport: card.markets[0].sport,
     season: card.markets[0].season,
     week: card.markets[0].week,
   });

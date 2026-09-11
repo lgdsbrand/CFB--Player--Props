@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { BOARD_PATH } from "@/lib/core/board-params";
+import { BOARD_PATH, scopedHref } from "@/lib/core/board-params";
 import {
   DEFAULT_SPORT,
   SPORTS,
@@ -30,9 +30,12 @@ export function SiteHeader({
    * it silently returns an NFL reader to the college board. That is worse than
    * a lost filter: sport decides which rows exist at all, so the symptom is a
    * board full of the wrong league rather than an obviously missing control.
+   *
+   * Built by `scopedHref`, not by appending `?sport=` to a path — the shape
+   * `sport-links.test.ts` refuses, because it is the shape every dropped sport
+   * on this site has had.
    */
-  const withSport = (href: string) =>
-    sport === DEFAULT_SPORT ? href : `${href}?sport=${sport}`;
+  const withSport = (href: string) => scopedHref(href, { sport });
   // `/health` IS DELIBERATELY NOT HERE. It is an operator's deploy proof, not a
   // destination: it names internal tables, prints row counts, echoes raw
   // Postgres error text when a check fails, and reports on the RLS posture by
@@ -104,12 +107,10 @@ export function SiteHeader({
         <div className="ml-auto flex shrink-0 items-center gap-0.5 rounded-full bg-panel/60 p-0.5">
           {SPORTS.map((option) => {
             const active = option === sport;
-            const href =
-              option === DEFAULT_SPORT ? activeHref : `${activeHref}?sport=${option}`;
             return (
               <Link
                 key={option}
-                href={href}
+                href={scopedHref(activeHref, { sport: option })}
                 aria-current={active ? "true" : undefined}
                 className={
                   "rounded-full px-2 py-1 text-[0.625rem] font-bold uppercase tracking-label transition-colors sm:px-2.5 " +

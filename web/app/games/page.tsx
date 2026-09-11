@@ -169,7 +169,7 @@ export default async function Games({
         <h1 className="text-2xl font-extrabold tracking-tight">Analyze Games</h1>
       </div>
 
-      <WeekStrip weeks={weeks} active={active} basePath={GAMES_PATH} />
+      <WeekStrip weeks={weeks} active={active} basePath={GAMES_PATH} sport={sport} />
 
       <DayStrip
         days={days}

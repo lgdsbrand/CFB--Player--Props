@@ -9,6 +9,7 @@
  */
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import type { Sport } from "@/lib/core/sport";
 import type { PlayerGameLogRow, PositionGroup } from "@/lib/core/types";
 import {
   type DbRow,
@@ -84,6 +85,11 @@ export type PlayerIdentity = {
   id: number;
   name: string;
   positionGroup: PositionGroup;
+  /**
+   * The league this player belongs to — the authority when a link into the
+   * player page claims the wrong one and there are no board rows to ask instead.
+   */
+  sport: Sport;
 };
 
 /**
@@ -103,7 +109,7 @@ export async function getPlayerIdentity(
   const rows = unwrap<DbRow[]>(
     await supabase
       .from("players")
-      .select("id, name, position_group")
+      .select("id, name, position_group, sport")
       .eq("id", playerId)
       .limit(1),
     "players (identity)",
@@ -114,6 +120,7 @@ export async function getPlayerIdentity(
     id: rows[0].id as number,
     name: rows[0].name as string,
     positionGroup: rows[0].position_group as PositionGroup,
+    sport: rows[0].sport as Sport,
   };
 }
 

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import {
+  BOARD_PATH,
   boardHref,
   hiddenFields,
   resetBoardHref,
@@ -175,7 +176,10 @@ export function FilterFields({
   return (
     <form
       method="GET"
-      action="/"
+      // The board itself, not `/`. Posting to the home page only reached the
+      // board through its legacy-link redirect -- an extra round trip for every
+      // pre-hydration search, and one more hop for the sport to be lost on.
+      action={BOARD_PATH}
       // Pre-hydration this is a real GET and the hidden fields carry the rest
       // of the state. Once interactive, Enter flushes the pending keystroke
       // instead of reloading the page.

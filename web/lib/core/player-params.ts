@@ -12,9 +12,24 @@
  */
 
 import type { RawParams } from "@/lib/core/board-params";
+// Relative, with the extension: these are VALUES, and Node's test runner does
+// not understand the `@/*` alias.
+import { DEFAULT_SPORT, resolveSport, type Sport } from "./sport.ts";
 
 export type PlayerParams = {
   playerId: number;
+  /**
+   * Which league the player is in. REQUIRED, so every link into this page has
+   * to decide it rather than inherit college by omission.
+   *
+   * It was absent until 2026-09-11, and that was a reported bug: every link into
+   * an NFL player's page called him a college player, so the page read college's
+   * weeks and defense ratings, lit NCAAF in the header, and sent "Back to the
+   * board" to an empty college board. The page still checks this against the
+   * player's own rows and redirects when a link claims the wrong sport — a
+   * player id DETERMINES its sport, the URL only claims one.
+   */
+  sport: Sport;
   season?: number;
   week?: number;
   /** Which market's line the chart, splits and log are graded against. */
@@ -46,6 +61,7 @@ export function parsePlayerParams(
 
   return {
     playerId,
+    sport: resolveSport(raw.sport),
     season: int(raw.season),
     week: int(raw.week),
     market: single(raw.market),
@@ -59,6 +75,8 @@ export function playerHref(
 ): string {
   const next = { ...current, ...changes };
   const search = new URLSearchParams();
+  // First and omitted for college, the way `boardHref` writes it.
+  if (next.sport !== DEFAULT_SPORT) search.set("sport", next.sport);
   if (next.season !== undefined) search.set("season", String(next.season));
   if (next.week !== undefined) search.set("week", String(next.week));
   if (next.market) search.set("market", next.market);

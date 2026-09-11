@@ -112,10 +112,11 @@ export default async function Home({
   );
 
   const tiles = homeTiles(counts, {
+    sport,
     season: active.season,
     week: active.week,
   });
-  const note = pricingNote(counts);
+  const note = pricingNote(counts, sport);
 
   return (
     <Shell sport={sport}>
@@ -185,8 +186,11 @@ function Hero({ subtitle, sport }: { subtitle: string; sport: Sport }) {
   return (
     <div className="flex flex-col gap-2">
       <span className="label-caption">Legends Sports · {SPORT_LABEL[sport]}</span>
+      {/* The league from the URL, not a literal. This read "College Football
+          Player Props" on the NFL home page too, directly under a caption that
+          said NFL. */}
       <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl">
-        College Football{" "}
+        {SPORT_LABEL[sport]}{" "}
         <span className="gradient-text">Player Props</span>
       </h1>
       <p className="text-muted text-sm tabular-nums">{subtitle}</p>

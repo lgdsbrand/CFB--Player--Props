@@ -47,6 +47,7 @@ import {
   DEFAULT_SPORT,
   resolveSport,
   SPORT_LABEL,
+  SPORT_SHORT,
   type Sport,
 } from "@/lib/core/sport";
 import { getConferences, getMarkets } from "@/lib/data/catalogue";
@@ -276,7 +277,7 @@ export default async function Home({
         */}
       </div>
 
-      <WeekStrip weeks={weeks} active={active} basePath={BOARD_PATH} />
+      <WeekStrip weeks={weeks} active={active} basePath={BOARD_PATH} sport={sport} />
 
       {/* A preset is the ABSENCE of filters, so the day strip goes with the
           rest of them. The week strip stays: it is scope, and without it a
@@ -387,7 +388,7 @@ export default async function Home({
           placeholders.{" "}
           {coverage.bookLine > 0
             ? `The other ${formatCount(coverage.bookLine)} come from a book.`
-            : "No book has posted a real NCAAF prop yet."}
+            : `No book has posted a real ${SPORT_SHORT[sport]} prop yet.`}
         </p>
       ) : null}
 

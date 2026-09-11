@@ -4,7 +4,12 @@ import { SheetRow } from "@/components/cheat-sheet/sheet-row";
 import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
 import { WeekStrip } from "@/components/week-strip";
-import { BOARD_PATH, parseBoardParams, type RawParams } from "@/lib/core/board-params";
+import {
+  BOARD_PATH,
+  parseBoardParams,
+  scopedHref,
+  type RawParams,
+} from "@/lib/core/board-params";
 import {
   CHEAT_WINDOWS,
   DEFAULT_CHEAT_WINDOW,
@@ -105,31 +110,35 @@ export default async function CheatSheets({
   // Only when there is nothing to show. Each of these counts is another full
   // grading pass over the week, and on a populated sheet nothing needs them.
   const context = empty
-    ? await getCheatSheetContext(active.season, active.week, cutoff)
+    ? // `sport` was missing here, so the NFL sheet explained its empty state
+      // ("too early", "nothing priced") from COLLEGE's counts.
+      await getCheatSheetContext(active.season, active.week, cutoff, sport)
     : null;
 
+  // SPORT ON EVERY LINK. These pills were hand-built from season and week
+  // alone, so choosing a window or a position on the NFL sheet opened the
+  // college one (found 2026-09-11 beside a reported week-strip bug).
+  const scope = { sport, season: active.season, week: active.week };
   const href = (changes: {
     window?: number;
     position?: PositionGroup | null;
   }) => {
-    const search = new URLSearchParams();
-    search.set("season", String(active.season));
-    search.set("week", String(active.week));
     const nextWindow = changes.window ?? windowSize;
-    if (nextWindow !== DEFAULT_CHEAT_WINDOW) {
-      search.set("window", String(nextWindow));
-    }
     const nextPosition =
       changes.position === undefined ? params.position : changes.position;
-    if (nextPosition) search.set("position", nextPosition);
-    return `/cheat-sheets?${search.toString()}`;
+    return scopedHref("/cheat-sheets", scope, {
+      window: nextWindow !== DEFAULT_CHEAT_WINDOW ? nextWindow : undefined,
+      position: nextPosition,
+    });
   };
+  // Every mention of "the board" on this page, pointed at the same slate.
+  const boardLink = scopedHref(BOARD_PATH, scope);
 
   return (
     <Shell sport={sport}>
       <Header sport={sport} />
 
-      <WeekStrip weeks={weeks} active={active} basePath="/cheat-sheets" />
+      <WeekStrip weeks={weeks} active={active} basePath="/cheat-sheets" sport={sport} />
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <div className="flex items-center gap-2">
@@ -178,7 +187,7 @@ export default async function CheatSheets({
         last {windowSize} games with a box score. It is history, not a
         projection, and a streak is not an edge: whether the price is worth
         taking is the{" "}
-        <Link href={BOARD_PATH} className="text-accent-cyan hover:underline">
+        <Link href={boardLink} className="text-accent-cyan hover:underline">
           board&rsquo;s
         </Link>{" "}
         question. Entries need at least {minDecidedFor(windowSize)} decided games
@@ -210,15 +219,19 @@ export default async function CheatSheets({
           windowSize={windowSize}
           position={params.position}
           clearedHref={href({ position: null })}
+          boardLink={boardLink}
+          sport={sport}
         />
       ) : (
-        sections.map((section) => <Section key={section.tier.key} section={section} />)
+        sections.map((section) => (
+          <Section key={section.tier.key} section={section} sport={sport} />
+        ))
       )}
     </Shell>
   );
 }
 
-function Section({ section }: { section: CheatSection }) {
+function Section({ section, sport }: { section: CheatSection; sport: Sport }) {
   return (
     <section className="panel flex flex-col">
       <header className="border-border-subtle flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b px-4 py-3">
@@ -250,7 +263,11 @@ function Section({ section }: { section: CheatSection }) {
       ) : (
         <div className="flex flex-col">
           {section.rows.map((row) => (
-            <SheetRow key={`${row.projectionId}-${row.windowSize}`} row={row} />
+            <SheetRow
+              key={`${row.projectionId}-${row.windowSize}`}
+              row={row}
+              sport={sport}
+            />
           ))}
         </div>
       )}
@@ -273,6 +290,8 @@ function EmptySheet({
   windowSize,
   position,
   clearedHref,
+  boardLink,
+  sport,
 }: {
   reason: ReturnType<typeof emptyReason>;
   season: number;
@@ -280,6 +299,9 @@ function EmptySheet({
   windowSize: number;
   position: PositionGroup | undefined;
   clearedHref: string;
+  /** The board for THIS sheet's league and week — never a bare `BOARD_PATH`. */
+  boardLink: string;
+  sport: Sport;
 }) {
   if (reason === "too-early") {
     return (
@@ -292,7 +314,7 @@ function EmptySheet({
           of. The sheet starts to fill from about week{" "}
           {minDecidedFor(windowSize) + 1}. Until then the model&rsquo;s calls are
           on the{" "}
-          <Link href={BOARD_PATH} className="text-accent-cyan hover:underline">
+          <Link href={boardLink} className="text-accent-cyan hover:underline">
             board
           </Link>
           , and they lean on priors rather than on this season&rsquo;s games by
@@ -313,7 +335,7 @@ function EmptySheet({
           so it starts to be worth reading around week{" "}
           {minDecidedFor(windowSize) + 1}. Until then the model&rsquo;s leans are
           on the{" "}
-          <Link href={BOARD_PATH} className="text-accent-cyan hover:underline">
+          <Link href={boardLink} className="text-accent-cyan hover:underline">
             board
           </Link>
           .
@@ -328,11 +350,14 @@ function EmptySheet({
         <h2 className="section-header mb-2">Nothing priced yet</h2>
         <p className="text-muted max-w-prose text-sm">
           A hit rate is measured against a line, and no prop on this slate
-          carries one. College books post player props late — usually Thursday or
-          Friday for Saturday games (CLAUDE.md §7) — so this fills in with the
-          market rather than on a schedule of ours. The projections are already
-          on the{" "}
-          <Link href={BOARD_PATH} className="text-accent-cyan hover:underline">
+          carries one.{" "}
+          {/* College's posting habit only. The NFL sheet used to tell its readers
+              to wait for a Saturday game. */}
+          {sport === "cfb"
+            ? "College books post player props late — usually Thursday or Friday for Saturday games — so this fills in with the market rather than on a schedule of ours."
+            : "This fills in as books post, with the market rather than on a schedule of ours."}{" "}
+          The projections are already on the{" "}
+          <Link href={boardLink} className="text-accent-cyan hover:underline">
             board
           </Link>
           .

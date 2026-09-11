@@ -51,12 +51,13 @@
 
 // Relative, with the extension: these carry VALUES, and Node's test runner does
 // not understand the `@/*` alias.
-import { BOARD_PATH } from "./board-params.ts";
+import { BOARD_PATH, scopedHref } from "./board-params.ts";
 // `formatCount` and not `toLocaleString()`: bare toLocaleString follows the
 // SERVER's locale, which on this machine renders 1200 as "1.200" — read by an
 // American audience as one point two. The pinned formatter also keeps server
 // and client agreeing, which is a hydration mismatch avoided.
 import { formatCount } from "./format.ts";
+import { DEFAULT_SPORT, SPORT_SHORT, type Sport } from "./sport.ts";
 
 export type HomeCounts = {
   /** Every projection on the slate, in the displayed conferences. */
@@ -106,11 +107,29 @@ export type HomeTile = {
   caveat: string | null;
 };
 
+/**
+ * When a league's books post player props, as a sentence, or "" where we have
+ * not measured it.
+ *
+ * College only. The Thursday-or-Friday habit is CLAUDE.md §7's observation about
+ * NCAAF books; stating it on the NFL home page told NFL readers to wait for a
+ * Saturday their league does not play.
+ */
+function postingHabit(sport: Sport): string {
+  return sport === "cfb"
+    ? " College books usually post on Thursday or Friday for Saturday games."
+    : "";
+}
+
 export function homeTiles(
   counts: HomeCounts,
-  { season, week }: { season: number; week: number },
+  { sport, season, week }: { sport: Sport; season: number; week: number },
 ): HomeTile[] {
-  const scope = `season=${season}&week=${week}`;
+  // EVERY TILE CARRIES THE SPORT. Until 2026-09-11 this was
+  // `season=..&week=..` and nothing else, so every tile on the NFL home page led
+  // to the COLLEGE board, games index and cheat sheet.
+  const at = (path: string, extras: Record<string, string> = {}) =>
+    scopedHref(path, { sport, season, week }, extras);
 
   /** One rule for every tile: no rows, no link, and a reason instead. */
   const tile = (
@@ -137,7 +156,7 @@ export function homeTiles(
       title: "Analyze Props",
       blurb:
         "Every player and market on the slate, with the over/under call and the confidence behind it.",
-      href: `${BOARD_PATH}?${scope}`,
+      href: at(BOARD_PATH),
       count: counts.props,
       countLabel: "props this week",
       caveat: null,
@@ -150,7 +169,7 @@ export function homeTiles(
       title: "Analyze Games",
       blurb:
         "The slate game first: the book's spread and total, the position matchups, and every prop underneath.",
-      href: `/games?${scope}`,
+      href: at("/games"),
       count: counts.games,
       countLabel: "games this week",
       caveat: null,
@@ -165,7 +184,7 @@ export function homeTiles(
       // A PRESET, not a preset FILTER on the full board. The client asked for
       // "all the plays, just a table view" without the filter apparatus — see
       // `BoardPreset` in `board-params.ts`.
-      href: `${BOARD_PATH}?${scope}&preset=best`,
+      href: at(BOARD_PATH, { preset: "best" }),
       count: counts.calls,
       countLabel: "calls to rank",
       // Rule 2, on the tile rather than the destination: the tile is what makes
@@ -181,14 +200,15 @@ export function homeTiles(
       title: "Top Edges",
       blurb:
         "Where the model most disagrees with the book, measured against the de-vigged price.",
-      href: `${BOARD_PATH}?${scope}&preset=edges`,
+      href: at(BOARD_PATH, { preset: "edges" }),
       count: counts.edges,
       countLabel: "clearing the threshold",
       caveat: null,
       // Deliberately about the MARKET, not about us. Nothing is broken; the
       // books have not opened these props yet.
       emptyReason:
-        "An edge needs a price to measure against, and no sportsbook has posted an NCAAF player prop for this slate. College books usually post on Thursday or Friday for Saturday games.",
+        `An edge needs a price to measure against, and no sportsbook has posted an ${SPORT_SHORT[sport]} player prop for this slate.` +
+        postingHabit(sport),
     }),
     tile({
       key: "cheat",
@@ -196,7 +216,7 @@ export function homeTiles(
       title: "Cheat Sheets",
       blurb:
         "Players whose recent games have already cleared the line showing today — the 100% and 80%-and-up lists.",
-      href: `/cheat-sheets?${scope}`,
+      href: at("/cheat-sheets"),
       count: counts.cheatSheet,
       countLabel: "at 80% or better",
       // The same rule as BEST PLAYS, one step further. That tile has to say
@@ -225,16 +245,20 @@ export function homeTiles(
  * rows, one of them implying the market has been beaten, is the worst version
  * of this page.
  */
-export function pricingNote(counts: HomeCounts): string | null {
+export function pricingNote(
+  counts: HomeCounts,
+  sport: Sport = DEFAULT_SPORT,
+): string | null {
   if (counts.developmentLine === 0) return null;
 
   if (counts.bookLine === 0) {
     return (
-      "No sportsbook has posted an NCAAF player prop for this slate yet. Every " +
+      `No sportsbook has posted an ${SPORT_SHORT[sport]} player prop for this slate yet. Every ` +
       "priced row here carries a placeholder line at even money, which de-vigs " +
       "to exactly 50% — so an edge is currently just confidence minus 50%, and " +
       "Top Edges is Best Plays in a different order. Both fill in properly as " +
-      "books post, usually Thursday or Friday for Saturday games."
+      "books post." +
+      postingHabit(sport)
     );
   }
 

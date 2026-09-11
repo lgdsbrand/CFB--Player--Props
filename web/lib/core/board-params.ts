@@ -339,11 +339,40 @@ export function gamesHref(game: {
   week: number;
   sport: Sport;
 }): string {
+  return scopedHref("/games", game);
+}
+
+/**
+ * Any page, scoped to a sport, season and week, plus whatever else it carries.
+ *
+ * THE ONLY WAY A STATE-CARRYING LINK IS BUILT OUTSIDE `boardHref`. Reported from
+ * the live site 2026-09-11: the week strip's `${basePath}?season=..&week=..` and
+ * the player page's `${BOARD_PATH}?season=..&week=..` both dropped the sport, so
+ * WEEK 2 on the NFL board opened college, and leaving an NFL player opened an
+ * empty college board. The same hand-built shape sat on every home tile and every
+ * pill and pager on the cheat sheet and no-vig pages. `sport-links.test.ts` now
+ * refuses the shape; this is what replaces it.
+ *
+ * Sport first and omitted for college, exactly as `boardHref` writes it, so the
+ * two produce the same address for the same state. Extras that are undefined,
+ * null or empty are left out rather than written as `key=`.
+ */
+export function scopedHref(
+  path: string,
+  scope: { sport?: Sport; season?: number; week?: number },
+  extras: Record<string, string | number | null | undefined> = {},
+): string {
   const search = new URLSearchParams();
-  if (game.sport !== DEFAULT_SPORT) search.set("sport", game.sport);
-  search.set("season", String(game.season));
-  search.set("week", String(game.week));
-  return `/games?${search.toString()}`;
+  if (scope.sport && scope.sport !== DEFAULT_SPORT) search.set("sport", scope.sport);
+  if (scope.season !== undefined) search.set("season", String(scope.season));
+  if (scope.week !== undefined) search.set("week", String(scope.week));
+  for (const [key, value] of Object.entries(extras)) {
+    if (value !== undefined && value !== null && value !== "") {
+      search.set(key, String(value));
+    }
+  }
+  const query = search.toString();
+  return query ? `${path}?${query}` : path;
 }
 
 export function boardHref(

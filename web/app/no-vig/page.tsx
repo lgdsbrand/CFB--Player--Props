@@ -10,6 +10,7 @@ import {
   parseBoardParams,
   type RawParams,
   ROWS_PER_PAGE,
+  scopedHref,
 } from "@/lib/core/board-params";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount } from "@/lib/core/format";
@@ -121,7 +122,8 @@ export default async function NoVig({
     // spread. One redundant key is a cheap price for a check that has caught
     // this class six times — see `lib/core/sport.ts`.
     getNoVigPage({ ...filters, sport, sort }),
-    getNoVigSummary(filters),
+    // Restated for the same reason as the line above: the guard is a text scan.
+    getNoVigSummary({ ...filters, sport }),
   ]);
 
   const markets = slate.markets;
@@ -154,6 +156,7 @@ export default async function NoVig({
   const firstShown = (currentPage - 1) * perPage;
   const visibleRows = page.rows.slice(firstShown, firstShown + perPage);
 
+  const scope = { sport, season: active.season, week: active.week };
   const href = (changes: {
     sort?: NoVigSort;
     position?: PositionGroup | null;
@@ -161,38 +164,36 @@ export default async function NoVig({
     shop?: boolean;
     page?: number;
   }) => {
-    const search = new URLSearchParams();
-    search.set("season", String(active.season));
-    search.set("week", String(active.week));
-
     const nextSort = changes.sort ?? sort;
-    if (nextSort !== "hold") search.set("sort", nextSort);
-
     const nextPosition =
       changes.position === undefined ? params.position : changes.position;
-    if (nextPosition) search.set("position", nextPosition);
-
     const nextMarket = changes.market === undefined ? market : changes.market;
-    if (nextMarket) search.set("market", nextMarket);
-
     const nextShop = changes.shop ?? shoppableOnly;
-    if (nextShop) search.set("shop", "1");
 
     // ANY CHANGE THAT IS NOT THE PAGER RESETS TO PAGE ONE. Every other caller
     // here narrows or re-sorts, and carrying page 14 across a filter change
     // lands the reader on an empty tail of a shorter list — the stale-deep-link
     // failure the board's own pager guards against by clamping.
     const nextPage = changes.page ?? 1;
-    if (nextPage > 1) search.set("page", String(nextPage));
 
-    return `/no-vig?${search.toString()}`;
+    // SPORT ON EVERY LINK. This was hand-built from season and week alone, so
+    // every sort, market, position, shop and page control on the NFL no-vig page
+    // opened the college one (found 2026-09-11 beside a reported week-strip bug).
+    return scopedHref("/no-vig", scope, {
+      sort: nextSort !== "hold" ? nextSort : undefined,
+      position: nextPosition,
+      market: nextMarket,
+      shop: nextShop ? "1" : undefined,
+      page: nextPage > 1 ? nextPage : undefined,
+    });
   };
+  const boardLink = scopedHref(BOARD_PATH, scope);
 
   return (
     <Shell sport={sport}>
       <Header sport={sport} />
 
-      <WeekStrip weeks={weeks} active={active} basePath="/no-vig" />
+      <WeekStrip weeks={weeks} active={active} basePath="/no-vig" sport={sport} />
 
       {/*
         THE EXPLANATION SITS ABOVE THE TABLE. Everything below is a grid of
@@ -214,7 +215,7 @@ export default async function NoVig({
         is the price the same
         probability would carry at no margin. This is the market&rsquo;s number,
         not ours — for what the model thinks, see the{" "}
-        <Link href={BOARD_PATH} className="text-accent-cyan hover:underline">
+        <Link href={boardLink} className="text-accent-cyan hover:underline">
           board
         </Link>
         .
@@ -280,6 +281,7 @@ export default async function NoVig({
 
       {page.rows.length === 0 ? (
         <EmptyState
+          sport={sport}
           hasMarkets={markets.length > 0}
           shoppableOnly={shoppableOnly}
           filtered={Boolean(market || params.position)}
@@ -318,7 +320,7 @@ export default async function NoVig({
             </p>
           ) : null}
 
-          <NoVigTable rows={visibleRows} />
+          <NoVigTable rows={visibleRows} sport={sport} />
 
           {totalPages > 1 ? (
             <nav
@@ -385,11 +387,13 @@ function Stat({ value, label }: { value: string; label: string }) {
  * has to say why.
  */
 function EmptyState({
+  sport,
   hasMarkets,
   shoppableOnly,
   filtered,
   clearedHref,
 }: {
+  sport: Sport;
   hasMarkets: boolean;
   shoppableOnly: boolean;
   filtered: boolean;
@@ -400,11 +404,14 @@ function EmptyState({
       <div className="panel p-6">
         <h2 className="section-header mb-2">No two-way prices yet</h2>
         <p className="text-muted max-w-prose text-sm">
-          No book has posted a two-sided price on this slate. College books post
-          player props late, usually Thursday or Friday for a Saturday game, and
-          the odds job picks them up every six hours. Anytime touchdown lines may
-          already exist — they are one-sided, so they cannot be de-vigged and are
-          not shown here.
+          No book has posted a two-sided price on this slate.{" "}
+          {/* The posting habit is college's (CLAUDE.md §7). The NFL page used to
+              tell its readers to wait for a Saturday game. */}
+          {sport === "cfb"
+            ? "College books post player props late, usually Thursday or Friday for a Saturday game, and the odds job picks them up every six hours."
+            : "The odds job picks new prices up every six hours."}{" "}
+          Anytime touchdown lines may already exist — they are one-sided, so
+          they cannot be de-vigged and are not shown here.
         </p>
       </div>
     );

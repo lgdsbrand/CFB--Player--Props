@@ -9,6 +9,7 @@ import {
 } from "@/lib/core/cheat-sheet";
 import { formatConfidence, formatDateShort, formatLine } from "@/lib/core/format";
 import { playerHref } from "@/lib/core/player-params";
+import type { Sport } from "@/lib/core/sport";
 
 /**
  * One entry on the cheat sheet.
@@ -24,7 +25,7 @@ import { playerHref } from "@/lib/core/player-params";
  * streak off this page while the board calls the other side has been shown two
  * answers by one product and told about neither.
  */
-export function SheetRow({ row }: { row: CheatSheetRow }) {
+export function SheetRow({ row, sport }: { row: CheatSheetRow; sport: Sport }) {
   const stance = agreement(row);
   const perfect = row.hitRate >= 1;
 
@@ -32,6 +33,9 @@ export function SheetRow({ row }: { row: CheatSheetRow }) {
     <Link
       href={playerHref({
         playerId: row.playerId,
+        // From the PAGE. A cheat-sheet row carries no sport of its own, and an
+        // NFL entry linked without one opened the player as a college player.
+        sport,
         season: row.season,
         week: row.week,
         market: row.marketKey,

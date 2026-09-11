@@ -279,6 +279,7 @@ function PlayerCell({ row }: { row: BoardRow }) {
         <Link
           href={playerHref({
             playerId: row.playerId,
+            sport: row.sport,
             season: row.season,
             week: row.week,
           })}
@@ -608,6 +609,7 @@ function RowDetail({
         <Link
           href={playerHref({
             playerId: row.playerId,
+            sport: row.sport,
             season: row.season,
             week: row.week,
           })}

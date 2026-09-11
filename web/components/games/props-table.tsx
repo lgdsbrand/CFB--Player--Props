@@ -8,6 +8,7 @@ import {
   formatLine,
   meetsEdgeThreshold,
 } from "@/lib/core/format";
+import { playerHref } from "@/lib/core/player-params";
 import type { BoardRow } from "@/lib/core/types";
 
 /**
@@ -107,7 +108,16 @@ export function PropsTable({
                     <td className="py-2 pr-3">
                       {index === 0 ? (
                         <Link
-                          href={`/player/${player.playerId}`}
+                          // Through `playerHref`, with the ROW's sport, season,
+                          // week and game. A bare `/player/<id>` opened every NFL
+                          // player as a college one, on college's latest week.
+                          href={playerHref({
+                            playerId: player.playerId,
+                            sport: row.sport,
+                            season: row.season,
+                            week: row.week,
+                            game: row.gameId,
+                          })}
                           className="text-ink hover:text-accent-cyan font-bold transition-colors"
                         >
                           {player.playerName}

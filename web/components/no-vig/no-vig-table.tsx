@@ -8,6 +8,7 @@ import {
   type NoVigRow,
 } from "@/lib/core/no-vig";
 import { playerHref } from "@/lib/core/player-params";
+import type { Sport } from "@/lib/core/sport";
 import Link from "next/link";
 
 /**
@@ -24,7 +25,14 @@ import Link from "next/link";
  * a reader brings: is this price fair (HOLD, FAIR), and is it the best available
  * (BOOK, vs MKT, the best-price marks).
  */
-export function NoVigTable({ rows }: { rows: readonly NoVigRow[] }) {
+export function NoVigTable({
+  rows,
+  sport,
+}: {
+  rows: readonly NoVigRow[];
+  /** The page's league. A quote row carries none, and its player link needs one. */
+  sport: Sport;
+}) {
   return (
     // WIDE CONTENT SCROLLS INSIDE ITS OWN BOX. Nine columns do not fit a phone,
     // and the alternative — letting the page scroll sideways — was a real bug
@@ -84,6 +92,9 @@ export function NoVigTable({ rows }: { rows: readonly NoVigRow[] }) {
                     <Link
                       href={playerHref({
                         playerId: row.playerId,
+                        // From the PAGE: a quote row carries no sport, and
+                        // without one an NFL player opened as a college player.
+                        sport,
                         season: row.season,
                         week: row.week,
                         // The player page opens on the market this quote is

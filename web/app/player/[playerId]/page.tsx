@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
 import { EvidencePill } from "@/components/board/evidence-pill";
 import { LastFive } from "@/components/board/last-five";
@@ -15,7 +15,7 @@ import { LadderPanel } from "@/components/player/ladder-panel";
 import { MarketTabs } from "@/components/player/market-tabs";
 import { SplitGrid } from "@/components/player/split-grid";
 import { SiteHeader } from "@/components/site-header";
-import { BOARD_PATH, type RawParams } from "@/lib/core/board-params";
+import { BOARD_PATH, scopedHref, type RawParams } from "@/lib/core/board-params";
 import { defenseStatForMarket, rankBasis } from "@/lib/core/defense-view";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { evidenceFor } from "@/lib/core/evidence";
@@ -40,7 +40,7 @@ import {
   resolveGameId,
   rowsForGame,
 } from "@/lib/core/player-games";
-import { parsePlayerParams } from "@/lib/core/player-params";
+import { parsePlayerParams, playerHref } from "@/lib/core/player-params";
 import {
   rankBands,
   rankSplits,
@@ -51,7 +51,6 @@ import type { BoardRow, Market, PositionGroup } from "@/lib/core/types";
 import {
   borrowsPriorSeasonForm,
   DEFAULT_SPORT,
-  resolveSport,
   type Sport,
 } from "@/lib/core/sport";
 import { getAiRead } from "@/lib/data/ai-reads";
@@ -111,8 +110,11 @@ export default async function PlayerDetail({
   }
 
   const raw = await searchParams;
-  const sport = resolveSport(raw.sport);
   const requested = parsePlayerParams(playerId, raw);
+  // What the LINK claims. A player id determines its sport and the URL only
+  // claims one, so this is checked against the player's own rows below and
+  // corrected with a redirect when the two disagree.
+  const sport = requested.sport;
 
   // EVERY READ IN THIS WAVE IS CACHED, which is the point of it being alone.
   // The page's cost is the number of times it WAITS, not the number of queries
@@ -135,6 +137,7 @@ export default async function PlayerDetail({
         <NotOnSlate
           name={await nameOr404(playerId)}
           reason="No week has model output yet."
+          sport={sport}
         />
       </Shell>
     );
@@ -142,12 +145,22 @@ export default async function PlayerDetail({
 
   const rows = await getPlayerBoardRows(playerId, active.season, active.week);
   if (rows.length === 0) {
-    const name = await nameOr404(playerId);
+    const identity = await getPlayerIdentity(playerId);
+    if (!identity) notFound();
+    // NO ROWS CAN MEAN THE LINK NAMED THE WRONG LEAGUE. A player from the other
+    // sport, looked up in this sport's week list, lands on a week he has no rows
+    // in — so ask the player, and re-request under his own league before
+    // concluding he is off the slate.
+    if (identity.sport !== sport) {
+      redirect(playerHref({ ...requested, sport: identity.sport }));
+    }
+    const name = identity.name;
     return (
       <Shell sport={sport}>
         <NotOnSlate
           name={name}
           reason={`Nothing projected for ${name} in ${active.season} week ${active.week}. He is on a bye, did not clear the usage floor, or his team is not on this slate.`}
+          sport={sport}
           season={active.season}
           week={active.week}
         />
@@ -170,6 +183,7 @@ export default async function PlayerDetail({
   // showing.
   const resolved = {
     playerId,
+    sport,
     season: active.season,
     week: active.week,
     market: requested.market,
@@ -180,6 +194,16 @@ export default async function PlayerDetail({
   const ordered = orderMarkets(gameRows, marketsByKey);
   const activeRow =
     ordered.find((row) => row.marketKey === requested.market) ?? ordered[0];
+
+  // THE LINK CLAIMED THE WRONG SPORT. A player id determines its league; the
+  // URL only claims one, and every link into this page before 2026-09-11 claimed
+  // none, which parses as college. The week list above was read for that sport
+  // and the header, defense ratings and back link below would all describe it,
+  // so the page is re-requested under the right league rather than patched one
+  // field at a time. It cannot loop: the redirect carries the row's own sport.
+  if (activeRow.sport !== sport) {
+    redirect(playerHref({ ...requested, sport: activeRow.sport }));
+  }
   const activeMarket = marketsByKey.get(activeRow.marketKey);
 
   // Position comes from the board row (season-scoped) rather than from
@@ -263,7 +287,14 @@ export default async function PlayerDetail({
   return (
     <Shell sport={sport}>
       <Link
-        href={`${BOARD_PATH}?season=${active.season}&week=${active.week}`}
+        // The board this player was on: same league, same week. It was built
+        // from season and week alone, so leaving an NFL player landed on an
+        // EMPTY college board (reported from the live site 2026-09-11).
+        href={scopedHref(BOARD_PATH, {
+          sport: activeRow.sport,
+          season: active.season,
+          week: active.week,
+        })}
         className="text-muted hover:text-accent-cyan w-fit text-xs"
       >
         ← Back to the board
@@ -830,11 +861,13 @@ function Evidence({ row }: { row: BoardRow }) {
 function NotOnSlate({
   name,
   reason,
+  sport,
   season,
   week,
 }: {
   name: string;
   reason: string;
+  sport: Sport;
   season?: number;
   week?: number;
 }) {
@@ -843,11 +876,10 @@ function NotOnSlate({
       <h1 className="text-xl font-extrabold tracking-tight">{name}</h1>
       <p className="text-muted max-w-prose text-sm">{reason}</p>
       <Link
-        href={
-          season !== undefined && week !== undefined
-            ? `/?season=${season}&week=${week}`
-            : "/"
-        }
+        // Straight to the board, in this league. It pointed at `/` with season
+        // and week only, which reached the board through the legacy-link
+        // redirect and lost the sport on the way.
+        href={scopedHref(BOARD_PATH, { sport, season, week })}
         className="text-accent-cyan w-fit text-sm hover:underline"
       >
         Back to the board

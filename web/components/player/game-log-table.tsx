@@ -1,3 +1,5 @@
+import { Fragment } from "react";
+
 import { formatLine } from "@/lib/core/format";
 import type { GradedGame } from "@/lib/core/hit-rate";
 
@@ -13,16 +15,23 @@ import type { GradedGame } from "@/lib/core/hit-rate";
  * on the board now. The alternative — each game against the line it closed at —
  * is truer and needs a paid historical-odds backfill we do not have. The column
  * header says which, because the two answer different questions.
+ *
+ * LAST SEASON'S GAMES SIT UNDER THEIR OWN HEADING. A topped-up NFL sample
+ * (`borrowsPriorSeasonForm`) mixes two seasons, and the week column alone
+ * cannot tell 2025 week 17 from a week this season has not reached.
  */
 export function GameLogTable({
   games,
   unit,
   rankByGameId,
+  season,
 }: {
   games: GradedGame[];
   unit: string | null;
   /** Opponent rank vs the position AS IT STOOD that week; 1 = best defense. */
   rankByGameId: Map<number, number>;
+  /** The season on screen. Earlier games get a season heading. */
+  season: number;
 }) {
   if (games.length === 0) {
     return (
@@ -47,43 +56,57 @@ export function GameLogTable({
           </tr>
         </thead>
         <tbody>
-          {games.map((game) => {
+          {games.map((game, index) => {
             const rank = rankByGameId.get(game.gameId);
+            const prior = game.season < season;
+            const startsSeason =
+              prior && games[index - 1]?.season !== game.season;
             return (
-              <tr
-                key={game.gameId}
-                className="border-border-subtle border-t [&>td]:px-2 [&>td]:py-1.5"
-              >
-                <td className="text-muted tabular-nums">{game.week}</td>
-                <td>
-                  <span className="text-dim mr-1">
-                    {game.neutralSite ? "N" : game.isHome ? "vs" : "@"}
-                  </span>
-                  {game.opponentAbbreviation ?? "—"}
-                </td>
-                <td className="text-muted text-right tabular-nums">
-                  {rank ?? "—"}
-                </td>
-                <td className="text-right font-semibold tabular-nums">
-                  {game.value}
-                </td>
-                <td className="text-right">
-                  <span
-                    className={
-                      "pill " +
-                      (game.hit === null
-                        ? "bg-panel text-muted"
-                        : game.hit
-                          ? "bg-positive/15 text-positive"
-                          : "bg-negative/15 text-negative")
-                    }
-                  >
-                    {game.outcome === "push"
-                      ? "push"
-                      : `${game.outcome} ${formatLine(game.line)}`}
-                  </span>
-                </td>
-              </tr>
+              <Fragment key={game.gameId}>
+                {startsSeason ? (
+                  <tr className="border-border-subtle border-t">
+                    <td colSpan={5} className="label-caption px-2 pb-1 pt-2.5">
+                      {game.season} season · filling in while {season} is short
+                    </td>
+                  </tr>
+                ) : null}
+                <tr
+                  className={
+                    "border-border-subtle border-t [&>td]:px-2 [&>td]:py-1.5" +
+                    (prior ? " opacity-75" : "")
+                  }
+                >
+                  <td className="text-muted tabular-nums">{game.week}</td>
+                  <td>
+                    <span className="text-dim mr-1">
+                      {game.neutralSite ? "N" : game.isHome ? "vs" : "@"}
+                    </span>
+                    {game.opponentAbbreviation ?? "—"}
+                  </td>
+                  <td className="text-muted text-right tabular-nums">
+                    {rank ?? "—"}
+                  </td>
+                  <td className="text-right font-semibold tabular-nums">
+                    {game.value}
+                  </td>
+                  <td className="text-right">
+                    <span
+                      className={
+                        "pill " +
+                        (game.hit === null
+                          ? "bg-panel text-muted"
+                          : game.hit
+                            ? "bg-positive/15 text-positive"
+                            : "bg-negative/15 text-negative")
+                      }
+                    >
+                      {game.outcome === "push"
+                        ? "push"
+                        : `${game.outcome} ${formatLine(game.line)}`}
+                    </span>
+                  </td>
+                </tr>
+              </Fragment>
             );
           })}
         </tbody>

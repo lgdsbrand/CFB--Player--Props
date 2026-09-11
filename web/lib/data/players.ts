@@ -10,7 +10,12 @@
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import type { PlayerGameLogRow, PositionGroup } from "@/lib/core/types";
-import { type DbRow, unwrap } from "@/lib/data/query";
+import {
+  type DbRow,
+  MAX_ROWS_PER_REQUEST,
+  thisAndLastSeason,
+  unwrap,
+} from "@/lib/data/query";
 
 const COLUMNS =
   "player_id, game_id, season, week, position_group, is_home, " +
@@ -27,6 +32,12 @@ const COLUMNS =
  * board needs: showing week 10's own result beside a week 10 projection would
  * be marking the model's homework with the answer sheet visible. Omit it on a
  * page reviewing a finished week.
+ *
+ * `includePriorSeason` adds ALL of last season beside `season` (the week cut
+ * still applies to `season` only), for `topUpFromPriorSeason` to draw on — see
+ * `borrowsPriorSeasonForm` for which sports ask. The `limit` counts both
+ * seasons, but this season sorts first, so it only ever cuts last season's
+ * oldest games.
  */
 export async function getPlayerGameLog(
   playerId: number,
@@ -34,7 +45,13 @@ export async function getPlayerGameLog(
     season,
     before,
     limit = 20,
-  }: { season?: number; before?: number; limit?: number } = {},
+    includePriorSeason = false,
+  }: {
+    season?: number;
+    before?: number;
+    limit?: number;
+    includePriorSeason?: boolean;
+  } = {},
 ): Promise<PlayerGameLogRow[]> {
   const supabase = createServerSupabaseClient();
 
@@ -53,8 +70,12 @@ export async function getPlayerGameLog(
     .order("game_id", { ascending: false })
     .limit(limit);
 
-  if (season !== undefined) query = query.eq("season", season);
-  if (before !== undefined) query = query.lt("week", before);
+  if (season !== undefined && includePriorSeason) {
+    query = query.or(thisAndLastSeason(season, before));
+  } else {
+    if (season !== undefined) query = query.eq("season", season);
+    if (before !== undefined) query = query.lt("week", before);
+  }
 
   return unwrap<DbRow[]>(await query, "v_player_game_log").map(toGameLogRow);
 }
@@ -107,6 +128,17 @@ export async function getPlayerIdentity(
 const LOG_BATCH_PLAYERS = 40;
 
 /**
+ * Players per batch when the log spans two seasons.
+ *
+ * An NFL player can log 22 games in a season — 17, one more if traded across a
+ * bye, and four playoff rounds — so two seasons is up to 44 rows each, and 20
+ * players is 880: under the cap with room. The guard below still checks,
+ * because the arithmetic is a claim about the schedule and a truncated log is
+ * silent.
+ */
+const LOG_BATCH_PLAYERS_TWO_SEASONS = 20;
+
+/**
  * Game logs for many players at once, keyed by player.
  *
  * The board's last-5 row needs a log for every player on the page. One read per
@@ -114,26 +146,36 @@ const LOG_BATCH_PLAYERS = 40;
  *
  * `before` applies the same rule as the single-player read: grading a week 10
  * projection against week 10's own result would be marking the model's homework
- * with the answers visible.
+ * with the answers visible. `includePriorSeason` is the single-player read's
+ * option too, and costs smaller batches.
  */
 export async function getGameLogsByPlayer(
   playerIds: number[],
-  { season, before }: { season: number; before?: number },
+  {
+    season,
+    before,
+    includePriorSeason = false,
+  }: { season: number; before?: number; includePriorSeason?: boolean },
 ): Promise<Map<number, PlayerGameLogRow[]>> {
   const byPlayer = new Map<number, PlayerGameLogRow[]>();
   if (playerIds.length === 0) return byPlayer;
 
   const supabase = createServerSupabaseClient();
   const unique = [...new Set(playerIds)];
+  const batchSize = includePriorSeason
+    ? LOG_BATCH_PLAYERS_TWO_SEASONS
+    : LOG_BATCH_PLAYERS;
 
-  for (let start = 0; start < unique.length; start += LOG_BATCH_PLAYERS) {
-    const chunk = unique.slice(start, start + LOG_BATCH_PLAYERS);
+  for (let start = 0; start < unique.length; start += batchSize) {
+    const chunk = unique.slice(start, start + batchSize);
 
     let query = supabase
       .from("v_player_game_log")
       .select(COLUMNS)
-      .eq("season", season)
       .in("player_id", chunk)
+      // Season first, so a two-season log reads this season before last — the
+      // property `topUpFromPriorSeason` and the L-windows both rely on.
+      .order("season", { ascending: false })
       .order("week", { ascending: false })
       // Same total order as the single-player read and as `orderGames`. It
       // matters most HERE: the batch's player set changes with the board's
@@ -142,9 +184,24 @@ export async function getGameLogsByPlayer(
       .order("start_date", { ascending: false, nullsFirst: false })
       .order("game_id", { ascending: false });
 
-    if (before !== undefined) query = query.lt("week", before);
+    if (includePriorSeason) {
+      query = query.or(thisAndLastSeason(season, before));
+    } else {
+      query = query.eq("season", season);
+      if (before !== undefined) query = query.lt("week", before);
+    }
 
-    for (const raw of unwrap<DbRow[]>(await query, "v_player_game_log (batch)")) {
+    const rows = unwrap<DbRow[]>(await query, "v_player_game_log (batch)");
+    if (rows.length >= MAX_ROWS_PER_REQUEST) {
+      throw new Error(
+        `v_player_game_log returned ${rows.length} rows for ${chunk.length} ` +
+          `players, at PostgREST's ${MAX_ROWS_PER_REQUEST}-row cap — the logs ` +
+          `are probably truncated, which would quietly shorten someone's L5. ` +
+          `Lower the batch size.`,
+      );
+    }
+
+    for (const raw of rows) {
       const row = toGameLogRow(raw);
       const list = byPlayer.get(row.playerId) ?? [];
       list.push(row);

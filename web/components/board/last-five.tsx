@@ -1,6 +1,7 @@
 import {
   formatHitRate,
   hitRateTone,
+  priorSeasonCount,
   type HitRateSummary,
 } from "@/lib/core/hit-rate";
 
@@ -21,16 +22,24 @@ const TONE_CLASS = {
  *
  * CIRCLES READ RIGHT-TO-LEFT IN TIME: the leftmost is the most recent game,
  * matching the order the game log returns and the way the client's board reads.
+ *
+ * LAST SEASON'S GAMES ARE HOLLOW. On the NFL a young season is topped up from
+ * last season (`borrowsPriorSeasonForm`), and a filled dot would let a reader
+ * take four 2025 games for this season's form. Same colour, so the hit or miss
+ * still reads at a glance; hollow, and counted in words, so the year does too.
  */
 export function LastFive({
   summary,
   side,
   window,
   verb,
+  season,
 }: {
   summary: HitRateSummary | null;
   side: "over" | "under" | null;
   window: number;
+  /** The season on screen. Games from before it render hollow. */
+  season: number;
   /**
    * Overrides the "hits over/under" caption. Binary markets are graded on the
    * OVER side so a green dot means the player scored; describing that as "hits
@@ -48,6 +57,8 @@ export function LastFive({
       </div>
     );
   }
+
+  const borrowed = priorSeasonCount(summary.games, season);
 
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -68,26 +79,46 @@ export function LastFive({
       ) : null}
 
       <span className="flex items-center gap-1" aria-hidden>
-        {summary.games.map((game) => (
-          <span
-            key={game.gameId}
-            title={`Wk ${game.week} vs ${game.opponentAbbreviation ?? "?"}: ${game.value} (${game.outcome})`}
-            className={
-              "size-2 rounded-full " +
-              (game.hit === null
-                ? "bg-muted/50"
-                : game.hit
-                  ? "bg-positive"
-                  : "bg-negative")
-            }
-          />
-        ))}
+        {summary.games.map((game) => {
+          const prior = game.season < season;
+          return (
+            <span
+              key={game.gameId}
+              title={`${prior ? `${game.season} ` : ""}Wk ${game.week} vs ${game.opponentAbbreviation ?? "?"}: ${game.value} (${game.outcome})`}
+              className={
+                "size-2 rounded-full " +
+                (prior
+                  ? "border " +
+                    (game.hit === null
+                      ? "border-muted/60"
+                      : game.hit
+                        ? "border-positive"
+                        : "border-negative")
+                  : game.hit === null
+                    ? "bg-muted/50"
+                    : game.hit
+                      ? "bg-positive"
+                      : "bg-negative")
+              }
+            />
+          );
+        })}
       </span>
+
+      {borrowed > 0 ? (
+        <span
+          className="text-dim text-[0.625rem]"
+          title={`Hollow dots are ${season - 1} games. This season has fewer than ${window} so far, so last season's most recent fill the rest; they drop out as this season's games arrive. Rookies have none to borrow.`}
+        >
+          {borrowed} from {season - 1}
+        </span>
+      ) : null}
 
       <span className="sr-only">
         {summary.hits} of {summary.decided} recent games{" "}
         {verb ?? `hit the ${side} side`}
-        {summary.pushes > 0 ? `, ${summary.pushes} pushed` : ""}.
+        {summary.pushes > 0 ? `, ${summary.pushes} pushed` : ""}
+        {borrowed > 0 ? `, ${borrowed} of them from ${season - 1}` : ""}.
       </span>
     </div>
   );

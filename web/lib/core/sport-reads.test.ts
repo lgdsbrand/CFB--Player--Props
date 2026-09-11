@@ -35,8 +35,14 @@ const SPORT_AWARE_READS = [
   "getBoardRows",
   "getConferences",
   "getDefenseRatings",
+  // Not a `sport` parameter, but the same failure: `includePriorSeason`
+  // defaults to false, which is college's behaviour, so an NFL page that omits
+  // `borrowsPriorSeasonForm(sport)` grades week 2's Last 5 off one game and
+  // looks entirely normal doing it.
+  "getGameLogsByPlayer",
   "getNoVigMarkets",
   "getNoVigPage",
+  "getPlayerGameLog",
   "getSlateGames",
   "getSlateWeeks",
 ] as const;

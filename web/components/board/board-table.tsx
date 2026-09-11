@@ -26,6 +26,7 @@ import {
   formatHitRate,
   hitRate,
   hitRateTone,
+  priorSeasonCount,
   type GradedGame,
 } from "@/lib/core/hit-rate";
 import { playerHref } from "@/lib/core/player-params";
@@ -145,7 +146,7 @@ export function BoardTable({
                   key={window}
                   scope="col"
                   className="py-2.5 pr-3 text-right font-semibold"
-                  title={`Hit rate over this player's last ${window} games played, graded against the line showing now`}
+                  title={`Hit rate over this player's last ${window} games played, graded against the line showing now. * means some of those games are from last season, filling in while this one is short`}
                 >
                   L{window}
                 </th>
@@ -246,9 +247,14 @@ function PropRow({
               key={window}
               graded={graded}
               summary={graded.length > 0 ? hitRate(graded, window) : null}
+              season={row.season}
             />
           ))}
-          <HitRateCell graded={graded} summary={seasonToDate(graded)} />
+          <HitRateCell
+            graded={graded}
+            summary={seasonToDate(graded, row.season)}
+            season={row.season}
+          />
           <td className="text-muted py-2 pr-3 text-right align-middle font-mono text-xs tabular-nums">
             {row.opponentRankVsPosition ?? "—"}
           </td>
@@ -481,20 +487,31 @@ const TONE_CLASS = {
 function HitRateCell({
   graded,
   summary,
+  season,
 }: {
   graded: GradedGame[];
   summary: ReturnType<typeof hitRate> | null;
+  /** The season on screen; games before it are marked as borrowed. */
+  season: number;
 }) {
   if (graded.length === 0 || !summary) {
     return (
       <td
         className="text-dim py-2 pr-3 text-right align-middle text-xs"
-        title="No line to grade past games against"
+        title={
+          graded.length === 0
+            ? "No line to grade past games against"
+            : "No games yet this season before this week"
+        }
       >
         —
       </td>
     );
   }
+
+  // Marked, not just tooltipped. The table has no room for hollow dots, and an
+  // unmarked 80% built from last season's games reads as this season's form.
+  const borrowed = priorSeasonCount(summary.games, season);
 
   return (
     <td
@@ -504,9 +521,12 @@ function HitRateCell({
       }
       title={`${summary.hits} of ${summary.decided} decided${
         summary.pushes > 0 ? `, ${summary.pushes} pushed` : ""
-      }`}
+      }${borrowed > 0 ? ` · ${borrowed} of the games from ${season - 1}` : ""}`}
     >
       {formatHitRate(summary.rate)}
+      {borrowed > 0 ? (
+        <span className="text-dim ml-0.5 font-normal">*</span>
+      ) : null}
     </td>
   );
 }
@@ -557,6 +577,7 @@ function RowDetail({
         side={row.isBinary ? "over" : row.side}
         window={hitRateWindow}
         verb={row.isBinary ? "scored" : undefined}
+        season={row.season}
       />
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">

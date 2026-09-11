@@ -28,7 +28,13 @@ import {
   formatLine,
   formatVenue,
 } from "@/lib/core/format";
-import { gradeGames, hitRate, type GradedGame } from "@/lib/core/hit-rate";
+import {
+  gradeGames,
+  hitRate,
+  priorSeasonCount,
+  topUpFromPriorSeason,
+  type GradedGame,
+} from "@/lib/core/hit-rate";
 import {
   orderedGames,
   resolveGameId,
@@ -42,7 +48,12 @@ import {
   windowSplits,
 } from "@/lib/core/splits";
 import type { BoardRow, Market, PositionGroup } from "@/lib/core/types";
-import { DEFAULT_SPORT, resolveSport, type Sport } from "@/lib/core/sport";
+import {
+  borrowsPriorSeasonForm,
+  DEFAULT_SPORT,
+  resolveSport,
+  type Sport,
+} from "@/lib/core/sport";
 import { getAiRead } from "@/lib/data/ai-reads";
 import { getPlayerBoardRows } from "@/lib/data/board";
 import { getMarkets } from "@/lib/data/catalogue";
@@ -57,6 +68,12 @@ import { getPlayerQuotes, SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
 import { getPlayerGameLog, getPlayerIdentity } from "@/lib/data/players";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
 import { getGameConditions } from "@/lib/data/weather";
+
+/**
+ * Bars on the hit-rate chart. Also the floor on the sample a young NFL season is
+ * topped up to, so the chart is never shorter than a hit-rate window beside it.
+ */
+const CHART_GAMES = 10;
 
 /**
  * Player detail (CLAUDE.md §7).
@@ -181,6 +198,9 @@ export default async function PlayerDetail({
         season: active.season,
         before: active.week,
         limit: 30,
+        // From the ROW, not the URL. Links into this page do not carry
+        // `?sport=`, so the URL would call every NFL player a college one.
+        includePriorSeason: borrowsPriorSeasonForm(activeRow.sport),
       }),
       getPlayerQuotes(playerId, active.season, active.week),
       getAiRead(playerId, active.season, active.week),
@@ -207,11 +227,19 @@ export default async function PlayerDetail({
       ? gradeGames(gameLog, activeMarket.statColumn, activeRow.line, gradeSide)
       : [];
 
-  const ranksByGame = await rankLookup(
+  // EVERYTHING BELOW READS THIS SAMPLE, not `graded`. On the NFL the log also
+  // holds last season, and this keeps all of this season while topping it up
+  // to the chart's ten games — so the bars, the L-windows, the venue and rank
+  // splits and the log all describe the same games. Once this season has ten,
+  // last season is gone from every one of them.
+  const sample = topUpFromPriorSeason(
     graded,
     active.season,
-    position,
+    Math.max(CHART_GAMES, ...config.hitRateWindows),
   );
+  const borrowed = priorSeasonCount(sample, active.season);
+
+  const ranksByGame = await rankLookup(sample, position);
 
   const venue = formatVenue({
     name: activeRow.venueName,
@@ -221,8 +249,13 @@ export default async function PlayerDetail({
   const gameLine = formatGameLine(activeRow.teamSpread, activeRow.gameTotal);
 
   const ranked = ratings.filter((rating) => rating.rankVsPosition !== null);
-  const bands = rankBands(ranked.length);
-  const byRank = rankSplits(graded, ranksByGame, bands);
+  // THE FIELD SIZE FALLS BACK TO THE LARGEST RANK SEEN. Entering week 1 nothing
+  // is rated yet, but a topped-up sample's games from last season carry real
+  // ranks — and thirds of zero defenses put every one of them in "Soft".
+  const fieldSize =
+    ranked.length > 0 ? ranked.length : Math.max(0, ...ranksByGame.values());
+  const bands = rankBands(fieldSize);
+  const byRank = rankSplits(sample, ranksByGame, bands);
   const opponentRating = ratings.find(
     (rating) => rating.defenseTeamId === activeRow.opponentTeamId,
   );
@@ -334,8 +367,9 @@ export default async function PlayerDetail({
               </p>
             ) : (
               <HitRateChart
-                points={graded.slice(0, 10).map((game) => ({
+                points={sample.slice(0, CHART_GAMES).map((game) => ({
                   gameId: game.gameId,
+                  season: game.season,
                   week: game.week,
                   value: game.value,
                   opponent: game.opponentAbbreviation ?? "—",
@@ -347,39 +381,51 @@ export default async function PlayerDetail({
                 unit={activeMarket?.unit ?? null}
                 side={gradeSide}
                 step={activeMarket?.ladderStep ?? null}
+                season={active.season}
               />
             )}
 
             <LastFive
               summary={
-                graded.length > 0
-                  ? hitRate(graded, config.hitRateWindows[0] ?? 5)
+                sample.length > 0
+                  ? hitRate(sample, config.hitRateWindows[0] ?? 5)
                   : null
               }
               side={gradeSide}
               window={config.hitRateWindows[0] ?? 5}
               verb={activeMarket?.isBinary ? "scored" : undefined}
+              season={active.season}
             />
           </section>
 
           <section className="panel flex flex-col gap-3 p-4">
             <h2 className="section-header">Hit-rate splits</h2>
-            {graded.length === 0 ? (
+            {sample.length === 0 ? (
               <p className="text-dim text-xs">
                 Nothing to split until this market has a line.
               </p>
             ) : (
               <>
+                {borrowed > 0 ? (
+                  <p className="text-dim text-[0.625rem]">
+                    {borrowedNote(sample.length - borrowed, borrowed, active)}
+                  </p>
+                ) : null}
+
                 <div className="flex flex-col gap-1.5">
                   <span className="label-caption">Recent form</span>
-                  <SplitGrid splits={windowSplits(graded, config.hitRateWindows)} />
+                  <SplitGrid splits={windowSplits(sample, config.hitRateWindows)} />
                 </div>
 
                 <div className="flex flex-col gap-1.5">
                   <span className="label-caption">Venue</span>
                   <SplitGrid
-                    splits={venueSplits(graded)}
-                    note="Secondary in college football — neutral sites are common and schedules are uneven."
+                    splits={venueSplits(sample)}
+                    note={
+                      activeRow.sport === "cfb"
+                        ? "Secondary in college football — neutral sites are common and schedules are uneven."
+                        : undefined
+                    }
                   />
                 </div>
 
@@ -391,7 +437,9 @@ export default async function PlayerDetail({
                     splits={byRank.splits}
                     emptyLabel="No past opponent carried a rating at its own cutoff."
                     note={
-                      `Bands are thirds of the ${ranked.length} defenses rated vs ${position}, ` +
+                      (ranked.length > 0
+                        ? `Bands are thirds of the ${ranked.length} defenses rated vs ${position}, `
+                        : `No defense is rated vs ${position} entering this week yet, so bands are thirds of ranks 1–${fieldSize}, the largest a past opponent here held, `) +
                       `each opponent taken at the rank it held entering that week. ` +
                       `Rank 1 is the best defense, on ${rankBasis(position).label}.` +
                       (byRank.unranked > 0
@@ -407,11 +455,12 @@ export default async function PlayerDetail({
           <section className="panel flex flex-col gap-3 p-4">
             <h2 className="section-header">Game log</h2>
             <GameLogTable
-              games={graded}
+              games={sample}
               unit={activeMarket?.unit ?? null}
               rankByGameId={ranksByGame}
+              season={active.season}
             />
-            {graded.length === 0 && gameLog.length > 0 ? (
+            {sample.length === 0 && gameLog.length > 0 ? (
               <p className="text-dim text-xs">
                 {gameLog.length} completed game
                 {gameLog.length === 1 ? "" : "s"} on record, but this market has
@@ -493,29 +542,63 @@ export default async function PlayerDetail({
  * Each past opponent's rank as it stood entering THAT game's week.
  *
  * Keyed by game id so the log and the splits agree cell for cell.
+ *
+ * ASKED ONCE PER SEASON. A topped-up NFL sample holds last season's games too,
+ * and a week number alone names two different cutoffs: week 12 of last season
+ * is not week 12 of this one, and looking it up in this season would pin a 2025
+ * game to a 2026 rank.
  */
 async function rankLookup(
   graded: GradedGame[],
-  season: number,
   position: PositionGroup,
 ): Promise<Map<number, number>> {
-  if (graded.length === 0) return new Map();
-
-  const ranks = await getDefenseRanksAt(
-    season,
-    position,
-    graded.map((game) => ({
-      defenseTeamId: game.opponentTeamId,
-      week: game.week,
-    })),
-  );
+  const bySeason = new Map<number, GradedGame[]>();
+  for (const game of graded) {
+    const list = bySeason.get(game.season) ?? [];
+    list.push(game);
+    bySeason.set(game.season, list);
+  }
 
   const byGame = new Map<number, number>();
-  for (const game of graded) {
-    const rank = ranks.get(rankKey(game.opponentTeamId, game.week));
-    if (rank !== undefined) byGame.set(game.gameId, rank);
-  }
+  await Promise.all(
+    [...bySeason].map(async ([season, games]) => {
+      const ranks = await getDefenseRanksAt(
+        season,
+        position,
+        games.map((game) => ({
+          defenseTeamId: game.opponentTeamId,
+          week: game.week,
+        })),
+      );
+      for (const game of games) {
+        const rank = ranks.get(rankKey(game.opponentTeamId, game.week));
+        if (rank !== undefined) byGame.set(game.gameId, rank);
+      }
+    }),
+  );
   return byGame;
+}
+
+/**
+ * Says why the splits hold last season's games, and that it is temporary.
+ *
+ * One string rather than JSX with expressions, because JSX drops the space
+ * after a leading expression and this sentence has four of them.
+ */
+function borrowedNote(
+  current: number,
+  borrowed: number,
+  active: { season: number; week: number },
+): string {
+  const thisSeason =
+    current === 0
+      ? "No games yet"
+      : `Only ${current} game${current === 1 ? "" : "s"}`;
+  return (
+    `${thisSeason} this season before week ${active.week}, so these splits ` +
+    `include the ${borrowed} most recent from ${active.season - 1}. They drop ` +
+    `out as this season's games replace them.`
+  );
 }
 
 /**

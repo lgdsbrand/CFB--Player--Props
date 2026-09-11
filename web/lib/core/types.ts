@@ -63,6 +63,13 @@ export type BoardRow = {
 
   season: number;
   week: number;
+  /**
+   * The sport this row belongs to, and the authoritative answer on a page that
+   * shows one player — for the same reason as `GameSummary.sport`. A player id
+   * determines its sport; `?sport=` only claims one, and links into the player
+   * page do not carry it.
+   */
+  sport: Sport;
 
   marketKey: string;
   marketName: string;

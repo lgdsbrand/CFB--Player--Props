@@ -40,6 +40,7 @@ import {
 
 export type HitRateChartPoint = {
   gameId: number;
+  season: number;
   week: number;
   value: number;
   opponent: string;
@@ -55,11 +56,18 @@ export function HitRateChart({
   unit,
   side,
   step,
+  season,
 }: {
   points: HitRateChartPoint[];
   line: number;
   unit: string | null;
   side: "over" | "under";
+  /**
+   * The season on screen. Earlier games — an NFL sample topped up from last
+   * season (`borrowsPriorSeasonForm`) — draw faded with a dashed edge and carry
+   * their year under the week, so "W17" cannot pass for a week not yet played.
+   */
+  season: number;
   /**
    * The market's rung step, from `markets.ladder_step`. Null disables the
    * stepper — binary markets have no alternate lines, exactly as they have no
@@ -90,11 +98,22 @@ export function HitRateChart({
 
   // Chronological. The caller works most-recent-first everywhere else, so the
   // reversal happens here rather than being assumed of every caller.
-  const data = [...graded].reverse().map((point) => ({
-    ...point,
-    label: `W${point.week}`,
-    venue: point.neutralSite ? "N" : point.isHome ? "vs" : "@",
-  }));
+  //
+  // A borrowed game's label carries its year after a space, which `WeekTick`
+  // splits onto a second line. It also keeps the category unique: this
+  // season's W1 and last season's W1 would otherwise share an axis slot.
+  const data = [...graded].reverse().map((point) => {
+    const prior = point.season < season;
+    return {
+      ...point,
+      prior,
+      label: prior
+        ? `W${point.week} '${String(point.season).slice(-2)}`
+        : `W${point.week}`,
+      venue: point.neutralSite ? "N" : point.isHome ? "vs" : "@",
+    };
+  });
+  const hasPrior = data.some((point) => point.prior);
 
   return (
     <div className="flex flex-col gap-2">
@@ -127,7 +146,8 @@ export function HitRateChart({
             dataKey="label"
             tickLine={false}
             axisLine={{ stroke: "var(--color-border-subtle)" }}
-            tick={{ fill: "var(--color-dim)", fontSize: 10 }}
+            tick={<WeekTick />}
+            height={hasPrior ? 38 : 30}
             interval={0}
           />
           <YAxis
@@ -183,24 +203,74 @@ export function HitRateChart({
             content={<ChartTooltip line={active} unit={unit} side={side} />}
           />
           <Bar dataKey="value" radius={[3, 3, 0, 0]} isAnimationActive={false}>
-            {data.map((point) => (
-              <Cell
-                key={point.gameId}
-                fill={
-                  point.hit === null
-                    ? "var(--color-muted)"
-                    : point.hit
-                      ? "var(--color-positive)"
-                      : "var(--color-negative)"
-                }
-                fillOpacity={point.hit === null ? 0.45 : 0.85}
-              />
-            ))}
+            {data.map((point) => {
+              const colour =
+                point.hit === null
+                  ? "var(--color-muted)"
+                  : point.hit
+                    ? "var(--color-positive)"
+                    : "var(--color-negative)";
+              return (
+                <Cell
+                  key={point.gameId}
+                  fill={colour}
+                  fillOpacity={
+                    point.prior
+                      ? point.hit === null
+                        ? 0.2
+                        : 0.35
+                      : point.hit === null
+                        ? 0.45
+                        : 0.85
+                  }
+                  stroke={point.prior ? colour : undefined}
+                  strokeDasharray={point.prior ? "3 2" : undefined}
+                />
+              );
+            })}
           </Bar>
         </BarChart>
       </ResponsiveContainer>
       </div>
+
+      {hasPrior ? (
+        <p className="text-dim text-[0.625rem]">
+          Faded, dashed bars are from {season - 1}, filling in while {season}{" "}
+          has too few games. They drop out as this season&rsquo;s arrive.
+        </p>
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * An x-axis tick that puts a borrowed game's year on a second line.
+ *
+ * "W17 '25" on one line is ~34px at this size, and ten of them do not fit a
+ * 390px phone without overlapping. Recharts clones this element with the tick's
+ * position and value, so every prop arrives optional.
+ */
+function WeekTick({
+  x,
+  y,
+  payload,
+}: {
+  x?: number;
+  y?: number;
+  payload?: { value?: string };
+}) {
+  const [week, year] = String(payload?.value ?? "").split(" ");
+  return (
+    <text x={x} y={y} textAnchor="middle" fill="var(--color-dim)" fontSize={10}>
+      <tspan x={x} dy="0.71em">
+        {week}
+      </tspan>
+      {year ? (
+        <tspan x={x} dy="1.2em" fillOpacity={0.75}>
+          {year}
+        </tspan>
+      ) : null}
+    </text>
   );
 }
 
@@ -324,7 +394,11 @@ function StepButton({
 }
 
 /** What each bar carries. Recharts types the tooltip payload loosely. */
-type ChartDatum = HitRateChartPoint & { label: string; venue: string };
+type ChartDatum = HitRateChartPoint & {
+  label: string;
+  venue: string;
+  prior: boolean;
+};
 
 function ChartTooltip({
   active,
@@ -348,7 +422,8 @@ function ChartTooltip({
   return (
     <div className="panel px-2.5 py-1.5 text-[0.6875rem] shadow-lg">
       <div className="font-bold">
-        Week {point.week} {point.venue} {point.opponent}
+        {point.prior ? `${point.season} ` : ""}Week {point.week} {point.venue}{" "}
+        {point.opponent}
       </div>
       <div className="text-muted tabular-nums">
         {point.value}

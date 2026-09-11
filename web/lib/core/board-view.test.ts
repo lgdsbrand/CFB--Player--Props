@@ -254,6 +254,7 @@ function row(overrides: Partial<BoardRow> = {}): BoardRow {
     pickId: null,
     season: 2025,
     week: 12,
+    sport: "cfb",
     marketKey: "rec_yards",
     marketName: "Receiving yards",
     marketLabel: "REC YDS",
@@ -555,7 +556,7 @@ test("a row with no line grades nothing, and says so with an empty array", () =>
   ]);
 
   assert.deepEqual(graded, []);
-  assert.equal(seasonToDate(graded), null);
+  assert.equal(seasonToDate(graded, 2025), null);
 });
 
 test("an unmapped stat column grades nothing rather than guessing", () => {
@@ -615,8 +616,32 @@ test("SZN counts every graded game, and L-windows only the recent ones", () => {
   const graded = gradeRow(boardRow, REC_YARDS, games);
 
   assert.equal(hitRate(graded, 2).decided, 2);
-  assert.equal(seasonToDate(graded)?.decided, 4);
-  assert.equal(seasonToDate(graded)?.rate, 0.25);
+  assert.equal(seasonToDate(graded, 2025)?.decided, 4);
+  assert.equal(seasonToDate(graded, 2025)?.rate, 0.25);
+});
+
+test("SZN ignores the last-season games the L-windows borrow", () => {
+  // NFL logs carry last season as well (`borrowsPriorSeasonForm`). L5 may reach
+  // into it while this season is young; a column labelled SZN may not.
+  const boardRow = row({ season: 2026, line: 70, side: "over" });
+  const graded = gradeRow(boardRow, REC_YARDS, [
+    log(1, { season: 2026, gameId: 20261, recYards: 90 }),
+    log(18, { season: 2025, gameId: 20258, recYards: 20 }),
+    log(17, { season: 2025, gameId: 20257, recYards: 20 }),
+  ]);
+
+  assert.equal(hitRate(graded, 5).decided, 3);
+  assert.equal(seasonToDate(graded, 2026)?.decided, 1);
+  assert.equal(seasonToDate(graded, 2026)?.rate, 1);
+});
+
+test("SZN is a dash before this season's first game, not last season's figure", () => {
+  const graded = gradeRow(row({ season: 2026, line: 70, side: "over" }), REC_YARDS, [
+    log(18, { season: 2025, gameId: 20258, recYards: 90 }),
+  ]);
+
+  assert.equal(graded.length, 1);
+  assert.equal(seasonToDate(graded, 2026), null);
 });
 
 test("a push leaves the denominator rather than counting as a miss", () => {
@@ -627,7 +652,7 @@ test("a push leaves the denominator rather than counting as a miss", () => {
     log(2, { recYards: 70 }),
     log(1, { recYards: 90 }),
   ]);
-  const summary = seasonToDate(graded);
+  const summary = seasonToDate(graded, 2025);
 
   assert.equal(summary?.pushes, 1);
   assert.equal(summary?.decided, 1);

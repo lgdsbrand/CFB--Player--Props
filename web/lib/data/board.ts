@@ -108,7 +108,7 @@ export type BoardFilters = {
 };
 
 const COLUMNS =
-  "projection_id, pick_id, season, week, market_key, market_name, market_label, " +
+  "projection_id, pick_id, season, week, sport, market_key, market_name, market_label, " +
   "market_emoji, is_binary, player_id, player_name, position_group, team_id, " +
   "team_school, team_abbreviation, team_color, team_alt_color, opponent_team_id, " +
   "opponent_school, opponent_abbreviation, game_id, start_date, neutral_site, " +
@@ -616,6 +616,7 @@ function toBoardRow(row: Record<string, unknown>): BoardRow {
 
     season: row.season as number,
     week: row.week as number,
+    sport: row.sport as Sport,
 
     marketKey: row.market_key as string,
     marketName: row.market_name as string,

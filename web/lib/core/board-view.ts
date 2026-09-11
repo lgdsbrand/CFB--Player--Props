@@ -100,21 +100,28 @@ export function summariseRow(
 }
 
 /**
- * Hit rate across everything graded, for the SZN column.
+ * Hit rate across this season to date, for the SZN column.
  *
- * SEASON TO DATE, AND ONLY THAT. The games handed in come from
- * `getGameLogsByPlayer(..., { before: week })`, so this is the current season up
- * to but excluding the week on screen — never a career figure and never
- * including the result being predicted.
+ * SEASON TO DATE, AND ONLY THAT — enforced here rather than assumed of the
+ * caller. The games come from `getGameLogsByPlayer(..., { before: week })`,
+ * which on the NFL also loads LAST season so the L5/L10 columns can reach back
+ * while this one is young (`borrowsPriorSeasonForm`). Those games must not leak
+ * into a column labelled SZN, so anything outside `season` is dropped, and a
+ * player with no games yet this season gets a dash rather than last season's
+ * figure. Never a career figure, and never the result being predicted.
  *
  * THIS IS WHY THERE IS NO L20 COLUMN. A college team plays 12-13 games, so an
  * L20 window would be the season for every player alive and would print the
  * same number as this column beside it. The MLB board the client sent has one
  * because a baseball season is 162 games.
  */
-export function seasonToDate(graded: GradedGame[]): HitRateSummary | null {
-  if (graded.length === 0) return null;
-  return hitRate(graded, graded.length);
+export function seasonToDate(
+  graded: GradedGame[],
+  season: number,
+): HitRateSummary | null {
+  const current = graded.filter((game) => game.season === season);
+  if (current.length === 0) return null;
+  return hitRate(current, current.length);
 }
 
 /** One ORDER BY term, in the shape PostgREST's `.order()` takes. */

@@ -77,3 +77,20 @@ export function resolveSport(value: string | string[] | undefined): Sport {
 export function usesBorrowedCalibration(sport: Sport): boolean {
   return sport !== DEFAULT_SPORT;
 }
+
+/**
+ * Whether a young season's hit rates reach back into last season.
+ *
+ * NFL ONLY — the client's decision, 2026-09-10. Without it NFL week 2 grades
+ * every "Last 5" off a single game. The rule itself (keep all of this season,
+ * fill the gap from last season's most recent games) is `topUpFromPriorSeason`;
+ * this only decides which sports load last season for it to draw on.
+ *
+ * NOT COLLEGE, and not because the arithmetic differs. Last season's college
+ * games were often played for another school through the transfer portal, which
+ * is the same reason the model down-weights them (CLAUDE.md §6). An NFL player
+ * changing teams is the exception; a college one is routine.
+ */
+export function borrowsPriorSeasonForm(sport: Sport): boolean {
+  return sport === "nfl";
+}

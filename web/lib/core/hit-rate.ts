@@ -213,6 +213,48 @@ export function hitRate(graded: GradedGame[], window: number): HitRateSummary {
   };
 }
 
+/**
+ * A short season's sample, topped up with last season's most recent games.
+ *
+ * THE CLIENT'S RULE, 2026-09-10: early in a season "Last 5" reaches back into
+ * last season rather than grading one game, unless the player is a rookie.
+ * Rookies need no special case — they have no games last season to borrow.
+ *
+ * EVERY GAME FROM THIS SEASON IS KEPT, and last season only fills the gap up to
+ * `minGames`. So the borrowing stops by itself once this season has enough, and
+ * a player's current form is never pushed out by an older game.
+ *
+ * SPORT-AGNOSTIC: this only trims what it is given. Whether last season is
+ * loaded at all is a sport policy (`borrowsPriorSeasonForm`), and a log holding
+ * one season passes through unchanged.
+ *
+ * THE L5/L10 WINDOWS DO NOT NEED IT, and it is worth knowing why. `orderGames`
+ * puts every game from this season ahead of every game from last, so the first
+ * N games of a two-season log already ARE this season topped up. This exists
+ * for the surfaces that read a whole sample — the venue and rank splits and the
+ * game log — where an untrimmed log would pull in all of last season and keep
+ * it there until December.
+ */
+export function topUpFromPriorSeason(
+  graded: GradedGame[],
+  season: number,
+  minGames: number,
+): GradedGame[] {
+  const ordered = [...graded].sort(orderGames);
+  const current = ordered.filter((game) => game.season === season);
+  const shortfall = minGames - current.length;
+  if (shortfall <= 0) return current;
+  const prior = ordered
+    .filter((game) => game.season === season - 1)
+    .slice(0, shortfall);
+  return [...current, ...prior];
+}
+
+/** How many games in a sample were played before `season` began. */
+export function priorSeasonCount(games: GradedGame[], season: number): number {
+  return games.filter((game) => game.season < season).length;
+}
+
 /** Home / away split. Neutral sites count as neither (CLAUDE.md §7). */
 export function splitByVenue(graded: GradedGame[]): {
   home: GradedGame[];

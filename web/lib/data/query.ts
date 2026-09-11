@@ -93,3 +93,20 @@ export function requireNum(value: unknown, column: string): number {
 export function upcomingOnly(cutoff: Date): string {
   return `start_date.gte."${cutoff.toISOString()}",start_date.is.null`;
 }
+
+/**
+ * The PostgREST predicate for a game log covering this season AND last.
+ *
+ * THE WEEK CUT APPLIES TO THIS SEASON ONLY, which is why this is a named
+ * function. Widening a log by swapping `.eq("season", s)` for an `in` would
+ * leave `.lt("week", before)` applying to both seasons — so on week 9 it would
+ * silently drop last season's weeks 9 onward, its most recent games, which are
+ * exactly the ones a top-up wants (`topUpFromPriorSeason`).
+ */
+export function thisAndLastSeason(season: number, before?: number): string {
+  const current =
+    before === undefined
+      ? `season.eq.${season}`
+      : `and(season.eq.${season},week.lt.${before})`;
+  return `season.eq.${season - 1},${current}`;
+}

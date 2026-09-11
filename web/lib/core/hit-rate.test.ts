@@ -27,8 +27,10 @@ import {
   formatHitRate,
   gradeGames,
   hitRate,
+  priorSeasonCount,
   splitByVenue,
   statValue,
+  topUpFromPriorSeason,
 } from "./hit-rate.ts";
 
 function game(
@@ -285,6 +287,80 @@ test("a game with no kickoff loses the tie rather than winning it by being null"
 
   assert.equal(gradeGames([undated, dated], "receptions", 3, "over")[0].gameId, 10);
   assert.equal(gradeGames([dated, undated], "receptions", 3, "over")[0].gameId, 10);
+});
+
+// -----------------------------------------------------------------------------
+// Topping a young season up from last season (NFL, client's rule 2026-09-10)
+// -----------------------------------------------------------------------------
+
+/** One game in a given season. Ids are explicit: weeks repeat across seasons. */
+function seasonGame(season: number, week: number, recYards: number): PlayerGameLogRow {
+  return game(week, { season, gameId: season * 100 + week, recYards });
+}
+
+/** A 2026 week-3 NFL log: two games this season, then last season's 17. */
+function twoSeasonLog(): PlayerGameLogRow[] {
+  const prior = Array.from({ length: 17 }, (_, i) => seasonGame(2025, 18 - i, 60));
+  return [seasonGame(2026, 2, 40), seasonGame(2026, 1, 40), ...prior];
+}
+
+test("a short season is topped up with last season's MOST RECENT games", () => {
+  const graded = gradeGames(twoSeasonLog(), "rec_yards", 50, "over");
+  const sample = topUpFromPriorSeason(graded, 2026, 10);
+
+  assert.equal(sample.length, 10);
+  assert.deepEqual(
+    sample.map((g) => `${g.season}-${g.week}`),
+    ["2026-2", "2026-1", "2025-18", "2025-17", "2025-16", "2025-15",
+     "2025-14", "2025-13", "2025-12", "2025-11"],
+  );
+  assert.equal(priorSeasonCount(sample, 2026), 8);
+});
+
+test("once this season has enough games, last season drops out entirely", () => {
+  const current = Array.from({ length: 11 }, (_, i) => seasonGame(2026, 11 - i, 40));
+  const graded = gradeGames(
+    [...current, seasonGame(2025, 18, 60)],
+    "rec_yards",
+    50,
+    "over",
+  );
+
+  const sample = topUpFromPriorSeason(graded, 2026, 10);
+  // Not trimmed to ten: every game this season is kept, which is what the
+  // venue and rank splits were reading before any of this existed.
+  assert.equal(sample.length, 11);
+  assert.equal(priorSeasonCount(sample, 2026), 0);
+});
+
+test("a rookie has nothing to borrow and keeps only this season", () => {
+  const graded = gradeGames([seasonGame(2026, 1, 40)], "rec_yards", 50, "over");
+  assert.equal(topUpFromPriorSeason(graded, 2026, 10).length, 1);
+});
+
+test("only LAST season is borrowed, never an older one", () => {
+  const graded = gradeGames(
+    [seasonGame(2026, 1, 40), seasonGame(2024, 18, 60)],
+    "rec_yards",
+    50,
+    "over",
+  );
+  assert.equal(topUpFromPriorSeason(graded, 2026, 10).length, 1);
+});
+
+test("the L-windows over a raw two-season log equal the windows over the sample", () => {
+  // The board slices the raw log for L5 and L10 and never calls the top-up. That
+  // is only safe because season-first ordering already puts this season ahead
+  // of last, so this pins the property the board depends on.
+  const log = twoSeasonLog();
+  const graded = gradeGames([...log].reverse(), "rec_yards", 50, "over");
+  const sample = topUpFromPriorSeason(graded, 2026, 10);
+
+  for (const window of [5, 10]) {
+    assert.deepEqual(hitRate(graded, window), hitRate(sample, window));
+  }
+  // And the figure is genuinely a blend: 0 of 2 this season, 3 of 3 borrowed.
+  assert.equal(hitRate(graded, 5).hits, 3);
 });
 
 test("identical kickoffs still order deterministically, by id", () => {

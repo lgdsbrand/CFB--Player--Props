@@ -123,6 +123,7 @@ export function MarketRow({
         side={row.isBinary ? "over" : row.side}
         window={hitRateWindow}
         verb={row.isBinary ? "scored" : undefined}
+        season={row.season}
       />
     </div>
   );

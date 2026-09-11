@@ -43,6 +43,7 @@ import {
 } from "@/lib/data/board";
 import type { BoardRow } from "@/lib/core/types";
 import {
+  borrowsPriorSeasonForm,
   DEFAULT_SPORT,
   resolveSport,
   SPORT_LABEL,
@@ -211,6 +212,7 @@ export default async function Home({
     getGameLogsByPlayer(board.playerIds, {
       season: active.season,
       before: active.week,
+      includePriorSeason: borrowsPriorSeasonForm(sport),
     }),
     getTeamDirectory(
       active.season,

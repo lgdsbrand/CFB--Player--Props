@@ -932,12 +932,26 @@ is a job that empties the pool on a schedule.
 ### `grade_vs_book`
 
 ```bash
-python -m worker.jobs.grade_vs_book --season 2025 --weeks 8
-python -m worker.jobs.grade_vs_book --season 2025 --weeks 6-8 --threshold 0.05
+python -m worker.jobs.grade_vs_book --sport cfb --season 2025 --weeks 8
+python -m worker.jobs.grade_vs_book --sport cfb --season 2025 --weeks 6-8 --threshold 0.05
+python -m worker.jobs.grade_vs_book --sport nfl --season 2026 --weeks 1 --include-non-closing
 ```
 
 Grades existing `projections` against the real closing lines `backfill_odds`
 bought, settling them on `player_game_stats`. Free — it makes no provider calls.
+
+**`--sport` is required** (since 2026-09-15). `player_prop_lines` has season
+and week but no sport, and both sports have a 2026 week 1, so before this flag an
+NFL grade pooled every college line of the same week.
+
+**Each book counts once, at its last quote before kickoff.** The live capture
+writes a snapshot every six hours (~16 per player-market-book on NFL 2026 week
+1); before 2026-09-15 all of them were graded, so a number a book moved off
+became its own bet and prices captured mid-game were included. Closing rows are
+exempt from the kickoff test. The change left both closing-line grades
+identical (2025 weeks 7-8: 1,856 bets; 2026 week 1: 749). Each week's log line
+now reports **line age at kickoff** — read it before trusting a pre-kickoff
+grade.
 
 **This is the only job that tests whether the model is PROFITABLE.**
 [calibration-report.html](calibration-report.html) tests whether it is
@@ -990,7 +1004,7 @@ Then, earliest 1 Sep:
 
 ```bash
 python -m worker.jobs.backfill_odds --season 2026 --weeks 1
-python -m worker.jobs.grade_vs_book --season 2026 --weeks 1
+python -m worker.jobs.grade_vs_book --sport cfb --season 2026 --weeks 1
 ```
 
 ##### The pre-kickoff grade, run 2026-08-31
@@ -999,8 +1013,13 @@ python -m worker.jobs.grade_vs_book --season 2026 --weeks 1
 closing line, so week 1 could be scored without waiting for the paid pool:
 
 ```bash
-python -m worker.jobs.grade_vs_book --season 2026 --weeks 1 --include-non-closing
+python -m worker.jobs.grade_vs_book --sport cfb --season 2026 --weeks 1 --include-non-closing
 ```
+
+(The result below was produced on 2026-08-31, before the one-quote-per-book fix,
+and is kept as recorded. The same command re-run on 2026-09-15 grades 841 bets
+over 48 games, not 157 over 8, because the week's later captures now exist; the
+two runs are not a before/after of the fix.)
 
 It relaxes the `is_closing` predicate for that one run. It does **not** flip the
 column — the timestamp would then be a lie every later grade trusts — and it
@@ -1046,6 +1065,33 @@ prints it; a model ROI without its null hypothesis is a misleading number), and
 **check the over rate first**. Both graded weeks so far were under-heavy and the
 model's structural under lean has never been tested against an over-heavy slate.
 If 2026 week 1 closes over-heavy, that is the more valuable finding than the ROI.
+
+#### NFL 2026 week 1 — the first NFL grade, run 2026-09-15
+
+```bash
+python -m worker.jobs.grade_vs_book --sport nfl --season 2026 --weeks 1 --include-non-closing
+```
+
+**Pre-kickoff lines, and stale ones.** No NFL closing lines exist (the paid pool
+was empty), and the live capture wrote nothing after Sat 12 Sep 18:20 UTC for
+the same reason. So the Sunday and Monday games are graded on prices 22 to 54
+hours old: **line age at kickoff median 22.7h, oldest 124.7h.** Indicative only.
+
+1,192 gradeable bets, 204 players, all 16 games (anytime TD excluded, one-way):
+
+| edge | n | win | break-even | ROI |
+|---|---|---|---|---|
+| >= 0% | 1,100 | 50.0% | 53.9% | **-7.0%** |
+| >= 2% | 955 | 50.7% | 53.7% | -5.6% |
+| >= 5% | 714 | 50.6% | 53.5% | -5.3% |
+| >= 10% | 383 | 46.5% | 52.9% | -11.9% |
+
+OVER landed 51.6% (centred). Always-over returned -3.4% at 0%, so the model is
+3.6 points worse than a blind side there; player-level lift is +0.2% on both
+sides, i.e. no discrimination. Confidence is again an anti-signal: the 0.60-0.70
+band claimed 64.1% and hit 47.1%. Only `rush_yards` broke even (-0.2%, n=198);
+passing markets and `rush_attempts` were worst (-18%). One week, stale lines,
+correlated observations: a first look, not a verdict.
 
 ### `migrate_database`
 

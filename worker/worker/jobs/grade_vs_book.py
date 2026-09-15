@@ -1,7 +1,8 @@
 """Grade the model against the real closing lines `backfill_odds` bought.
 
-    python -m worker.jobs.grade_vs_book --season 2025 --weeks 8
-    python -m worker.jobs.grade_vs_book --season 2025 --weeks 6-8 --threshold 0.05
+    python -m worker.jobs.grade_vs_book --sport cfb --season 2025 --weeks 8
+    python -m worker.jobs.grade_vs_book --sport cfb --season 2025 --weeks 6-8 --threshold 0.05
+    python -m worker.jobs.grade_vs_book --sport nfl --season 2026 --weeks 1 --include-non-closing
 
 THE QUESTION THIS ANSWERS, WHICH NOTHING ELSE DOES. The calibration report says
 the model is well calibrated: a stated 60% happens about 60% of the time. It was
@@ -62,7 +63,12 @@ DEFAULT_THRESHOLDS = (0.0, 0.02, 0.05, 0.10)
 
 
 def load_gradeable(
-    season: int, week: int, adapter: str, *, closing_only: bool = True
+    sport: str,
+    season: int,
+    week: int,
+    adapter: str,
+    *,
+    closing_only: bool = True,
 ) -> list[dict[str, Any]]:
     """Every (projection, real two-way line, actual) triple for one week.
 
@@ -74,24 +80,55 @@ def load_gradeable(
     `closing_only=False` grades the LAST PRE-KICKOFF SNAPSHOT instead of a true
     closing line — see `--include-non-closing` in `main` for what that costs and
     why the column is not simply flipped.
+
+    ONE QUOTE PER BOOK, AND NEVER ONE FROM AFTER KICKOFF. `ingest_odds` writes a
+    fresh row every six hours, so a live-captured week holds many snapshots of
+    each book's price — NFL 2026 week 1 averaged 16 per player-market-book.
+    Grouping all of them turned every number a book moved off into a bet of its
+    own and took the median price across a week of movement. Each book now
+    contributes only its latest quote captured before the game's kickoff; a
+    later one is an in-play price (443 NFL week-1 rows were) and grading against
+    it scores the model on a game already under way. Rows flagged `is_closing`
+    are exempt from the kickoff test because `backfill_odds` chose their moment.
+
+    SPORT IS REQUIRED. `player_prop_lines` carries season and week but no sport,
+    and both sports have a 2026 week 1: without the join to `games`, an NFL
+    grade silently pooled every college line of the same week.
     """
     return fetch_all(
         """
-        with priced as (
-            select l.player_id, l.game_id, l.market_key, l.line,
-                   json_agg(json_build_object(
-                       'sportsbook_key', b.key,
-                       'over_price',  l.over_price,
-                       'under_price', l.under_price
-                   )) as prices
+        with last_quote as (
+            select distinct on (l.player_id, l.game_id, l.market_key, l.sportsbook_id)
+                   l.player_id, l.game_id, l.market_key, l.sportsbook_id, l.line,
+                   l.over_price, l.under_price,
+                   extract(epoch from g.start_date - l.captured_at) / 3600.0
+                     as lead_hours
               from player_prop_lines l
-              join sportsbooks b on b.id = l.sportsbook_id
-             where l.season = %(season)s and l.week = %(week)s
+              join games g on g.id = l.game_id
+             where g.sport = %(sport)s
+               and l.season = %(season)s and l.week = %(week)s
                and l.source_adapter = %(adapter)s
                and (%(closing_only)s is false or l.is_closing)
-             group by l.player_id, l.game_id, l.market_key, l.line
+               and (l.is_closing or l.captured_at < g.start_date)
+             order by l.player_id, l.game_id, l.market_key, l.sportsbook_id,
+                      l.captured_at desc
+        ),
+        priced as (
+            select q.player_id, q.game_id, q.market_key, q.line,
+                   json_agg(json_build_object(
+                       'sportsbook_key', b.key,
+                       'over_price',  q.over_price,
+                       'under_price', q.under_price
+                   )) as prices,
+                   -- The freshest book's age: how close to kickoff this bet's
+                   -- best-informed price was taken.
+                   min(q.lead_hours) as lead_hours
+              from last_quote q
+              join sportsbooks b on b.id = q.sportsbook_id
+             group by q.player_id, q.game_id, q.market_key, q.line
         )
         select pr.player_id, pr.game_id, pr.market_key, pr.line, pr.prices,
+               pr.lead_hours,
                p.distribution, p.params, p.as_of_week,
                -- Cast before defaulting: position_group is an ENUM, so a
                -- string fallback has to leave the enum's domain first.
@@ -116,12 +153,28 @@ def load_gradeable(
             on pts.player_id = pr.player_id and pts.season = %(season)s
         """,
         {
+            "sport": sport,
             "season": season,
             "week": week,
             "adapter": adapter,
             "closing_only": closing_only,
         },
     )
+
+
+def describe_line_age(rows: list[dict[str, Any]]) -> str | None:
+    """How long before kickoff the graded prices were taken.
+
+    A pre-kickoff grade is only as good as its snapshot. When the capture stops
+    (NFL 2026 week 1: the paid pool emptied on the Saturday), the "last
+    pre-kickoff line" for a Monday game is two days old, and the report has to
+    say so rather than let it pass as a price near the close.
+    """
+    ages = sorted(float(r["lead_hours"]) for r in rows if r.get("lead_hours") is not None)
+    if not ages:
+        return None
+    median = ages[(len(ages) - 1) // 2]
+    return f"line age at kickoff: median {median:.1f}h, oldest {ages[-1]:.1f}h"
 
 
 def to_bets(rows: list[dict[str, Any]], season: int, week: int) -> list[BookBet]:
@@ -366,6 +419,7 @@ def render(bets: list[BookBet], thresholds: tuple[float, ...]) -> str:
 
 def run(
     *,
+    sport: str,
     season: int,
     weeks: list[int],
     adapter: str,
@@ -374,9 +428,15 @@ def run(
 ) -> list[BookBet]:
     bets: list[BookBet] = []
     for week in weeks:
-        rows = load_gradeable(season, week, adapter, closing_only=closing_only)
+        rows = load_gradeable(
+            sport, season, week, adapter, closing_only=closing_only
+        )
         got = to_bets(rows, season, week)
-        log.info("%s week %s: %d gradeable bet(s)", season, week, len(got))
+        age = describe_line_age(rows)
+        log.info(
+            "%s %s week %s: %d gradeable bet(s)%s",
+            sport, season, week, len(got), f"; {age}" if age else "",
+        )
         bets.extend(got)
     return bets
 
@@ -397,6 +457,11 @@ def parse_weeks(raw: str) -> list[int]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--sport", choices=("cfb", "nfl"), required=True,
+        help="Which league's lines to grade. Required: both sports share season "
+             "and week numbers, and a default would pool them.",
+    )
     parser.add_argument("--season", type=int, required=True)
     parser.add_argument("--weeks", required=True, help="'8', '6,7,8' or '6-8'.")
     parser.add_argument(
@@ -442,9 +507,16 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         with pipeline_run(
-            JOB_NAME, metadata={"season": args.season, "weeks": weeks}
+            JOB_NAME,
+            metadata={
+                "sport": args.sport,
+                "season": args.season,
+                "weeks": weeks,
+                "closing_only": not args.include_non_closing,
+            },
         ):
             bets = run(
+                sport=args.sport,
                 season=args.season,
                 weeks=weeks,
                 adapter=args.adapter,
@@ -462,8 +534,8 @@ def main(argv: list[str] | None = None) -> int:
                 else "closing lines"
             )
             log.info(
-                "Model vs %s %s, %s week(s) %s:\n%s",
-                args.adapter, basis, args.season, weeks,
+                "Model vs %s %s, %s %s week(s) %s:\n%s",
+                args.adapter, basis, args.sport, args.season, weeks,
                 render(bets, thresholds),
             )
             if args.include_non_closing:

@@ -124,8 +124,8 @@ def slate(db):
         )
         cur.execute(
             "insert into player_game_stats (player_id, game_id, team_id, "
-            "opponent_team_id, season, week, position_group, is_home, rush_yards) "
-            "values (%s, %s, %s, %s, %s, %s, 'RB', true, 71)",
+            "opponent_team_id, season, week, position_group, is_home, rush_yards, "
+            "q1_rush_yards) values (%s, %s, %s, %s, %s, %s, 'RB', true, 71, 12)",
             (player, game, home, away, SEASON, WEEK),
         )
         games[sport] = {"game": game, "player": player}
@@ -133,14 +133,14 @@ def slate(db):
     return {"cur": cur, "books": books, "games": games}
 
 
-def _line(slate, sport, book, line, captured_at, *, closing=False):
+def _line(slate, sport, book, line, captured_at, *, closing=False, market="rush_yards"):
     g = slate["games"][sport]
     slate["cur"].execute(
         "insert into player_prop_lines (game_id, player_id, market_key, "
         "sportsbook_id, season, week, line, over_price, under_price, "
         "source_adapter, captured_at, is_closing) "
-        "values (%s, %s, 'rush_yards', %s, %s, %s, %s, -110, -110, %s, %s, %s)",
-        (g["game"], g["player"], slate["books"][book], SEASON, WEEK, line,
+        "values (%s, %s, %s, %s, %s, %s, %s, -110, -110, %s, %s, %s)",
+        (g["game"], g["player"], market, slate["books"][book], SEASON, WEEK, line,
          ADAPTER, captured_at, closing),
     )
 
@@ -185,6 +185,50 @@ def test_closing_only_reads_only_closing_rows(slate):
 
     assert [float(r["line"]) for r in rows] == [63.5]
     assert [p["sportsbook_key"] for p in rows[0]["prices"]] == ["gradetestb"]
+
+
+def test_first_quarter_lines_come_with_first_quarter_actuals(slate):
+    _line(slate, "nfl", "gradetesta", 6.5, "2031-09-14 16:20:00+00", market="q1_rush_yards")
+    _line(slate, "nfl", "gradetesta", 62.5, "2031-09-14 15:00:00+00")
+
+    rows = grade_vs_book.load_first_quarter_lines(
+        SEASON, WEEK, ADAPTER, closing_only=False
+    )
+
+    assert [(r["market_key"], float(r["line"])) for r in rows] == [
+        ("q1_rush_yards", 6.5)
+    ]
+    assert rows[0]["stat_column"] == "q1_rush_yards"
+    assert rows[0][rows[0]["stat_column"]] == 12
+
+
+def test_first_quarter_lines_are_not_graded_by_the_full_game_load(slate):
+    """No first-quarter projection is stored, so the inner join drops them —
+    which is why the first-quarter path projects instead."""
+    _line(slate, "nfl", "gradetesta", 6.5, "2031-09-14 16:20:00+00", market="q1_rush_yards")
+    assert _load("nfl", closing_only=False) == []
+
+
+def test_projections_attach_by_player_game_and_market():
+    from types import SimpleNamespace
+
+    projection = SimpleNamespace(distribution="hurdle_gamma", params={"p_zero": 0.2})
+    projected = [
+        SimpleNamespace(player_id=1, game_id=9, market_key="q1_rush_yards",
+                        projection=projection),
+    ]
+    rows = [
+        {"player_id": 1, "game_id": 9, "market_key": "q1_rush_yards", "line": 6.5},
+        {"player_id": 2, "game_id": 9, "market_key": "q1_rush_yards", "line": 4.5},
+    ]
+
+    attached, unprojected = grade_vs_book.attach_projections(rows, projected, week=1)
+
+    assert unprojected == 1
+    assert len(attached) == 1
+    assert attached[0]["distribution"] == "hurdle_gamma"
+    assert attached[0]["params"] == {"p_zero": 0.2}
+    assert attached[0]["as_of_week"] == 1
 
 
 def test_line_age_is_described_from_the_rows():

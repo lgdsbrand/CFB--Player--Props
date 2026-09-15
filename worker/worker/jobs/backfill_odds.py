@@ -3,6 +3,8 @@
     python -m worker.jobs.backfill_odds --season 2025 --weeks 6,7,8 --dry-run
     python -m worker.jobs.backfill_odds --season 2025 --weeks 6,7,8 --max-credits 4000
     python -m worker.jobs.backfill_odds --season 2026 --weeks 1 --sport nfl
+    python -m worker.jobs.backfill_odds --season 2026 --weeks 1 --sport nfl \
+        --markets q1_pass_yards,q1_rush_yards,q1_rec_yards
 
 WHY THIS EXISTS. Every backtest number the project has produced was graded
 against a SYNTHETIC line — each player's own trailing average (see the "Lines
@@ -83,6 +85,7 @@ from worker.adapters.odds.base import SupportsHistorical
 from worker.adapters.odds.markets import (
     OUR_KEY_TO_PROVIDER,
     SPORT_KEY_BY_SPORT,
+    markets_for,
     sport_key_for,
 )
 from worker.adapters.odds.null import ADAPTER_NAME as NULL_ADAPTER_NAME
@@ -268,7 +271,11 @@ class BackfillReport:
 
 
 def already_bought(
-    conn: psycopg.Connection, season: int, week: int, adapter_name: str
+    conn: psycopg.Connection,
+    season: int,
+    week: int,
+    adapter_name: str,
+    market_keys: list[str] | None = None,
 ) -> set[int]:
     """Games that already hold closing lines from this adapter.
 
@@ -282,6 +289,11 @@ def already_bought(
 
     Keyed on the game rather than on individual rows because that is the unit
     that gets billed — one call per game, priced by markets returned.
+
+    AND ON THE MARKETS BEING BOUGHT, when given. A game holding full-game
+    closing lines has not bought its first-quarter ones: without this, buying
+    either set first would make the other look already paid for, and the second
+    run would skip every game while reporting them as "already bought, free".
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -290,8 +302,9 @@ def already_bought(
               from player_prop_lines
              where season = %s and week = %s
                and source_adapter = %s and is_closing
+               and (%s::text[] is null or market_key = any(%s::text[]))
             """,
-            (season, week, adapter_name),
+            (season, week, adapter_name, market_keys, market_keys),
         )
         return {int(row["game_id"]) for row in cur.fetchall()}
 
@@ -433,6 +446,7 @@ def backfill_week(
     sport: str = "cfb",
     exclude_markets: tuple[str, ...] = (),
     refresh: bool = False,
+    markets: list[str] | None = None,
 ) -> None:
     """Walk one week's kickoff clusters, buying what the books had posted."""
     # Scoped to one sport — see the note in ingest_odds.load_games. Before this
@@ -450,11 +464,17 @@ def backfill_week(
         return
 
     report.games_total += len(games)
-    market_keys = sorted(set(OUR_KEY_TO_PROVIDER) - set(exclude_markets or ()))
+    # `markets` names the set outright (the first-quarter purchase); otherwise it
+    # is the full-game set less any exclusions, as it always was.
+    market_keys = (
+        markets_for(sport, markets)
+        if markets is not None
+        else sorted(set(OUR_KEY_TO_PROVIDER) - set(exclude_markets or ()))
+    )
     report.markets_requested = len(market_keys)
 
     bought = set() if refresh else already_bought(
-        conn, season, week, THEODDSAPI_ADAPTER_NAME
+        conn, season, week, THEODDSAPI_ADAPTER_NAME, market_keys
     )
     if bought:
         report.games_skipped += len(bought)
@@ -611,6 +631,7 @@ def run(
     sport: str = "cfb",
     exclude_markets: tuple[str, ...] = (),
     refresh: bool = False,
+    markets: list[str] | None = None,
 ) -> BackfillReport:
     report = BackfillReport(weeks=list(weeks), dry_run=dry_run)
     settings = get_settings()
@@ -655,6 +676,7 @@ def run(
                 sport=sport,
                 exclude_markets=exclude_markets,
                 refresh=refresh,
+                markets=markets,
             )
         # `backfill_week` commits per game. This catches nothing but a trailing
         # no-op, and is kept so the transaction is definitely closed.
@@ -729,6 +751,13 @@ def main(argv: list[str] | None = None) -> int:
              "the one worth excluding: measured 0 of 1,802 prices two-way over "
              "20 games, and a one-sided price yields no edge at all.",
     )
+    parser.add_argument(
+        "--markets",
+        help="Comma list of market keys to buy INSTEAD of the full-game set, "
+             "e.g. q1_pass_yards,q1_rush_yards,q1_rec_yards (NFL only). Cannot "
+             "be combined with --exclude-markets. Checked against the sport "
+             "before any call.",
+    )
     args = parser.parse_args(argv)
 
     exclude = tuple(
@@ -741,6 +770,29 @@ def main(argv: list[str] | None = None) -> int:
         log.error(
             "--exclude-markets has unknown key(s): %s. Known: %s",
             unknown, sorted(OUR_KEY_TO_PROVIDER),
+        )
+        return 2
+
+    # Checked before settings: a market the sport cannot carry, or an ambiguous
+    # pair of flags, is refused before anything can be billed.
+    try:
+        markets = (
+            None
+            if args.markets is None
+            else markets_for(
+                args.sport,
+                [part.strip() for part in args.markets.split(",") if part.strip()],
+            )
+        )
+    except (ValueError, KeyError) as exc:
+        configure_logging("INFO")
+        log.error("%s", exc)
+        return 2
+    if markets is not None and exclude:
+        configure_logging("INFO")
+        log.error(
+            "--markets and --exclude-markets cannot be combined: name the "
+            "markets to buy, or the ones to skip."
         )
         return 2
 
@@ -784,6 +836,7 @@ def main(argv: list[str] | None = None) -> int:
                 "max_credits": args.max_credits,
                 "dry_run": args.dry_run,
                 "excluded_markets": list(exclude),
+                **({"markets": markets} if markets is not None else {}),
             },
         ) as run_id:
             report = run(
@@ -797,6 +850,7 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 exclude_markets=exclude,
                 refresh=args.refresh,
+                markets=markets,
             )
             log.info(
                 "Odds backfill (%s, %s%s):\n%s",

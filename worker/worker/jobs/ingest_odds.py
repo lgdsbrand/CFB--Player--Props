@@ -39,7 +39,7 @@ import json
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 
@@ -114,6 +114,18 @@ class IngestReport:
     # each time. Nothing downstream can tell "no book posted a line for this
     # game" from "we stopped asking", and both look like a board of model leans.
     events_over_limit: int = 0
+    # Matched events already under way, so never asked about. Before 2026-09-15
+    # nothing stopped this: 443 NFL and 1,501 college week-1 rows were in-play
+    # prices, billed, then read as the latest line by the board and as the last
+    # pre-kickoff quote by the grader.
+    events_started: int = 0
+    # Matched events kicking off beyond `kickoff_within_minutes`, left for a
+    # later run by design.
+    events_outside_window: int = 0
+    # The provider refused for lack of credits. The run FAILS on it: from
+    # 2026-09-12 18:20 UTC both odds crons wrote nothing for days while every
+    # run reported success, and the board's lines froze with no alert.
+    quota_exhausted: bool = False
     # THREE DIFFERENT UNITS, kept apart on purpose. A "quote" is one player's
     # one market for one game; a "row" is that quote at ONE BOOK, so four books
     # on one market make one quote and four rows. An early version printed
@@ -142,6 +154,16 @@ class IngestReport:
                 f"  TRUNCATED: {self.events_over_limit} matched event(s) never "
                 "queried — --event-limit was reached. Raise it above the slate "
                 "size; these games will show no line."
+            )
+        if self.events_started:
+            lines.append(
+                f"  {self.events_started} matched event(s) already under way — "
+                "not asked about, so no in-play price was bought"
+            )
+        if self.events_outside_window:
+            lines.append(
+                f"  {self.events_outside_window} matched event(s) kick off "
+                "outside the window — left for a later run"
             )
         lines.append(self.render_resolution())
         return "\n".join(lines)
@@ -496,8 +518,23 @@ def run(
     prefer_free: bool = False,
     sport: str = "cfb",
     markets: list[str] | None = None,
+    kickoff_within_minutes: int | None = None,
+    now: datetime | None = None,
 ) -> IngestReport:
+    """Capture what the books have posted for one sport's matched games.
+
+    A game already under way is never asked about. `kickoff_within_minutes`
+    additionally restricts the run to games starting that soon, which is how
+    `capture_first_quarter` takes each game once, just before kickoff. `now` is
+    for tests.
+    """
     report = IngestReport()
+    now = now or datetime.now(UTC)
+    window = (
+        timedelta(minutes=kickoff_within_minutes)
+        if kickoff_within_minutes is not None
+        else None
+    )
     # Resolved FIRST, before the key or the event list: a market this sport
     # cannot carry must cost nothing to refuse. None is the full-game set every
     # cron has always requested.
@@ -605,6 +642,16 @@ def run(
             report.events_matched += 1
             report.event_method_mix[how] += 1
 
+            # The provider's kickoff first: it is the clock the book closes the
+            # market on, and ours can sit a few minutes off it.
+            kickoff = event.commence_time or game.get("start_date")
+            if kickoff is not None and kickoff <= now:
+                report.events_started += 1
+                continue
+            if window is not None and (kickoff is None or kickoff > now + window):
+                report.events_outside_window += 1
+                continue
+
             if event_limit is not None and processed >= event_limit:
                 report.events_over_limit += 1
                 continue
@@ -613,6 +660,7 @@ def run(
             try:
                 quotes = adapter.fetch_props(event.event_id, market_keys)
             except OddsQuotaError:
+                report.quota_exhausted = True
                 log.error(
                     "Out of credits after %d event(s). Stopping; what was "
                     "written so far stands. %s",
@@ -632,7 +680,11 @@ def run(
 
         if not dry_run:
             conn.commit()
-            refresh_no_vig_rows(conn)
+            # A narrowed run that wrote nothing has nothing to publish, and the
+            # hourly first-quarter capture is exactly that most hours: skip the
+            # rebuild rather than pay for one every hour of the week.
+            if report.rows_written or markets is None:
+                refresh_no_vig_rows(conn)
 
     # Loud, because the alternative is a board that silently stops covering part
     # of the slate while every counter above still reads as a successful run.
@@ -648,6 +700,13 @@ def run(
         )
 
     log.info("Provider quota: %s", adapter.quota.summary())
+    if report.quota_exhausted:
+        log.info("Report before failing the run:\n%s", report.render())
+        raise OddsQuotaError(
+            f"Out of credits: this run wrote {report.rows_written} row(s) and "
+            "stopped. Failing it on purpose — a run that captures nothing while "
+            "reporting success leaves the board's lines frozen with no alert."
+        )
     return report
 
 
@@ -727,8 +786,9 @@ def main(argv: list[str] | None = None) -> int:
         "--markets",
         help="Comma-separated market keys to request INSTEAD of the full-game "
              "set, e.g. q1_pass_yards,q1_rush_yards,q1_rec_yards (NFL only). "
-             "No cron passes this: it is for the by-hand first-quarter capture "
-             "just before kickoff. Checked against the sport before any call.",
+             "The full-game crons never pass it; the scheduled first-quarter "
+             "capture is `capture_first_quarter`. Checked against the sport "
+             "before any call.",
     )
     args = parser.parse_args(argv)
 

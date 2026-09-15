@@ -39,9 +39,10 @@ OUR_KEY_TO_PROVIDER: dict[str, str] = {
 # is one-way on every book, so it could never be de-vigged or graded -- it is
 # deliberately absent.
 #
-# OPT-IN because the scheduled odds crons bill the shared paid pool: nothing
-# requests these unless `ingest_odds --markets` names them, so adding them here
-# changes no cron's spend. Their `markets` rows are inactive (migration 0065),
+# OPT-IN because the full-game odds crons bill the shared paid pool: nothing
+# requests these unless `ingest_odds --markets` or `capture_first_quarter`
+# (hourly, free key) names them, so adding them here changed no full-game
+# cron's spend. Their `markets` rows are inactive (migration 0065),
 # so a stored line reaches /no-vig and nothing else.
 FIRST_QUARTER_KEY_TO_PROVIDER: dict[str, str] = {
     "q1_pass_yards": "player_pass_yds_q1",

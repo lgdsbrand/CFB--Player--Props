@@ -274,6 +274,17 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
              "keeps reporting success from the college run.",
     ),
     JobExpectation(
+        name="capture_first_quarter",
+        max_age_hours=3,
+        sport="nfl",
+        enabled_key="odds_adapter",
+        note="hourly at :40 — DraftKings' first-quarter NFL lines for games "
+             "kicking off in the next hour. Most runs find no game and succeed "
+             "having bought nothing, so staleness here means the cron itself "
+             "stopped. A job name of its own so these runs cannot stand in for "
+             "the six-hourly full-game NFL capture.",
+    ),
+    JobExpectation(
         name="build_quarter_stats",
         max_age_hours=36,
         sport="nfl",

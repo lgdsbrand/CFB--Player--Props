@@ -359,7 +359,7 @@ class TestDryRun:
             job, "load_games", lambda conn, season, week, sport="cfb": [game(1, kickoff)]
         )
         monkeypatch.setattr(
-            job, "already_bought", lambda conn, season, week, adapter: set()
+            job, "already_bought", lambda conn, season, week, adapter, markets=None: set()
         )
         # Matching is exercised by TestSnapshotTiming and the live job's own
         # tests; here it only needs to succeed so the code reaches the branch
@@ -440,7 +440,7 @@ class TestExcludedMarkets:
             job, "load_games", lambda conn, season, week, sport="cfb": [game(1, kickoff)]
         )
         monkeypatch.setattr(
-            job, "already_bought", lambda conn, season, week, adapter: set()
+            job, "already_bought", lambda conn, season, week, adapter, markets=None: set()
         )
         monkeypatch.setattr(
             job,
@@ -514,10 +514,10 @@ class TestResume:
             job, "load_games", lambda conn, season, week, sport="cfb": [game(1, kickoff)]
         )
         monkeypatch.setattr(
-            job, "already_bought", lambda conn, season, week, adapter: set()
+            job, "already_bought", lambda conn, season, week, adapter, markets=None: set()
         )
         monkeypatch.setattr(
-            job, "already_bought", lambda conn, season, week, adapter: bought
+            job, "already_bought", lambda conn, season, week, adapter, markets=None: bought
         )
         monkeypatch.setattr(
             job,
@@ -587,7 +587,7 @@ class TestGamesNotYetKicked:
             job, "load_games", lambda conn, season, week, sport="cfb": [game(1, kickoff)]
         )
         monkeypatch.setattr(
-            job, "already_bought", lambda conn, season, week, adapter: set()
+            job, "already_bought", lambda conn, season, week, adapter, markets=None: set()
         )
         monkeypatch.setattr(
             job,

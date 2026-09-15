@@ -481,34 +481,49 @@ Three things it refuses to do:
 **Monitored:** warning, `max_age_hours=18`, gated on `app_config.odds_adapter`
 not being `"none"`.
 
-##### First-quarter NFL lines — by hand, `--markets`, free key
+**Never buys an in-play price** (since 2026-09-15). A matched event whose
+kickoff (the provider's `commence_time`, else ours) has passed is skipped and
+counted as "already under way". Before this, 443 NFL and 1,501 college week-1
+rows were in-play prices that the board then showed as the latest line.
 
-```powershell
-# from worker/, against PRODUCTION (a bare run writes to DEV -- see below)
-$env:SUPABASE_DB_URL = (Select-String -Path ..\.env -Pattern '^MIGRATION_TARGET_DB_URL=').Line.Split('=',2)[1].Trim('"')
-.\.venv\Scripts\python.exe -m worker.jobs.ingest_odds --sport nfl --season 2026 --week 1 --free --markets q1_pass_yards,q1_rush_yards,q1_rec_yards
-Remove-Item Env:SUPABASE_DB_URL
+**Fails when the provider is out of credits** (since 2026-09-15). What was
+written stands, the report is logged, then the run raises so `pipeline_runs`
+says `failed` and the monitor reports it. From 12 Sep 18:20 UTC both odds crons
+wrote nothing for days while every run said `succeeded`.
+
+#### `capture_first_quarter` — hourly at :40
+
+```bash
+python -m worker.jobs.capture_first_quarter             # what the cron runs
+python -m worker.jobs.capture_first_quarter --dry-run
 ```
 
-`--markets` narrows one run to named markets. **No cron passes it**, so every
-scheduled capture still requests the nine full-game markets and nothing else.
-The three first-quarter keys are NFL-only (`markets_for` refuses them for
-college, before any call) and DraftKings is the only book posting them.
+DraftKings' first-quarter NFL lines (`q1_pass_yards`, `q1_rush_yards`,
+`q1_rec_yards`), captured for games kicking off in the **next 60 minutes** — so
+each game once, 20-80 minutes before kickoff, whatever day it is played. It is
+`ingest_odds.run` with those markets, `--free`, and a kickoff window; it replaced
+the by-hand Sunday/Monday capture after week 1's lines were lost to it.
 
-- **When:** about 30 minutes before the first kickoff of a window (Sunday
-  12:30 ET for the 13:00 slate; Monday ~20:00 ET for Monday night). The
-  6-hourly cron's last capture before a 13:00 ET slate is 08:20 ET, too early
-  to stand in for a closing line.
-- **Cost:** at most 3 credits per event, on `ODDS_API_KEY_FREE` (500/month,
-  separate from the client's shared pool). A 13-game Sunday is at most 39.
-  The event list is free.
-- **`--season`/`--week` explicitly**, so a Monday-evening run cannot resolve to
-  the following week's slate.
+- **Cost:** at most 3 credits per game on `ODDS_API_KEY_FREE`, so a full NFL week
+  is under ~50. The event list it reads every hour is free; the ~150 runs a week
+  with no game in the window bill nothing and skip the `/no-vig` rebuild.
+- **Render service `nfl-props-q1-capture` needs an odds key on the service**
+  (`ODDS_API_KEY_FREE`, or `ODDS_API_KEY`, which it falls back to with a
+  warning). Without one every run fails with a `ConfigError`.
+- **Its own job name,** so its hourly runs cannot stand in for the six-hourly
+  NFL `ingest_odds` in the monitor's staleness check.
 - **Where the lines show:** `/no-vig` only. The `markets` rows are inactive
-  (migration 0065), so neither board reads them. They are stored
-  `is_closing = false`, like every live capture.
-- **Why by hand:** a line not captured before kickoff can only be bought later
-  from the historical endpoint at 10x the credits.
+  (migration 0065), so neither board reads them. Stored `is_closing = false`;
+  grade them with `grade_vs_book --first-quarter --include-non-closing`.
+- **The window equals the cron period** (`tests/test_capture_first_quarter.py`
+  pins it). Change one, change both.
+
+**Monitored:** warning, `max_age_hours=3`, NFL season, gated on
+`app_config.odds_adapter`.
+
+By hand, a single run can still be narrowed with `ingest_odds --sport nfl
+--free --markets q1_pass_yards,q1_rush_yards,q1_rec_yards`. The three keys are
+NFL-only (`markets_for` refuses them for college, before any call).
 
 #### `generate_ai_reads` — Wednesday 14:00 UTC
 
@@ -929,6 +944,21 @@ is part of the table's unique key.
 **Not monitored, by design.** A job that spends the client's money on a schedule
 is a job that empties the pool on a schedule.
 
+#### First-quarter lines — `--markets`
+
+```bash
+python -m worker.jobs.backfill_odds --sport nfl --season 2026 --weeks 1 \
+    --markets q1_pass_yards,q1_rush_yards,q1_rec_yards --dry-run
+python -m worker.jobs.backfill_odds --sport nfl --season 2026 --weeks 1 \
+    --markets q1_pass_yards,q1_rush_yards,q1_rec_yards --max-credits 600
+```
+
+Buys the named markets instead of the full-game set (NFL only; cannot be combined
+with `--exclude-markets`). **"Already bought" is checked per requested market**,
+so a game holding full-game closing lines is still bought for its first quarter.
+Worst case 30 credits per game at the historical 10x — 16 games, ~480 — and the
+default `--min-remaining 5000` still protects the shared pool. Needs the PAID key.
+
 ### `grade_vs_book`
 
 ```bash
@@ -952,6 +982,13 @@ exempt from the kickoff test. The change left both closing-line grades
 identical (2025 weeks 7-8: 1,856 bets; 2026 week 1: 749). Each week's log line
 now reports **line age at kickoff** — read it before trusting a pre-kickoff
 grade.
+
+**`--first-quarter` (NFL only)** grades `q1_pass_yards`, `q1_rush_yards` and
+`q1_rec_yards` against `q1_*` actuals. First-quarter projections are not stored
+(their markets are inactive), so it **projects the week point-in-time** with the
+board's own `project_slate` and population, **raw** — no first-quarter
+calibration has ever been stored. Lines for players the board would not project
+are counted and not graded. Add `--include-non-closing` for live captures.
 
 **This is the only job that tests whether the model is PROFITABLE.**
 [calibration-report.html](calibration-report.html) tests whether it is

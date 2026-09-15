@@ -3,6 +3,7 @@
     python -m worker.jobs.grade_vs_book --sport cfb --season 2025 --weeks 8
     python -m worker.jobs.grade_vs_book --sport cfb --season 2025 --weeks 6-8 --threshold 0.05
     python -m worker.jobs.grade_vs_book --sport nfl --season 2026 --weeks 1 --include-non-closing
+    python -m worker.jobs.grade_vs_book --sport nfl --season 2026 --weeks 1 --first-quarter
 
 THE QUESTION THIS ANSWERS, WHICH NOTHING ELSE DOES. The calibration report says
 the model is well calibrated: a stated 60% happens about 60% of the time. It was
@@ -32,6 +33,7 @@ import argparse
 import sys
 from typing import Any
 
+from worker.adapters.odds.markets import FIRST_QUARTER_KEY_TO_PROVIDER
 from worker.config import ConfigError, get_settings
 from worker.core.book_grading import (
     BookBet,
@@ -49,6 +51,12 @@ from worker.core.book_grading import (
     summarise,
     week_results,
 )
+from worker.core.features import AsOf
+from worker.core.projections import (
+    first_quarter_catalogue,
+    market_catalogue,
+    project_slate,
+)
 from worker.db import fetch_all, pipeline_run
 from worker.logging_setup import configure_logging, get_logger
 
@@ -60,6 +68,45 @@ JOB_NAME = "grade_vs_book"
 # "every bet the model would take" is the honest denominator: reporting only
 # the filtered subset invites picking whichever threshold looked best.
 DEFAULT_THRESHOLDS = (0.0, 0.02, 0.05, 0.10)
+
+# One quote per book per player-market, then grouped to one row per line with
+# the prices aggregated. Shared by the full-game and first-quarter loads so the
+# two cannot select their prices differently; see `load_gradeable` for why each
+# clause is there.
+_PRICED_CTE = """
+        with last_quote as (
+            select distinct on (l.player_id, l.game_id, l.market_key, l.sportsbook_id)
+                   l.player_id, l.game_id, l.market_key, l.sportsbook_id, l.line,
+                   l.over_price, l.under_price,
+                   extract(epoch from g.start_date - l.captured_at) / 3600.0
+                     as lead_hours
+              from player_prop_lines l
+              join games g on g.id = l.game_id
+             where g.sport = %(sport)s
+               and l.season = %(season)s and l.week = %(week)s
+               and l.source_adapter = %(adapter)s
+               and (%(closing_only)s is false or l.is_closing)
+               and (l.is_closing or l.captured_at < g.start_date)
+             order by l.player_id, l.game_id, l.market_key, l.sportsbook_id,
+                      l.captured_at desc
+        ),
+        priced as (
+            select q.player_id, q.game_id, q.market_key, q.line,
+                   json_agg(json_build_object(
+                       'sportsbook_key', b.key,
+                       'over_price',  q.over_price,
+                       'under_price', q.under_price
+                   )) as prices,
+                   -- The freshest book's age: how close to kickoff this bet's
+                   -- best-informed price was taken.
+                   min(q.lead_hours) as lead_hours
+              from last_quote q
+              join sportsbooks b on b.id = q.sportsbook_id
+             group by q.player_id, q.game_id, q.market_key, q.line
+        )
+"""
+
+FIRST_QUARTER_MARKETS = sorted(FIRST_QUARTER_KEY_TO_PROVIDER)
 
 
 def load_gradeable(
@@ -96,37 +143,8 @@ def load_gradeable(
     grade silently pooled every college line of the same week.
     """
     return fetch_all(
-        """
-        with last_quote as (
-            select distinct on (l.player_id, l.game_id, l.market_key, l.sportsbook_id)
-                   l.player_id, l.game_id, l.market_key, l.sportsbook_id, l.line,
-                   l.over_price, l.under_price,
-                   extract(epoch from g.start_date - l.captured_at) / 3600.0
-                     as lead_hours
-              from player_prop_lines l
-              join games g on g.id = l.game_id
-             where g.sport = %(sport)s
-               and l.season = %(season)s and l.week = %(week)s
-               and l.source_adapter = %(adapter)s
-               and (%(closing_only)s is false or l.is_closing)
-               and (l.is_closing or l.captured_at < g.start_date)
-             order by l.player_id, l.game_id, l.market_key, l.sportsbook_id,
-                      l.captured_at desc
-        ),
-        priced as (
-            select q.player_id, q.game_id, q.market_key, q.line,
-                   json_agg(json_build_object(
-                       'sportsbook_key', b.key,
-                       'over_price',  q.over_price,
-                       'under_price', q.under_price
-                   )) as prices,
-                   -- The freshest book's age: how close to kickoff this bet's
-                   -- best-informed price was taken.
-                   min(q.lead_hours) as lead_hours
-              from last_quote q
-              join sportsbooks b on b.id = q.sportsbook_id
-             group by q.player_id, q.game_id, q.market_key, q.line
-        )
+        _PRICED_CTE
+        + """
         select pr.player_id, pr.game_id, pr.market_key, pr.line, pr.prices,
                pr.lead_hours,
                p.distribution, p.params, p.as_of_week,
@@ -160,6 +178,81 @@ def load_gradeable(
             "closing_only": closing_only,
         },
     )
+
+
+def load_first_quarter_lines(
+    season: int,
+    week: int,
+    adapter: str,
+    *,
+    closing_only: bool = True,
+) -> list[dict[str, Any]]:
+    """First-quarter lines with their first-quarter actuals, and NO projection.
+
+    First-quarter projections are not stored — their markets are inactive, so
+    the weekly run never writes them — which is why `load_gradeable`'s inner
+    join to `projections` cannot serve them. The caller projects the week
+    point-in-time and attaches the distributions; see `attach_projections`.
+    NFL only: first-quarter actuals are derived and verified for nothing else.
+    """
+    return fetch_all(
+        _PRICED_CTE
+        + """
+        select pr.player_id, pr.game_id, pr.market_key, pr.line, pr.prices,
+               pr.lead_hours,
+               coalesce(pts.position_group::text, 'UNK') as position_group,
+               m.stat_column,
+               s.q1_pass_yards, s.q1_rush_yards, s.q1_rec_yards
+          from priced pr
+          join markets m on m.key = pr.market_key
+          join player_game_stats s
+            on s.player_id = pr.player_id and s.game_id = pr.game_id
+          left join player_team_seasons pts
+            on pts.player_id = pr.player_id and pts.season = %(season)s
+         where pr.market_key = any(%(markets)s)
+        """,
+        {
+            "sport": "nfl",
+            "season": season,
+            "week": week,
+            "adapter": adapter,
+            "closing_only": closing_only,
+            "markets": FIRST_QUARTER_MARKETS,
+        },
+    )
+
+
+def attach_projections(
+    rows: list[dict[str, Any]], projected: list[Any], week: int
+) -> tuple[list[dict[str, Any]], int]:
+    """Give each line the distribution projected for its player-market.
+
+    Returns the rows that got one and how many did not. A line with no
+    projection is a player the book priced and the board would not have shown
+    (below the usage floor, or too little record) — the same rows the
+    full-game grade's inner join to `projections` drops, counted here instead
+    of vanishing.
+    """
+    by_key = {
+        (int(p.player_id), int(p.game_id), str(p.market_key)): p.projection
+        for p in projected
+    }
+    attached: list[dict[str, Any]] = []
+    unprojected = 0
+    for row in rows:
+        projection = by_key.get(
+            (int(row["player_id"]), int(row["game_id"]), str(row["market_key"]))
+        )
+        if projection is None:
+            unprojected += 1
+            continue
+        attached.append({
+            **row,
+            "distribution": projection.distribution,
+            "params": projection.params,
+            "as_of_week": week,
+        })
+    return attached, unprojected
 
 
 def describe_line_age(rows: list[dict[str, Any]]) -> str | None:
@@ -425,12 +518,33 @@ def run(
     adapter: str,
     thresholds: tuple[float, ...],
     closing_only: bool = True,
+    first_quarter: bool = False,
 ) -> list[BookBet]:
     bets: list[BookBet] = []
     for week in weeks:
-        rows = load_gradeable(
-            sport, season, week, adapter, closing_only=closing_only
-        )
+        if first_quarter:
+            rows = load_first_quarter_lines(
+                season, week, adapter, closing_only=closing_only
+            )
+            # POINT-IN-TIME: projected as of this week, from data before it —
+            # the same `project_slate` the board runs, over the same population.
+            # RAW, no calibration: no first-quarter correction has ever been
+            # stored, and the full-game one describes different markets.
+            projected = project_slate(
+                AsOf(season=season, week=week, sport=sport),
+                first_quarter_catalogue(market_catalogue()),
+            )
+            rows, unprojected = attach_projections(rows, projected, week)
+            if unprojected:
+                log.info(
+                    "%d first-quarter line(s) priced a player the board would "
+                    "not project; not graded",
+                    unprojected,
+                )
+        else:
+            rows = load_gradeable(
+                sport, season, week, adapter, closing_only=closing_only
+            )
         got = to_bets(rows, season, week)
         age = describe_line_age(rows)
         log.info(
@@ -476,6 +590,12 @@ def main(argv: list[str] | None = None) -> int:
              "than a closing line, and labelled as such in the output.",
     )
     parser.add_argument(
+        "--first-quarter", action="store_true",
+        help="Grade the first-quarter markets (NFL only) instead of the full "
+             "game. Projects the week point-in-time rather than reading stored "
+             "projections, which first-quarter markets do not have.",
+    )
+    parser.add_argument(
         "--threshold", type=float, action="append",
         help="Edge threshold to report. Repeatable. Defaults to "
              f"{DEFAULT_THRESHOLDS}.",
@@ -489,6 +609,13 @@ def main(argv: list[str] | None = None) -> int:
         log.error("Configuration error: %s", exc)
         return 2
     configure_logging(settings.log_level)
+
+    if args.first_quarter and args.sport != "nfl":
+        log.error(
+            "--first-quarter is NFL only: first-quarter actuals are derived and "
+            "verified for the NFL alone, and no book posts college quarters."
+        )
+        return 2
 
     if args.adapter == "synthetic":
         log.error(
@@ -513,6 +640,7 @@ def main(argv: list[str] | None = None) -> int:
                 "season": args.season,
                 "weeks": weeks,
                 "closing_only": not args.include_non_closing,
+                "first_quarter": args.first_quarter,
             },
         ):
             bets = run(
@@ -522,6 +650,7 @@ def main(argv: list[str] | None = None) -> int:
                 adapter=args.adapter,
                 thresholds=thresholds,
                 closing_only=not args.include_non_closing,
+                first_quarter=args.first_quarter,
             )
             # THE BASIS IS PART OF THE RESULT. A number from a pre-kickoff
             # snapshot and a number from a closing line are different claims,
@@ -533,6 +662,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.include_non_closing
                 else "closing lines"
             )
+            if args.first_quarter:
+                basis = f"FIRST-QUARTER {basis} (raw, uncalibrated projections)"
             log.info(
                 "Model vs %s %s, %s %s week(s) %s:\n%s",
                 args.adapter, basis, args.sport, args.season, weeks,

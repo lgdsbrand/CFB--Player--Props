@@ -380,6 +380,30 @@ services:
     envVars:
       - fromGroup: cfb-props-worker
 
+  # Hourly at :40. DraftKings' first-quarter NFL lines (pass, rush, receiving
+  # yards), captured for games kicking off in the next 60 minutes -- so each
+  # game once, 20-80 minutes before kickoff, on whatever day it is played.
+  # Lines missed live cost 10x from the historical endpoint afterwards.
+  #
+  # The provider's event list is free, so the hours with no game in the window
+  # bill nothing. It never asks about a game already under way.
+  #
+  # NEEDS AN ODDS KEY ON THIS SERVICE unless the group carries one: since
+  # 2026-09-03 the odds keys have been set on the odds services themselves. Add
+  # ODDS_API_KEY_FREE (preferred -- a week is under ~50 credits) or
+  # ODDS_API_KEY in this service's Environment tab. Without either, every run
+  # fails with a ConfigError, which the monitor reports.
+  - type: cron
+    name: nfl-props-q1-capture
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "40 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.capture_first_quarter
+    envVars:
+      - fromGroup: cfb-props-worker
+
   # Daily 12:50 UTC — 20 minutes after the college projection run, and 30
   # minutes after the 12:20 NFL capture, mirroring the college spacing.
   #

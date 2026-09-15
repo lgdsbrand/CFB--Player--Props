@@ -634,6 +634,7 @@ class TestMarketsFlag:
             ingest_odds, "load_games",
             lambda conn, season, week, sport: [_game(100, 2, 1, KICK)],
         )
+        kw.setdefault("now", KICK - timedelta(hours=1))
         ingest_odds.run(
             season=2025, week=8, adapter_name="theoddsapi", dry_run=True,
             event_limit=None, **kw,
@@ -681,3 +682,70 @@ class TestMarketsFlag:
             " q1_rec_yards, q1_pass_yards ,,q1_rush_yards"
         ) == ["q1_rec_yards", "q1_pass_yards", "q1_rush_yards"]
         assert ingest_odds._parse_markets(None) is None
+
+
+class TestKickoffTiming:
+    """Never buy an in-play price; with a window, only games starting soon.
+
+    Before 2026-09-15 nothing stopped a capture asking about a game under way:
+    443 NFL and 1,501 college week-1 rows were in-play prices. The window is
+    what lets `capture_first_quarter` take each game once, just before kickoff.
+    """
+
+    def _run(self, monkeypatch, *, now, adapter=None, **kw):
+        import contextlib
+
+        adapter = adapter or _RecordingAdapter()
+        monkeypatch.setattr(ingest_odds, "get_settings", lambda: _settings_free())
+        monkeypatch.setattr(ingest_odds, "get_adapter", lambda name, **_: adapter)
+        monkeypatch.setattr(
+            ingest_odds, "connect", lambda: contextlib.nullcontext(object())
+        )
+        monkeypatch.setattr(ingest_odds, "load_teams", lambda conn, sport: RESOLVER)
+        monkeypatch.setattr(
+            ingest_odds, "load_games",
+            lambda conn, season, week, sport: [_game(100, 2, 1, KICK)],
+        )
+        report = ingest_odds.run(
+            season=2025, week=8, adapter_name="theoddsapi", dry_run=True,
+            event_limit=None, now=now, **kw,
+        )
+        return adapter, report
+
+    def test_a_game_under_way_is_not_asked_about(self, monkeypatch):
+        adapter, report = self._run(monkeypatch, now=KICK + timedelta(minutes=1))
+        assert adapter.asked == []
+        assert report.events_started == 1
+
+    def test_the_kickoff_moment_itself_counts_as_started(self, monkeypatch):
+        adapter, _ = self._run(monkeypatch, now=KICK)
+        assert adapter.asked == []
+
+    def test_without_a_window_any_future_game_is_asked_about(self, monkeypatch):
+        adapter, _ = self._run(monkeypatch, now=KICK - timedelta(days=3))
+        assert len(adapter.asked) == 1
+
+    def test_a_game_beyond_the_window_is_left_for_a_later_run(self, monkeypatch):
+        adapter, report = self._run(
+            monkeypatch, now=KICK - timedelta(minutes=61), kickoff_within_minutes=60
+        )
+        assert adapter.asked == []
+        assert report.events_outside_window == 1
+
+    def test_a_game_inside_the_window_is_asked_about(self, monkeypatch):
+        adapter, _ = self._run(
+            monkeypatch, now=KICK - timedelta(minutes=60), kickoff_within_minutes=60
+        )
+        assert len(adapter.asked) == 1
+
+    def test_running_out_of_credits_fails_the_run(self, monkeypatch):
+        """From 2026-09-12 both odds crons wrote nothing for days while every run
+        reported success. A run that stops for credits must say so by failing."""
+        from worker.adapters.odds import OddsQuotaError
+
+        class Broke(_RecordingAdapter):
+            def fetch_props(self, event_id, market_keys):
+                raise OddsQuotaError("OUT_OF_USAGE_CREDITS")
+
+        with pytest.raises(OddsQuotaError, match="Out of credits"):
+            self._run(monkeypatch, now=KICK - timedelta(hours=1), adapter=Broke())

@@ -156,6 +156,7 @@ def test_gated_jobs_are_the_ones_that_can_be_switched_off() -> None:
     gated = {job.name: job.enabled_key for job in MONITORED_JOBS if job.enabled_key}
     assert gated == {
         "ingest_odds": "odds_adapter",
+        "capture_first_quarter": "odds_adapter",
         "generate_ai_reads": "ai_adapter",
     }
 

@@ -116,8 +116,8 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 ### Point-in-time
 | Table | Notes |
 |---|---|
-| `defense_position_game_splits` | Raw, atomic per game, opponent-**un**adjusted |
-| `defense_position_ratings` | Opponent-adjusted, keyed by `as_of_week`, append-only |
+| `defense_position_game_splits` | Raw, atomic per game, opponent-**un**adjusted. `q1_*` (0069) are the same observations narrowed to `plays.period = 1`, computed in the same aggregate for both sports; NULL means the row predates them, 0 means nothing was conceded in the quarter |
+| `defense_position_ratings` | Opponent-adjusted, keyed by `as_of_week`, append-only. The `q1_*_pg` columns (0070) are the exception: a point-in-time **average with no `adj_` sibling and no rank**, because a first-quarter rate was measured not to predict itself (Spearman ≈ +0.05 across NFL 2023-25, negative in 4 of 9 cells, against ≈ +0.17 whole-game). An audit check refuses an `adj_q1` or `q1…rank` column appearing |
 | `team_rating_snapshots` | SP+/SRS/Elo/FPI, `snapshot_kind`-guarded |
 | `game_weather` | CFBD with Open-Meteo fallback |
 
@@ -146,6 +146,7 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 | `defense_position_splits_through(season, week)` | Cumulative splits, strict `week <` cutoff |
 | `v_latest_prop_lines` | Newest line per player/market/book + de-vigged probability |
 | `v_board_rows` | Main board, one row per **projection** (see below). Carries `publishes_call`, and **withholds the model's opinion where it is false** (0068): `side`, `confidence`, `display_confidence`, `model_prob_over`, `edge` and the three projected quantiles all come back NULL, while the line, the book and both prices come back unchanged. `picks` still stores the real values so `grade_vs_book` can measure them — it is the *view* that declines to publish, so no reader can print a first-quarter call by forgetting to ask. `v_cheat_sheet` and `board_counts()` exclude those markets outright, both being lists of calls |
+| `v_defense_position_game_log` | The player page's DEFENSE DETAIL panel. Carries the `q1_*` columns, so a first-quarter market is read against the first quarter of the opponent's games |
 | `v_player_game_log` | Game log for the player detail chart. Carries the `q1_*` actuals too, so a first-quarter market grades against the same view every other market does |
 | `american_to_implied_probability`, `devig_two_way`, `edge_on_side` | Odds math |
 | `devig_two_way_proportional` / `_additive` / `_shin` | The three selectable de-vig methods (migration 0013) |

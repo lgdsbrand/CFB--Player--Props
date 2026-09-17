@@ -862,6 +862,71 @@ check(G, "NFL player-games with play-by-play have first-quarter actuals", """
        and exists (select 1 from plays p where p.game_id = s.game_id)
 """, lambda r: r["underived"] == 0)
 
+# First-quarter DEFENSIVE splits (migration 0069): a quarter is a subset of the
+# game, so its COUNTS can never exceed the whole game's. That is the invariant
+# the period filter is checked against.
+#
+# COUNTS ONLY, AND THE YARDAGE COLUMNS ARE EXCLUDED ON EVIDENCE. YARDS CAN BE
+# NEGATIVE, so containment simply does not hold for them: kneel-downs, sacks
+# charged as rushes and losses behind the line all subtract. Measured when this
+# check was first written with yards included -- 302 rush rows and 36 receiving
+# rows "failed", every one of them correct. Green Bay conceded 14 rushing yards
+# to the quarterback in the first quarter of game 14541 and 12 over the whole
+# game, because Jordan Love knelt twice for -1 in the fourth.
+#
+# The same reasoning as the player-side containment check above, reached from a
+# different direction: that one drops derived targets and receiving TDs because
+# their derivation is imperfect, this one drops yards because the quantity
+# itself is signed.
+check(G, "first-quarter split COUNTS never exceed the whole game", """
+    select count(*) as bad from defense_position_game_splits
+     where q1_plays > plays
+        or q1_rush_attempts > rush_attempts
+        or q1_receptions_allowed > receptions_allowed
+        or q1_targets > targets
+        or q1_rush_tds_allowed > rush_tds_allowed
+        or q1_rec_tds_allowed > rec_tds_allowed
+""", lambda r: r["bad"] == 0)
+
+# THE TWO DERIVATIONS MUST AGREE. `build_quarter_stats` sums a PLAYER's first
+# quarter from play attribution; `build_splits` sums what a DEFENSE conceded
+# from the same attribution. Different jobs, different SQL, one underlying set
+# of plays -- so per game, per defense, per position they are the same number.
+# Measured on NFL 2025 at 99.7%, which is tighter than the whole-game pair
+# manages (97.8%), so the floor here is set where a real regression shows.
+check(G, "defensive first-quarter splits agree with player first-quarter actuals", """
+    with split as (
+      select s.game_id, s.defense_team_id, s.position_group, s.q1_rec_yards_allowed
+        from defense_position_game_splits s
+        join games g on g.id = s.game_id and g.sport = 'nfl'
+       where s.q1_plays is not null
+    ), player as (
+      select pgs.game_id, pgs.opponent_team_id as defense_team_id,
+             pgs.position_group, sum(pgs.q1_rec_yards) as rec
+        from player_game_stats pgs
+        join games g on g.id = pgs.game_id and g.sport = 'nfl'
+       where pgs.q1_rec_yards is not null
+       group by 1, 2, 3
+    )
+    select count(*) as cells,
+           count(*) filter (where s.q1_rec_yards_allowed = p.rec) as agree
+      from split s
+      join player p on p.game_id = s.game_id
+       and p.defense_team_id = s.defense_team_id
+       and p.position_group = s.position_group
+""", lambda r: r["cells"] == 0 or r["agree"] / r["cells"] >= 0.99,
+      ["cells", "agree"])
+
+# The first-quarter averages are RAW on purpose (migration 0070), so the thing
+# worth refusing is an adjusted or ranked sibling appearing beside them -- which
+# is how "this defense is 3rd toughest in the 1st quarter" would reach a reader
+# off a rate measured not to predict itself.
+check(G, "no first-quarter rating is adjusted or ranked", """
+    select count(*) as columns from information_schema.columns
+     where table_name = 'defense_position_ratings'
+       and (column_name like 'adj_q1%' or column_name like 'q1%rank%')
+""", lambda r: r["columns"] == 0, ["columns"])
+
 # Split by season_type since migration 0020. A single range over both would
 # have to be wide enough to admit a postseason week, which would stop it
 # catching the very thing it exists for — a regular-season week landing at 21.
@@ -1116,17 +1181,41 @@ check(G, "every market/position pair resolves to a family", """
      where resolve_distribution_family(mp.market_key, mp.position_group) is null
 """, lambda r: r["unresolved"] == 0)
 
-# ACTIVE markets, because 0065 added three inactive first-quarter rows that
-# exist only so DraftKings' Q1 lines have a key to reference. The third count
-# is the guard on that: a Q1 market switched on before `markets` can say which
-# sport it belongs to would put first-quarter tabs on the college board.
-check(G, "9 active markets, 17 market/position pairs, no first-quarter market active", """
+# 12 ACTIVE markets since 0067: the nine full-game ones plus three first-quarter
+# NFL markets. `market_positions` stays at 17 pairs, and that is the point --
+# the Q1 markets deliberately carry NO rows there and inherit their parent's
+# positions instead (0066), which is what keeps `market_catalogue()` returning
+# exactly the nine it always has.
+#
+# THE GUARD MOVED RATHER THAN WENT. It used to be "no first-quarter market is
+# active", which was right while `markets` could not say which sport a market
+# belonged to. Now that it can, the thing worth refusing is an active
+# first-quarter market with no `sport` (it would land on the college board,
+# where no book posts one) or no `parent_market_key` (it would inherit no
+# positions and appear in no stat selector at all).
+check(G, "12 active markets, 17 market/position pairs, every Q1 market scoped", """
     select (select count(*) from markets where is_active) as markets,
            (select count(*) from market_positions) as pairs,
+           (select count(*) from market_positions mp
+             where left(mp.market_key, 3) = 'q1_') as q1_pairs,
            (select count(*) from markets
-             where left(key, 3) = 'q1_' and is_active) as q1_active
-""", lambda r: r["markets"] == 9 and r["pairs"] == 17 and r["q1_active"] == 0,
-      ["markets", "pairs", "q1_active"])
+             where is_active and left(key, 3) = 'q1_'
+               and (sport is null or parent_market_key is null)) as q1_unscoped
+""", lambda r: (r["markets"] == 12 and r["pairs"] == 17
+                and r["q1_pairs"] == 0 and r["q1_unscoped"] == 0),
+      ["markets", "pairs", "q1_pairs", "q1_unscoped"])
+
+# A market that publishes no call must publish no NUMBER either. The view is
+# what enforces it (0068), so this asks the view rather than the table: a
+# regenerated `v_board_rows` that dropped the CASE would pass every other check
+# here while quietly putting a first-quarter confidence back on the board.
+check(G, "a market that publishes no call exposes no call on the board", """
+    select count(*) as leaked from v_board_rows
+     where not publishes_call
+       and (side is not null or confidence is not null
+            or display_confidence is not null or edge is not null
+            or projected_median is not null)
+""", lambda r: r["leaked"] == 0, ["leaked"])
 
 # The override mechanism has to be doing work. If every pair resolved to its
 # market default, the Phase 3d measurement would have been silently discarded

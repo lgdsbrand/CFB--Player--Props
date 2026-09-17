@@ -68,7 +68,12 @@ const GAME_LOG_COLUMNS =
   "offense_abbreviation, season, week, position_group, start_date, " +
   "neutral_site, defense_is_home, plays, rush_attempts, rush_yards_allowed, " +
   "rush_tds_allowed, targets, receptions_allowed, rec_yards_allowed, " +
-  "rec_tds_allowed";
+  "rec_tds_allowed, " +
+  // The same observations narrowed to period 1 (migration 0069). Read for both
+  // sports though only the NFL has a market to show them against: a college row
+  // simply comes back null, which is what it means.
+  "q1_plays, q1_rush_attempts, q1_rush_yards_allowed, q1_rush_tds_allowed, " +
+  "q1_targets, q1_receptions_allowed, q1_rec_yards_allowed, q1_rec_tds_allowed";
 
 /**
  * One defense's game-by-game allowances to one position — the defense detail
@@ -121,6 +126,15 @@ export async function getDefenseGameLog(
         receptionsAllowed: n("receptions_allowed"),
         recYardsAllowed: n("rec_yards_allowed"),
         recTdsAllowed: n("rec_tds_allowed"),
+
+        q1Plays: n("q1_plays"),
+        q1RushAttempts: n("q1_rush_attempts"),
+        q1RushYardsAllowed: n("q1_rush_yards_allowed"),
+        q1RushTdsAllowed: n("q1_rush_tds_allowed"),
+        q1Targets: n("q1_targets"),
+        q1ReceptionsAllowed: n("q1_receptions_allowed"),
+        q1RecYardsAllowed: n("q1_rec_yards_allowed"),
+        q1RecTdsAllowed: n("q1_rec_tds_allowed"),
       } satisfies DefenseGameRow;
     },
   );

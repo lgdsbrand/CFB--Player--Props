@@ -305,6 +305,8 @@ function row(overrides: Partial<BoardRow> = {}): BoardRow {
     priorWeight: 0.3,
     effectiveSample: 6.5,
     opponentRankVsPosition: 100,
+    opponentQ1RushYardsAllowedPg: null,
+    opponentQ1RecYardsAllowedPg: null,
     conferenceName: "SEC",
     conferenceIsDisplayed: true,
     displayConfidence: null,

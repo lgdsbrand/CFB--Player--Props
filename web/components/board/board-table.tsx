@@ -11,7 +11,7 @@ import {
   gradeRow,
   seasonToDate,
 } from "@/lib/core/board-view";
-import { rankBasis } from "@/lib/core/defense-view";
+import { opponentQ1Allowed, rankBasis } from "@/lib/core/defense-view";
 import {
   formatAmericanOdds,
   formatConfidence,
@@ -107,7 +107,9 @@ export function BoardTable({
   // opp rk — plus one per configured hit-rate window. Derived rather than
   // written as a literal because the detail row spans it, and a colSpan that
   // drifts from the header is invisible until a column is added.
-  const columnCount = (showsCalls ? 9 : 6) + hitRateWindows.length;
+  // Nine fixed columns with calls; without them CHANCE/PROJ/EDGE go and a
+  // Q1 ALLOWED column arrives, so six plus one.
+  const columnCount = (showsCalls ? 9 : 7) + hitRateWindows.length;
 
   return (
     <div className="panel overflow-hidden">
@@ -179,10 +181,19 @@ export function BoardTable({
               >
                 Szn
               </th>
+              {showsCalls ? null : (
+                <th
+                  scope="col"
+                  className="py-2.5 pr-3 text-right font-semibold"
+                  title="What this opponent has allowed to this position per first quarter, over its games before this week. A raw average, not a rank: measured across 2023-25, a defense's first-quarter rate barely predicts its own next half-season, so there is no first-quarter ranking to give."
+                >
+                  Q1 Allowed
+                </th>
+              )}
               <th
                 scope="col"
                 className="py-2.5 pr-3 text-right font-semibold"
-                title="Opponent rank vs this position — 1 is the best defense, so a HIGH number is the softer matchup"
+                title="Opponent rank vs this position — 1 is the best defense, so a HIGH number is the softer matchup. Built from WHOLE games, including on the first-quarter board."
               >
                 Opp Rk
               </th>
@@ -286,6 +297,11 @@ function PropRow({
             summary={seasonToDate(graded, row.season)}
             season={row.season}
           />
+          {showsCalls ? null : (
+            <td className="text-muted py-2 pr-3 text-right align-middle font-mono text-xs tabular-nums">
+              <Q1AllowedCell row={row} />
+            </td>
+          )}
           <td className="text-muted py-2 pr-3 text-right align-middle font-mono text-xs tabular-nums">
             {row.opponentRankVsPosition ?? "—"}
           </td>
@@ -480,6 +496,25 @@ function ProjCell({
   if (row.isBinary) return <>—</>;
   const median = displayQuantile(row.projectedMedian);
   return <>{median === null ? "—" : formatLine(median)}</>;
+}
+
+/**
+ * What the opponent concedes to this position per first quarter.
+ *
+ * DELIBERATELY UNCOLOURED. Every other number on this board that carries a tone
+ * is a claim — an edge clearing a threshold, a hit rate far enough from even to
+ * survive five games. This is an average with a denominator and no demonstrated
+ * predictive content, so painting it green and red would restate it as the rank
+ * that migration 0070 explains why we do not publish.
+ */
+function Q1AllowedCell({ row }: { row: BoardRow }) {
+  const allowed = opponentQ1Allowed(row);
+  if (!allowed) return <span className="text-dim text-xs">—</span>;
+  return (
+    <span title={`${allowed.label} allowed to ${row.positionGroup} per first quarter, before this week`}>
+      {allowed.value.toFixed(1)}
+    </span>
+  );
 }
 
 function EdgeCell({

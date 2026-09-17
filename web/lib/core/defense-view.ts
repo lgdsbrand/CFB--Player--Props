@@ -50,6 +50,105 @@ const STATS = {
 } as const satisfies Record<string, DefenseStat>;
 
 /**
+ * The same columns narrowed to the first quarter (migration 0069).
+ *
+ * WRITTEN OUT RATHER THAN DERIVED FROM `STATS` BY A NAME RULE. A generated
+ * `q1_` + key would compile and then silently read `undefined` off a row the day
+ * a column is named differently from its whole-game sibling — and `q1Plays` vs
+ * `plays` is already one such pair. Eight entries, each naming its own field, is
+ * the version a reader can check against the schema.
+ *
+ * THE LABELS SAY "Q1" and the panel says so again in its caption. This table
+ * looks exactly like the whole-game one, at about a fifth of the values, and a
+ * reader who missed the heading would read a soft defense as an elite one.
+ */
+const Q1_STATS = {
+  rush_attempts: {
+    key: "q1_rush_attempts",
+    label: "Q1 rush att",
+    value: (r) => r.q1RushAttempts,
+  },
+  rush_yards: {
+    key: "q1_rush_yards",
+    label: "Q1 rush yds",
+    value: (r) => r.q1RushYardsAllowed,
+  },
+  rush_tds: {
+    key: "q1_rush_tds",
+    label: "Q1 rush TD",
+    value: (r) => r.q1RushTdsAllowed,
+  },
+  targets: { key: "q1_targets", label: "Q1 targets", value: (r) => r.q1Targets },
+  receptions: {
+    key: "q1_receptions",
+    label: "Q1 rec",
+    value: (r) => r.q1ReceptionsAllowed,
+  },
+  rec_yards: {
+    key: "q1_rec_yards",
+    label: "Q1 rec yds",
+    value: (r) => r.q1RecYardsAllowed,
+  },
+  rec_tds: {
+    key: "q1_rec_tds",
+    label: "Q1 rec TD",
+    value: (r) => r.q1RecTdsAllowed,
+  },
+  total_tds: {
+    key: "q1_total_tds",
+    label: "Q1 TD",
+    value: (r) => sumOrNull(r.q1RushTdsAllowed, r.q1RecTdsAllowed),
+  },
+} as const satisfies Record<keyof typeof STATS, DefenseStat>;
+
+/**
+ * Whole games, or the first quarter of them.
+ *
+ * The panel follows the MARKET on screen: a first-quarter market is read
+ * against what the defense concedes in the first quarter, or the panel answers
+ * a different question from the rest of the page.
+ */
+export type DefensePeriod = "game" | "q1";
+
+/**
+ * What this opponent has allowed to this position per first quarter, picking
+ * the column the position is actually measured on.
+ *
+ * ONE PLACE DECIDES, and it is the same place the RANK's basis is decided —
+ * `rankBasis` below, which mirrors `RANK_METRICS` in `worker/core/splits.py`.
+ * Rushing for QB and RB, receiving for WR and TE. The view hands over both
+ * columns precisely so this rule is not written a third time in SQL.
+ *
+ * AN OBSERVATION, NEVER AN ORDERING. There is no adjusted or ranked sibling
+ * because a first-quarter rate was measured not to predict itself (migration
+ * 0070). A caller may print this number; it must not sort a board by it or
+ * colour it good-and-bad, which would restate it as the rank it deliberately
+ * is not.
+ *
+ * Null means the cutoff has no rated games behind it — week 1, or a defense
+ * whose games are not derived — and reads as "—", not as zero conceded.
+ */
+export function opponentQ1Allowed(
+  row: {
+    positionGroup: PositionGroup | null;
+    opponentQ1RushYardsAllowedPg: number | null;
+    opponentQ1RecYardsAllowedPg: number | null;
+  },
+): { value: number; label: string } | null {
+  if (!row.positionGroup) return null;
+  const basis = rankBasis(row.positionGroup);
+  const value =
+    basis.key === "rush"
+      ? row.opponentQ1RushYardsAllowedPg
+      : row.opponentQ1RecYardsAllowedPg;
+  if (value === null) return null;
+  return {
+    value,
+    label: basis.key === "rush" ? "rush yds" : "rec yds",
+  };
+}
+
+/**
  * The columns worth showing for a position.
  *
  * QB IS DELIBERATELY RUSHING-ONLY, AND THAT IS A REAL LIMIT WORTH STATING. The
@@ -61,20 +160,27 @@ const STATS = {
  * say so rather than let a reader infer that a defense allows 60 yards a game
  * to quarterbacks.
  */
-export function defenseStatsFor(position: PositionGroup): DefenseStat[] {
+export function defenseStatsFor(
+  position: PositionGroup,
+  period: DefensePeriod = "game",
+): DefenseStat[] {
+  // The SAME columns for either period, picked from the matching table, so a
+  // position cannot be shown one set of columns whole-game and another in the
+  // quarter. The position rule above stays the single place it is decided.
+  const s = period === "q1" ? Q1_STATS : STATS;
   switch (position) {
     case "QB":
-      return [STATS.rush_attempts, STATS.rush_yards, STATS.rush_tds];
+      return [s.rush_attempts, s.rush_yards, s.rush_tds];
     case "RB":
       return [
-        STATS.rush_attempts,
-        STATS.rush_yards,
-        STATS.receptions,
-        STATS.rec_yards,
-        STATS.total_tds,
+        s.rush_attempts,
+        s.rush_yards,
+        s.receptions,
+        s.rec_yards,
+        s.total_tds,
       ];
     default:
-      return [STATS.targets, STATS.receptions, STATS.rec_yards, STATS.rec_tds];
+      return [s.targets, s.receptions, s.rec_yards, s.rec_tds];
   }
 }
 
@@ -86,6 +192,19 @@ export function defenseStatsFor(position: PositionGroup): DefenseStat[] {
  * would be worse than one that says the split does not exist.
  */
 export function defenseStatForMarket(statColumn: string): DefenseStat | null {
+  // A first-quarter market highlights the first-quarter column. Stripping the
+  // prefix and re-entering the same switch keeps ONE mapping from market to
+  // defensive stat, so a market that has no defensive counterpart whole-game —
+  // the passing ones — still has none in the quarter.
+  if (statColumn.startsWith("q1_")) {
+    const parent = defenseStatForMarket(statColumn.slice(3));
+    if (!parent) return null;
+    return (
+      Object.values(Q1_STATS).find((stat) => stat.key === `q1_${parent.key}`) ??
+      null
+    );
+  }
+
   switch (statColumn) {
     case "rush_attempts":
       return STATS.rush_attempts;

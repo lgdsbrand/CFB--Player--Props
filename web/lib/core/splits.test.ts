@@ -19,6 +19,7 @@ import type { DefenseGameRow, PlayerGameLogRow } from "@/lib/core/types";
 import {
   defenseStatForMarket,
   defenseStatsFor,
+  opponentQ1Allowed,
   perGame,
   matchupBand,
   matchupSoftness,
@@ -262,6 +263,17 @@ function defenseGame(week: number, values: Partial<DefenseGameRow> = {}) {
     receptionsAllowed: null,
     recYardsAllowed: null,
     recTdsAllowed: null,
+
+    // Spelled out rather than spread, so a column added to the row type fails
+    // here loudly — which is what these fixtures are for.
+    q1Plays: null,
+    q1RushAttempts: null,
+    q1RushYardsAllowed: null,
+    q1RushTdsAllowed: null,
+    q1Targets: null,
+    q1ReceptionsAllowed: null,
+    q1RecYardsAllowed: null,
+    q1RecTdsAllowed: null,
     ...values,
   } satisfies DefenseGameRow;
 }
@@ -279,6 +291,85 @@ test("a passing market has no defensive counterpart, and says so", () => {
   assert.equal(defenseStatForMarket("rec_yards")?.key, "rec_yards");
   assert.equal(defenseStatForMarket("rush_yards")?.key, "rush_yards");
   assert.equal(defenseStatForMarket("offensive_tds")?.key, "total_tds");
+});
+
+// -----------------------------------------------------------------------------
+// The first quarter — the same columns, one period narrower
+// -----------------------------------------------------------------------------
+
+test("a first-quarter market highlights the first-quarter column", () => {
+  assert.equal(defenseStatForMarket("q1_rec_yards")?.key, "q1_rec_yards");
+  assert.equal(defenseStatForMarket("q1_rush_yards")?.key, "q1_rush_yards");
+});
+
+test("a market with no defensive counterpart has none in the quarter either", () => {
+  // The prefix strips to the parent and re-enters the SAME mapping, so the
+  // passing exception cannot be lost by adding a period. `q1_pass_yards` is a
+  // real market with a real DraftKings line and still no defensive split.
+  assert.equal(defenseStatForMarket("q1_pass_yards"), null);
+  assert.equal(defenseStatForMarket("q1_not_a_market"), null);
+});
+
+test("the quarter shows the same columns as the whole game, never a different set", () => {
+  // A position's columns are decided in ONE place. If the two tables drifted,
+  // a tight end could be shown targets whole-game and carries in the quarter.
+  for (const position of ["QB", "RB", "WR", "TE"] as const) {
+    assert.deepEqual(
+      defenseStatsFor(position, "q1").map((s) => s.key),
+      defenseStatsFor(position).map((s) => `q1_${s.key}`),
+      position,
+    );
+  }
+});
+
+test("a first-quarter column reads its own field, not its whole-game sibling", () => {
+  // The mapping is written out rather than generated from the key, so this is
+  // the test that each entry actually points at the q1 field.
+  const row = defenseGame(1, {
+    recYardsAllowed: 140,
+    q1RecYardsAllowed: 31,
+    rushYardsAllowed: 90,
+    q1RushYardsAllowed: 22,
+  });
+  const q1Rec = defenseStatsFor("WR", "q1").find((s) => s.key === "q1_rec_yards");
+  const q1Rush = defenseStatsFor("RB", "q1").find((s) => s.key === "q1_rush_yards");
+  assert.equal(q1Rec?.value(row), 31);
+  assert.equal(q1Rush?.value(row), 22);
+});
+
+// -----------------------------------------------------------------------------
+// Q1 ALLOWED on the board — an observation, picked per position
+// -----------------------------------------------------------------------------
+
+const allowed = (positionGroup: "QB" | "RB" | "WR" | "TE" | null) => ({
+  positionGroup,
+  opponentQ1RushYardsAllowedPg: 22.5,
+  opponentQ1RecYardsAllowedPg: 31.25,
+});
+
+test("the column follows the same basis the RANK does, per position", () => {
+  // Rushing for QB and RB, receiving for WR and TE — `rankBasis`, which mirrors
+  // RANK_METRICS in the worker. Reading a receiver's figure off the rushing
+  // column would print 1.0 yards a quarter and look like an elite defense.
+  assert.equal(opponentQ1Allowed(allowed("QB"))?.value, 22.5);
+  assert.equal(opponentQ1Allowed(allowed("RB"))?.value, 22.5);
+  assert.equal(opponentQ1Allowed(allowed("WR"))?.value, 31.25);
+  assert.equal(opponentQ1Allowed(allowed("TE"))?.value, 31.25);
+});
+
+test("no position and no rating both read as no figure, never as zero", () => {
+  // Week 1 has no cutoff with games behind it. A zero here would say this
+  // defense concedes nothing in the first quarter, which is the opposite of
+  // "we do not know yet".
+  assert.equal(opponentQ1Allowed(allowed(null)), null);
+  assert.equal(
+    opponentQ1Allowed({
+      positionGroup: "WR",
+      opponentQ1RushYardsAllowedPg: 22.5,
+      opponentQ1RecYardsAllowedPg: null,
+    }),
+    null,
+  );
 });
 
 test("QB defense columns are rushing only", () => {

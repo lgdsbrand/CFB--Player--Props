@@ -129,6 +129,27 @@ ADJUSTED_METRICS = {
     "ppa_allowed": "ppa_allowed",
 }
 
+# First-quarter metrics that get a point-in-time AVERAGE and nothing else: no
+# opponent adjustment, no `adj_` column, no rank.
+#
+# THE ABSENCE IS THE FINDING, NOT AN OMISSION (migration 0070). Measured on NFL
+# 2023-25, splitting each season at week 9: a defense's first-half first-quarter
+# rate predicts its second-half rate at a Spearman of about +0.05 on average and
+# is NEGATIVE in four of nine season-position cells, against about +0.17 for the
+# whole-game rate. Fitting the additive model on a quarter of the sample at
+# roughly twice the noise would produce a confident ordering the data does not
+# contain -- exactly what this module's own docstring warns the fit does wherever
+# the schedule graph is thin.
+#
+# An average with a stated denominator is a different kind of claim: it says
+# what happened, not what will. That is what the client asked to look at.
+FIRST_QUARTER_MEAN_METRICS = {
+    "q1_rush_yards_allowed": "q1_rush_yards_allowed",
+    "q1_rec_yards_allowed": "q1_rec_yards_allowed",
+    "q1_receptions_allowed": "q1_receptions_allowed",
+    "q1_targets": "q1_targets",
+}
+
 
 # -----------------------------------------------------------------------------
 # Stage 1 — raw per-game splits
@@ -139,7 +160,9 @@ insert into defense_position_game_splits (
     plays, rush_attempts, rush_yards_allowed, rush_tds_allowed,
     targets, receptions_allowed, rec_yards_allowed, rec_tds_allowed,
     first_downs_allowed, explosive_plays_allowed,
-    goal_line_carries_allowed, goal_line_targets_allowed, ppa_allowed
+    goal_line_carries_allowed, goal_line_targets_allowed, ppa_allowed,
+    q1_plays, q1_rush_attempts, q1_rush_yards_allowed, q1_rush_tds_allowed,
+    q1_targets, q1_receptions_allowed, q1_rec_yards_allowed, q1_rec_tds_allowed
 )
 with per_play as (
     -- One row per (play, defense, position). Collapsing to the play first is
@@ -157,6 +180,11 @@ with per_play as (
         pl.yards_gained,
         pl.distance,
         pl.ppa,
+        -- The whole first-quarter slice is this one column. `plays.period` is
+        -- populated for both sports (CFBD supplies it, the nflverse adapter
+        -- maps `qtr`), so the quarter split costs a FILTER on an aggregate that
+        -- was already running rather than a second pass over ~345k rows.
+        pl.period,
         count(*) filter (where pps.stat_type = 'Rush')      as rush_att,
         coalesce(sum(pps.stat_value)
                  filter (where pps.stat_type = 'Rush'), 0)  as rush_yds,
@@ -178,7 +206,7 @@ with per_play as (
        and pps.position_group = any(%(positions)s)
      group by pps.play_id, pps.game_id, pps.opponent_team_id, pps.team_id,
               pps.season, pps.week, pps.position_group,
-              pl.yards_to_goal, pl.yards_gained, pl.distance, pl.ppa
+              pl.yards_to_goal, pl.yards_gained, pl.distance, pl.ppa, pl.period
 )
 select
     game_id, defense_team_id, offense_team_id, season, week, position_group,
@@ -209,7 +237,31 @@ select
         where yards_to_goal <= %(goal_line)s), 0)
       + coalesce(sum(inc_targets) filter (
         where yards_to_goal <= %(goal_line)s), 0)           as goal_line_targets_allowed,
-    sum(ppa)                                                as ppa_allowed
+    sum(ppa)                                                as ppa_allowed,
+
+    -- FIRST QUARTER. Each one mirrors its whole-game sibling above with
+    -- `period = 1` added and nothing else changed, so the two can never
+    -- disagree about what a rush or a reception is. A row with no first-quarter
+    -- action gets 0 rather than NULL -- `count`/`sum ... filter` over an empty
+    -- set gives 0 and coalesce(sum) does the rest -- which is the truth, and is
+    -- what distinguishes it from a row written before migration 0069.
+    --
+    -- NO q1 PASSING COLUMN, and that is a data fact rather than an omission: an
+    -- NFL sack carries the passer's Incompletion row, so passing cannot be
+    -- summed from attribution at all. The whole-game table has no passing
+    -- column either, for the same reason -- a defense's pass yards allowed is
+    -- team pass defense, not a POSITION split.
+    count(*) filter (where period = 1)                      as q1_plays,
+    coalesce(sum(rush_att) filter (where period = 1), 0)    as q1_rush_attempts,
+    coalesce(sum(rush_yds) filter (where period = 1), 0)    as q1_rush_yards_allowed,
+    count(*) filter (
+        where period = 1 and has_td and has_rush)           as q1_rush_tds_allowed,
+    coalesce(sum(receptions) filter (where period = 1), 0)
+      + coalesce(sum(inc_targets) filter (where period = 1), 0) as q1_targets,
+    coalesce(sum(receptions) filter (where period = 1), 0)  as q1_receptions_allowed,
+    coalesce(sum(rec_yds) filter (where period = 1), 0)     as q1_rec_yards_allowed,
+    count(*) filter (
+        where period = 1 and has_td and has_reception)      as q1_rec_tds_allowed
   from per_play
  group by game_id, defense_team_id, offense_team_id, season, week, position_group
 on conflict (game_id, defense_team_id, position_group) do update set
@@ -226,6 +278,14 @@ on conflict (game_id, defense_team_id, position_group) do update set
     goal_line_carries_allowed = excluded.goal_line_carries_allowed,
     goal_line_targets_allowed = excluded.goal_line_targets_allowed,
     ppa_allowed = excluded.ppa_allowed,
+    q1_plays = excluded.q1_plays,
+    q1_rush_attempts = excluded.q1_rush_attempts,
+    q1_rush_yards_allowed = excluded.q1_rush_yards_allowed,
+    q1_rush_tds_allowed = excluded.q1_rush_tds_allowed,
+    q1_targets = excluded.q1_targets,
+    q1_receptions_allowed = excluded.q1_receptions_allowed,
+    q1_rec_yards_allowed = excluded.q1_rec_yards_allowed,
+    q1_rec_tds_allowed = excluded.q1_rec_tds_allowed,
     computed_at = now()
 """
 
@@ -321,7 +381,9 @@ def _load_observations(season: int, sport: str = "cfb") -> dict[str, list[Observ
         """
         select s.defense_team_id, s.offense_team_id, s.week, s.position_group,
                s.rush_yards_allowed, s.rec_yards_allowed, s.receptions_allowed,
-               s.rush_tds_allowed, s.rec_tds_allowed, s.ppa_allowed
+               s.rush_tds_allowed, s.rec_tds_allowed, s.ppa_allowed,
+               s.q1_rush_yards_allowed, s.q1_rec_yards_allowed,
+               s.q1_receptions_allowed, s.q1_targets
           from defense_position_game_splits s
           join teams t on t.id = s.defense_team_id and t.sport = %s
          where s.season = %s
@@ -331,9 +393,17 @@ def _load_observations(season: int, sport: str = "cfb") -> dict[str, list[Observ
 
     by_position: dict[str, list[Observation]] = defaultdict(list)
     for r in rows:
+        # One `values` dict carrying both families. A metric is present only
+        # when its column is, so a row written before migration 0069 contributes
+        # to the adjusted metrics and simply does not appear in the
+        # first-quarter averages -- rather than counting as a zero, which would
+        # drag every average toward the un-derived rows.
         values = {
             metric: float(r[column])
-            for metric, column in ADJUSTED_METRICS.items()
+            for metric, column in (
+                *ADJUSTED_METRICS.items(),
+                *FIRST_QUARTER_MEAN_METRICS.items(),
+            )
             if r.get(column) is not None
         }
         by_position[r["position_group"]].append(
@@ -417,8 +487,17 @@ def compute_ratings(
                 continue
 
             games_by_defense: dict[int, int] = defaultdict(int)
+            # THE FIRST-QUARTER DENOMINATOR IS ITS OWN COUNT, not games played.
+            # A season part-way through a backfill holds both derived and
+            # un-derived rows, and dividing a partial sum by every game would
+            # report a defense as conceding less in the first quarter the fewer
+            # of its games had been derived. Counted in the same pass rather
+            # than re-scanned per defense below.
+            q1_games_by_defense: dict[int, int] = defaultdict(int)
             for o in prior:
                 games_by_defense[o.defense_id] += 1
+                if "q1_rec_yards_allowed" in o.values:
+                    q1_games_by_defense[o.defense_id] += 1
 
             fits = {
                 metric: _fit_additive(prior, metric) for metric in ADJUSTED_METRICS
@@ -451,6 +530,13 @@ def compute_ratings(
                     "games_included": n_games,
                     "shrinkage_weight": round(shrink, 4),
                 }
+
+                q1_games = q1_games_by_defense.get(defense_id, 0)
+                for metric in FIRST_QUARTER_MEAN_METRICS:
+                    total = raw_totals[defense_id].get(metric)
+                    if total is None or not q1_games:
+                        continue
+                    row[f"{metric}_pg"] = round(total / q1_games, 3)
 
                 for metric, (league_mean, defense_effect, _) in fits.items():
                     raw_pg = raw_totals[defense_id].get(metric, 0.0) / n_games

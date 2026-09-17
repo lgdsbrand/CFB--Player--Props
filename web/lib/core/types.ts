@@ -183,6 +183,22 @@ export type BoardRow = {
   /** Rank 1 = the BEST defense vs this position. A HIGH rank is the soft one. */
   opponentRankVsPosition: number | null;
 
+  /**
+   * What this opponent has allowed to this position PER GAME in the first
+   * quarter, over games before this week (migration 0070).
+   *
+   * RAW, AND THERE IS NO RANKED OR ADJUSTED SIBLING ON PURPOSE. A first-quarter
+   * rate was measured not to predict itself — Spearman about +0.05 across NFL
+   * 2023-25, negative in four of nine season-position cells — so this is an
+   * observation with a denominator and never an ordering. Read it through
+   * `opponentQ1Allowed`, which picks the column the position is measured on.
+   *
+   * Both are carried because which one a position reads is decided once, in
+   * `rankBasis`, and encoding that rule again in SQL would be a third copy.
+   */
+  opponentQ1RushYardsAllowedPg: number | null;
+  opponentQ1RecYardsAllowedPg: number | null;
+
   conferenceName: string | null;
   conferenceIsDisplayed: boolean | null;
 
@@ -362,6 +378,23 @@ export type DefenseGameRow = {
   receptionsAllowed: number | null;
   recYardsAllowed: number | null;
   recTdsAllowed: number | null;
+
+  /**
+   * The same observations narrowed to the first quarter (migration 0069).
+   *
+   * NULL means the row predates the first-quarter aggregate; 0 means the
+   * position saw no first-quarter action in that game. Both sports carry them —
+   * `plays.period` is populated for each and the aggregate is identical — even
+   * though only the NFL has a first-quarter market to read them against.
+   */
+  q1Plays: number | null;
+  q1RushAttempts: number | null;
+  q1RushYardsAllowed: number | null;
+  q1RushTdsAllowed: number | null;
+  q1Targets: number | null;
+  q1ReceptionsAllowed: number | null;
+  q1RecYardsAllowed: number | null;
+  q1RecTdsAllowed: number | null;
 };
 
 /** What one defense has conceded to one position, cumulative to a cutoff. */

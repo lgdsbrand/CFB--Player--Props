@@ -114,19 +114,21 @@ export const MARKET_SCOPES: Record<
   q1: {
     label: "1st quarter",
     title: "1st-quarter props",
-    // THE LAST SENTENCE IS NOT A DISCLAIMER, IT IS THE ONE THING ON THIS PAGE
-    // A READER WOULD OTHERWISE GET WRONG. Every other number here has been
-    // narrowed to the first quarter — the line, the actuals behind the hit
-    // rate, the game log. OPP RK has not: it is
-    // `defense_position_ratings.rank_vs_position`, built from whole games. A
-    // column that looks like it answers "what does this defense concede in the
-    // first quarter" and answers a different question is worse than no column,
-    // unless it says which question it answered.
+    // THE LAST TWO SENTENCES ARE NOT A DISCLAIMER, THEY ARE THE THING A READER
+    // WOULD OTHERWISE GET WRONG. Q1 ALLOWED is narrowed to the first quarter;
+    // OPP RK beside it is not, because it is
+    // `defense_position_ratings.rank_vs_position`, fitted over whole games.
+    // Two columns about the same defense, measuring different slices of the
+    // game, one of them ranked and one not — unlabelled, a reader would read
+    // them as a pair.
     blurb:
       "The book's line and how this player has done against it. No model call " +
       "on first-quarter markets — a quarter is about a fifth of a game and " +
       "roughly twice as noisy relative to its mean, so the history is the " +
-      "honest number here. Opponent ranks are still whole-game: what a defense " +
-      "gives up in the first quarter specifically is not computed yet.",
+      "honest number here. Q1 ALLOWED is what this opponent has conceded to " +
+      "the position per first quarter; OPP RK beside it is a whole-game rank. " +
+      "There is no first-quarter ranking on purpose — a defense's " +
+      "first-quarter rate barely predicts its own next half-season, so an " +
+      "ordering built on it would claim more than the data holds.",
   },
 };

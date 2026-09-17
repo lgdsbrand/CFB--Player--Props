@@ -549,6 +549,14 @@ export default async function PlayerDetail({
             highlight={
               activeMarket ? defenseStatForMarket(activeMarket.statColumn) : null
             }
+            // THE PANEL FOLLOWS THE MARKET. On a first-quarter tab it shows what
+            // the opponent concedes in the first quarter; anywhere else, whole
+            // games. Without this the one panel on the page that answers "is
+            // this a good matchup" would be answering it about a different
+            // slice of the game from everything above it.
+            period={
+              activeMarket && isDerived(activeMarket) ? "q1" : "game"
+            }
             asOfWeek={active.week}
           />
 

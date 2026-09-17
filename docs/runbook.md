@@ -555,6 +555,24 @@ and EDGES ONLY defaults from `app_config` — left in place it would have emptie
 the board and read as "no first-quarter props this week". The scope is sorted by
 softest matchup instead.
 
+**What the defense gives up in the first quarter** (migrations 0069, 0070):
+
+- The player page's DEFENSE DETAIL panel follows the market. On a Q1 tab it
+  shows Q1 TARGETS / Q1 REC / Q1 REC YDS / Q1 REC TD game by game with a
+  per-game footer, from `defense_position_game_splits.q1_*`.
+- The board's **Q1 ALLOWED** column is the point-in-time average of those, from
+  `defense_position_ratings.q1_*_pg` — rushing for QB and RB, receiving for WR
+  and TE, the same basis `rank_vs_position` uses.
+- **There is no first-quarter RANK, and that is measured rather than pending.**
+  Splitting NFL 2023-25 at week 9, a defense's first-half first-quarter rate
+  predicts its second-half rate at Spearman ≈ +0.05 and is NEGATIVE in four of
+  nine season-position cells, against ≈ +0.17 whole-game. So OPP RK stays a
+  whole-game rank on the Q1 board and both the blurb and the panel say so.
+  `test_splits.py` refuses a q1 metric entering `ADJUSTED_METRICS` or
+  `RANK_METRICS`, and `audit_data` refuses an `adj_q1` or `q1…rank` column.
+- Backfill is `build_splits --sport nfl --seasons 2023 2024 2025` — the Q1
+  columns are written by the same aggregate, so re-running a season fills them.
+
 **Turning it off is an UPDATE, not a deploy:**
 
 ```sql

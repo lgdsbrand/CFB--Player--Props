@@ -21,6 +21,7 @@ import { SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
 import {
   type DbRow,
   MAX_ROWS_PER_REQUEST,
+  num,
   requireNum,
   unwrap,
   upcomingOnly,
@@ -145,6 +146,9 @@ const COLUMNS =
   "has_book_line, has_call, over_price, under_price, sportsbook_key, " +
   "sportsbook_name, projected_median, projected_p10, projected_p90, prior_weight, " +
   "opponent_rank_vs_position, conference_name, conference_is_displayed, " +
+  // Raw first-quarter allowed-per-game (migration 0070). No adjusted or ranked
+  // sibling exists — see the column comment for the measurement.
+  "opponent_q1_rush_yards_allowed_pg, opponent_q1_rec_yards_allowed_pg, " +
   "display_confidence, effective_sample, venue_name, venue_city, venue_state, " +
   "team_spread, game_total, game_line_providers, team_poll_rank, opponent_poll_rank, " +
   // Computed from now() at read time (migration 0052). Selected as well as
@@ -727,6 +731,12 @@ function toBoardRow(row: Record<string, unknown>): BoardRow {
 
     opponentRankVsPosition:
       (row.opponent_rank_vs_position as number | null) ?? null,
+
+    // `numeric` arrives from PostgREST as a STRING, so these are coerced rather
+    // than cast — a cast would typecheck and then format "27.800" or do string
+    // arithmetic, the same trap `ladderStep` carries a note about.
+    opponentQ1RushYardsAllowedPg: num(row.opponent_q1_rush_yards_allowed_pg),
+    opponentQ1RecYardsAllowedPg: num(row.opponent_q1_rec_yards_allowed_pg),
 
     conferenceName: (row.conference_name as string | null) ?? null,
     conferenceIsDisplayed:

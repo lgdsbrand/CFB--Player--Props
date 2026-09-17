@@ -68,6 +68,9 @@ const EXPECTED = {
     "venue_name", "venue_city", "venue_state",
     "team_spread", "game_total", "game_line_providers",
     "team_poll_rank", "opponent_poll_rank", "sport", "publishes_call",
+    // Raw first-quarter allowed-per-game (migration 0070). No adjusted or
+    // ranked sibling exists, on purpose.
+    "opponent_q1_rush_yards_allowed_pg", "opponent_q1_rec_yards_allowed_pg",
     // Selected only by the player-detail query, never the board page — but named
     // here all the same. This guard exists to catch a column that vanished
     // underneath hand-written types, and a column read on one route only is
@@ -95,6 +98,11 @@ const EXPECTED = {
     "position_group", "start_date", "neutral_site", "defense_is_home", "plays",
     "rush_attempts", "rush_yards_allowed", "rush_tds_allowed", "targets",
     "receptions_allowed", "rec_yards_allowed", "rec_tds_allowed",
+    // First-quarter observations (migration 0069). Read for both sports; null
+    // on a row written before the aggregate existed.
+    "q1_plays", "q1_rush_attempts", "q1_rush_yards_allowed",
+    "q1_rush_tds_allowed", "q1_targets", "q1_receptions_allowed",
+    "q1_rec_yards_allowed", "q1_rec_tds_allowed",
   ],
   players: ["id", "name", "position_group"],
   ai_reads: ["content", "model", "prompt_version", "generated_at"],
@@ -178,6 +186,7 @@ const EXPECTED = {
   conferences: ["id", "name", "abbreviation", "is_displayed", "sport"],
   app_config: ["key", "value"],
   defense_position_ratings: [
+    "q1_rush_yards_allowed_pg", "q1_rec_yards_allowed_pg",
     "defense_team_id", "position_group", "as_of_week", "season",
     "games_included", "adj_rush_yards_allowed_pg", "adj_rec_yards_allowed_pg",
     "adj_receptions_allowed_pg", "adj_rush_tds_allowed_pg",

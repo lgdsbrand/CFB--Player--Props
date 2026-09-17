@@ -5,6 +5,7 @@ import {
   rankBasis,
   matchupBand,
   matchupSoftness,
+  type DefensePeriod,
   type DefenseStat,
 } from "@/lib/core/defense-view";
 import { formatCount } from "@/lib/core/format";
@@ -33,6 +34,7 @@ export function DefenseDetail({
   rankedDefenses,
   gamesRated,
   highlight,
+  period = "game",
   asOfWeek,
 }: {
   opponentSchool: string;
@@ -44,9 +46,20 @@ export function DefenseDetail({
   gamesRated: number | null;
   /** The column matching the market on screen, emphasised in the table. */
   highlight: DefenseStat | null;
+  /**
+   * Whole games, or the first quarter of them — follows the market on screen.
+   *
+   * THE RANK DOES NOT FOLLOW IT, and the panel says so below. There is no
+   * first-quarter rating: measured on NFL 2023-25, a defense's first-half
+   * first-quarter rate predicts its second-half rate at a Spearman of +0.05 on
+   * average and is NEGATIVE in four of nine season-position cells. Publishing a
+   * "3rd toughest vs WR in the 1st quarter" badge off that would be inventing
+   * an ordering the data does not contain.
+   */
+  period?: DefensePeriod;
   asOfWeek: number;
 }) {
-  const stats = defenseStatsFor(position);
+  const stats = defenseStatsFor(position, period);
   const fraction = rank !== null ? matchupSoftness(rank, rankedDefenses) : null;
   const band = rank !== null ? matchupBand(rank, rankedDefenses) : null;
   const basis = rankBasis(position);
@@ -83,7 +96,20 @@ export function DefenseDetail({
         {/* What the rank is built from. Without this a reader cannot tell a
             rushing rank from a receiving one, which is how a QB rank on the
             wrong column went unnoticed for two phases. */}
-        <p className="text-dim text-[0.625rem]">Ranked on {basis.label}.</p>
+        <p className="text-dim text-[0.625rem]">
+          Ranked on {basis.label}
+          {period === "q1" ? (
+            <>
+              , <strong className="text-muted">over whole games</strong> — there
+              is no first-quarter rating. A defense&rsquo;s first-quarter rate
+              barely predicts its own next half-season, so a rank built on it
+              would be an ordering the data does not support. The table below is
+              the first quarter.
+            </>
+          ) : (
+            "."
+          )}
+        </p>
 
         {rank !== null ? (
           <>
@@ -147,7 +173,9 @@ export function DefenseDetail({
         <div className="overflow-x-auto">
           <table className="w-full min-w-[26rem] border-collapse text-left text-xs">
             <caption className="text-dim mb-1 text-left text-[0.625rem]">
-              Raw totals allowed, opponent-unadjusted — what actually happened.
+              {period === "q1"
+                ? "First-quarter totals allowed, opponent-unadjusted — what actually happened in the opening quarter of each game."
+                : "Raw totals allowed, opponent-unadjusted — what actually happened."}
             </caption>
             <thead>
               <tr className="text-dim [&>th]:px-2 [&>th]:py-1.5 [&>th]:font-semibold [&>th]:uppercase [&>th]:tracking-label [&>th]:text-[0.625rem]">

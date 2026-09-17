@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from worker.core.splits import (
     ADJUSTMENT_VERSION,
+    ADJUSTED_METRICS,
+    FIRST_QUARTER_MEAN_METRICS,
     RANK_METRICS,
     SHRINKAGE_GAMES,
     SKILL_POSITIONS,
@@ -177,3 +179,37 @@ def test_every_position_ranks_on_a_metric_it_actually_produces():
     # Each names a real adjusted column on defense_position_ratings.
     for metric in RANK_METRICS.values():
         assert metric.startswith("adj_") and metric.endswith("_pg")
+
+
+# -----------------------------------------------------------------------------
+# The first-quarter metrics get an AVERAGE and nothing else
+# -----------------------------------------------------------------------------
+
+
+def test_no_first_quarter_metric_is_opponent_adjusted():
+    """The absence is the finding, and a test is what keeps it deliberate.
+
+    Measured on NFL 2023-25 (migration 0070): a defense's first-half
+    first-quarter rate predicts its second-half rate at a Spearman of about
+    +0.05 and is NEGATIVE in four of nine season-position cells, against about
+    +0.17 whole-game. Fitting the additive model on a quarter of the sample at
+    roughly twice the noise would publish a confident ordering the data does not
+    contain -- so these metrics are averaged and never fitted, ranked or
+    coloured.
+
+    Adding a q1 key to ADJUSTED_METRICS would silently give it an `adj_` column
+    and a rank. This fails first.
+    """
+    assert not (set(FIRST_QUARTER_MEAN_METRICS) & set(ADJUSTED_METRICS))
+    assert all(m.startswith("q1_") for m in FIRST_QUARTER_MEAN_METRICS)
+    assert not any(m.startswith("q1_") for m in ADJUSTED_METRICS)
+
+
+def test_no_position_ranks_on_a_first_quarter_metric():
+    """`rank_vs_position` must stay a whole-game ordering.
+
+    Every surface showing a rank says it is whole-game, including on the
+    first-quarter board. A position quietly switched to a q1 metric here would
+    make all of those labels wrong at once.
+    """
+    assert all(not m.startswith("q1_") for m in RANK_METRICS.values())

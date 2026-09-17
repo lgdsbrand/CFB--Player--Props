@@ -127,7 +127,7 @@ export default async function PlayerDetail({
   const [weeks, config, markets] = await Promise.all([
     getSlateWeeks(sport),
     getAppConfig(),
-    getMarkets(),
+    getMarkets(sport),
   ]);
 
   const active = findWeek(weeks, requested.season, requested.week);
@@ -245,7 +245,16 @@ export default async function PlayerDetail({
 
   // Binary markets grade on the OVER whatever the call was, so a green bar
   // means the player scored — see `market-row.tsx` for the full reasoning.
-  const gradeSide = activeMarket?.isBinary ? "over" : (activeRow.side ?? "over");
+  // THE SAME RULE `gradeRow` APPLIES, stated here rather than arrived at by
+  // accident. A market that publishes no call grades on the OVER, as a binary
+  // one does: the row's own `side` is already NULL from the view (migration
+  // 0068), so `?? "over"` happens to give the right answer today — and would
+  // quietly stop doing so the moment the view returned a side again.
+  const statesCall = activeMarket?.publishesCall ?? true;
+  const gradeSide =
+    activeMarket?.isBinary || !statesCall
+      ? "over"
+      : (activeRow.side ?? "over");
   const graded: GradedGame[] =
     activeMarket && activeRow.line !== null
       ? gradeGames(gameLog, activeMarket.statColumn, activeRow.line, gradeSide)
@@ -374,7 +383,12 @@ export default async function PlayerDetail({
 
       <GameTabs games={games} activeGameId={activeGameId} params={resolved} />
 
-      <MarketTabs rows={ordered} activeKey={activeRow.marketKey} params={resolved} />
+      <MarketTabs
+        rows={ordered}
+        marketsByKey={marketsByKey}
+        activeKey={activeRow.marketKey}
+        params={resolved}
+      />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         {/* `min-w-0` because a grid child defaults to `min-width: auto`, which
@@ -411,6 +425,7 @@ export default async function PlayerDetail({
                 line={activeRow.line}
                 unit={activeMarket?.unit ?? null}
                 side={gradeSide}
+                statesCall={statesCall}
                 step={activeMarket?.ladderStep ?? null}
                 season={active.season}
               />
@@ -660,6 +675,31 @@ function orderMarkets(
 }
 
 function Call({ row, market }: { row: BoardRow; market: Market | undefined }) {
+  // A MARKET THAT PUBLISHES NO CALL LEADS WITH THE BOOK'S LINE. Checked first,
+  // before the binary and called branches, so nothing downstream can reach the
+  // withheld number by another route. The line is the headline here because it
+  // is what the reader came for: everything below — the chart, the splits, the
+  // game log — is this player measured against exactly this number.
+  if (market && !market.publishesCall) {
+    return row.line === null ? (
+      <span className="pill bg-panel text-muted">No line yet</span>
+    ) : (
+      <span className="flex items-baseline gap-2">
+        <span className="text-dim text-[0.625rem] font-semibold uppercase tracking-label">
+          Line
+        </span>
+        <span className="text-2xl font-extrabold leading-none tabular-nums">
+          {formatLine(row.line)}
+        </span>
+        {market.unit ? (
+          <span className="text-dim text-[0.625rem] font-semibold uppercase tracking-label">
+            {market.unit}
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+
   if (market?.isBinary) {
     return row.modelProbOver === null ? (
       <span className="pill bg-panel text-muted">No projection</span>
@@ -788,6 +828,13 @@ function Projection({
   row: BoardRow;
   market: Market | undefined;
 }) {
+  // ABSENT, NOT "UNAVAILABLE". The distribution behind a first-quarter market
+  // is computed and stored like any other and is simply not published, so an
+  // empty panel headed "Projected range" would report a deliberate decision as
+  // a missing number — and invite a reader to wait for it to arrive. The panel
+  // that explains the omission is the one at the top of the list.
+  if (market && !market.publishesCall) return null;
+
   return (
     <section className="panel flex flex-col gap-2 p-4">
       <h2 className="section-header">Projected range</h2>

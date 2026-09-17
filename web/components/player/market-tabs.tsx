@@ -1,8 +1,8 @@
 import Link from "next/link";
 
-import { formatConfidence } from "@/lib/core/format";
+import { formatConfidence, formatLine } from "@/lib/core/format";
 import { playerHref, type PlayerParams } from "@/lib/core/player-params";
-import type { BoardRow } from "@/lib/core/types";
+import type { BoardRow, Market } from "@/lib/core/types";
 
 /**
  * Every market this player has this week, one of them selected.
@@ -19,10 +19,13 @@ import type { BoardRow } from "@/lib/core/types";
  */
 export function MarketTabs({
   rows,
+  marketsByKey,
   activeKey,
   params,
 }: {
   rows: BoardRow[];
+  /** The catalogue, for `publishes_call` — see `Headline`. */
+  marketsByKey: Map<string, Market>;
   activeKey: string;
   params: PlayerParams;
 }) {
@@ -54,7 +57,7 @@ export function MarketTabs({
               {row.marketEmoji ? <span aria-hidden>{row.marketEmoji}</span> : null}
               {row.marketLabel ?? row.marketName}
             </span>
-            <Headline row={row} />
+            <Headline row={row} market={marketsByKey.get(row.marketKey)} />
           </Link>
         );
       })}
@@ -65,12 +68,34 @@ export function MarketTabs({
 /**
  * The tab's number.
  *
- * Three cases, and the middle one is the common one right now: a binary market
- * shows the anytime-scorer probability (never a called side — see
- * `market-row.tsx`), a called market shows side and confidence, and a market
- * with no line yet says so rather than borrowing a number from somewhere else.
+ * Four cases, and the second is the common one right now: a market that
+ * publishes no call shows the BOOK'S line, a binary market shows the
+ * anytime-scorer probability (never a called side — see `market-row.tsx`), a
+ * called market shows side and confidence, and a market with no line yet says
+ * so rather than borrowing a number from somewhere else.
+ *
+ * THE FIRST CASE IS NOT "Lean". A first-quarter tab fell through to that label
+ * while carrying a real DraftKings line, which reads as the model having a view
+ * it has not finished forming — the opposite of the truth, which is that there
+ * is a line and we are deliberately not calling it.
  */
-function Headline({ row }: { row: BoardRow }) {
+function Headline({
+  row,
+  market,
+}: {
+  row: BoardRow;
+  market: Market | undefined;
+}) {
+  if (market && !market.publishesCall) {
+    return row.line === null ? (
+      <span className="pill bg-panel-inset text-muted">No line</span>
+    ) : (
+      <span className="text-sm font-extrabold leading-none tabular-nums">
+        {formatLine(row.line)}
+      </span>
+    );
+  }
+
   if (row.isBinary) {
     return row.modelProbOver === null ? (
       <span className="text-dim text-[0.625rem]">—</span>

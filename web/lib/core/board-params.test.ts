@@ -19,6 +19,7 @@ import { test } from "node:test";
 
 import {
   boardHref,
+  boardParamsPresent,
   gamesHref,
   DEFAULT_HIT_RATE_WINDOW,
   parseBoardParams,
@@ -37,6 +38,7 @@ const FULLY_FILTERED: BoardParams = {
   // `cfb` would pass while `boardHref` dropped the parameter entirely, since
   // an omitted sport parses back as college.
   sport: "nfl",
+  scope: "full",
   season: 2025,
   week: 8,
   position: "WR",
@@ -188,7 +190,14 @@ test("a basePath with no parameters left is the bare path", () => {
   // The conference pills on Analyze Games clear a filter this way; a trailing
   // "?" would make two links to the same page look like different addresses.
   const bare = boardHref(
-    { rankedOnly: false, edgesOnly: false, hitRateWindow: 5, sort: "edge", page: 1 },
+    {
+      scope: "full",
+      rankedOnly: false,
+      edgesOnly: false,
+      hitRateWindow: 5,
+      sort: "edge",
+      page: 1,
+    },
     {},
     "/games",
   );
@@ -200,6 +209,7 @@ test("a basePath with no parameters left is the bare path", () => {
 // -----------------------------------------------------------------------------
 
 const BARE: BoardParams = {
+  scope: "full",
   sort: "edge",
   edgesOnly: false,
   rankedOnly: false,
@@ -268,6 +278,7 @@ test("leaving a preset for the full board drops it", () => {
 /** The smallest valid params, so a sport test is only about sport. */
 const bare = (sport: BoardParams["sport"]): BoardParams => ({
   sport,
+  scope: "full",
   season: 2026,
   week: 1,
   rankedOnly: false,
@@ -275,6 +286,46 @@ const bare = (sport: BoardParams["sport"]): BoardParams => ({
   edgesOnly: false,
   hitRateWindow: DEFAULT_HIT_RATE_WINDOW,
   page: 1,
+});
+
+// -----------------------------------------------------------------------------
+// Scope — the other parameter that decides which rows EXIST
+// -----------------------------------------------------------------------------
+
+test("scope survives a trip through the URL", () => {
+  // Same failure as a dropped sport and it looks the same to a reader: the
+  // first-quarter board silently becomes the full-game one on the next click.
+  const href = boardHref({ ...bare("nfl"), scope: "q1" }, {});
+  assert.match(href, /scope=q1/);
+
+  const params = parseBoardParams(
+    Object.fromEntries(new URLSearchParams(href.split("?")[1] ?? "")),
+    { edgesOnlyDefault: false },
+  );
+  assert.equal(params.scope, "q1");
+});
+
+test("the default scope stays out of the URL", () => {
+  // Every link shared before first-quarter props existed omits it, and they
+  // must keep meaning the full-game board.
+  assert.ok(!boardHref(bare("nfl"), {}).includes("scope="));
+});
+
+test("scope survives a reset, because it is scope and not a filter", () => {
+  // Clearing the filters on the first-quarter board means "show me all of the
+  // first-quarter props", never "send me back to the full-game one".
+  const filtered = {
+    ...FULLY_FILTERED,
+    scope: "q1" as const,
+  };
+  assert.match(resetBoardHref(filtered), /scope=q1/);
+});
+
+test("a board link is recognised by its scope alone", () => {
+  // `boardParamsPresent` forwards pre-move links that land on `/`. A key added
+  // to the parser and not to that list makes a shared link silently drop onto
+  // the home page with its state discarded.
+  assert.equal(boardParamsPresent({ scope: "q1" }), true);
 });
 
 test("sport survives a trip through the URL", () => {

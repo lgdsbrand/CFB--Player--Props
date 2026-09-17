@@ -7,6 +7,11 @@ import {
   type BoardView,
 } from "@/lib/core/board-params";
 import { formatCount } from "@/lib/core/format";
+import {
+  MARKET_SCOPES,
+  hasScope,
+  type MarketScope,
+} from "@/lib/core/market-scope";
 import { POSITION_GROUPS, type Conference, type Market } from "@/lib/core/types";
 import type { GameSummary } from "@/lib/core/types";
 
@@ -28,15 +33,27 @@ import type { GameSummary } from "@/lib/core/types";
 export function BoardControls({
   params,
   markets,
+  allMarkets,
   conferences,
   games,
   hitRateWindows,
   resultCount,
   resultNoun,
   view,
+  showsCalls = true,
 }: {
   params: BoardParams;
+  /** The markets in the CURRENT scope — what the stat selector may offer. */
   markets: Market[];
+  /**
+   * The whole catalogue for this sport, for the scope control alone.
+   *
+   * It has to be the unscoped list: the first-quarter tab's job is to be
+   * reachable FROM the full-game board, where `markets` by definition holds no
+   * first-quarter market. Asking the scoped list whether the other scope exists
+   * would always answer no and the tab would never appear.
+   */
+  allMarkets: Market[];
   conferences: Conference[];
   games: GameSummary[];
   hitRateWindows: number[];
@@ -49,6 +66,17 @@ export function BoardControls({
   resultNoun: "player" | "prop";
   /** Already resolved by `resolveBoardView`, never the raw optional param. */
   view: BoardView;
+  /**
+   * Whether the markets on screen publish a call at all.
+   *
+   * CONTROLS THAT CANNOT WORK ARE REMOVED, NOT DISABLED. EDGES ONLY, MIN
+   * CONFIDENCE and the EDGE and CONFIDENCE sorts all act on columns that are
+   * NULL for every first-quarter row (migration 0068), so leaving them on
+   * screen offers a reader a filter that would empty the board and a sort that
+   * would order nothing — and EDGES ONLY defaults from `app_config`, so it can
+   * arrive already ON.
+   */
+  showsCalls?: boolean;
 }) {
   // The stat selector offers only markets the selected position actually has —
   // driven by `market_positions`, so the UI cannot offer a market the model
@@ -66,8 +94,45 @@ export function BoardControls({
     return market?.positions.includes(position) ? params.market : undefined;
   };
 
+  // Only where the sport has both halves. College has no derived markets at
+  // all, so the control would be a group of one pill that changes nothing.
+  const scopes: MarketScope[] = (["full", "q1"] as const).filter((candidate) =>
+    hasScope(allMarkets, candidate),
+  );
+
   return (
     <div className="flex flex-col gap-3">
+      {/*
+        SCOPE SITS ABOVE POSITION, not among the filters below it, because it is
+        not one. Position, market and conference narrow a list; scope chooses
+        WHICH LIST — a different set of markets, and one of them states no call
+        at all. Putting it in the same visual group as EDGES ONLY would read as
+        one more way to filter the board a reader is already looking at.
+
+        Dropping the market when the scope changes is not optional: `market` is
+        a key, and every key in one scope is absent from the other, so carrying
+        it across would filter the new list to nothing and read as an empty
+        board rather than as a stale filter.
+      */}
+      {scopes.length > 1 ? (
+        <PillGroup label="Markets" size="md">
+          {scopes.map((candidate) => (
+            <PillLink
+              key={candidate}
+              href={boardHref(params, {
+                scope: candidate,
+                market: undefined,
+                page: 1,
+              })}
+              active={params.scope === candidate}
+              size="md"
+            >
+              {MARKET_SCOPES[candidate].label}
+            </PillLink>
+          ))}
+        </PillGroup>
+      ) : null}
+
       {/*
         POSITION AND MARKET EACH TAKE A ROW rather than sharing one. They shared
         a wrapping row, which at phone width put MARKET's nine pills onto three
@@ -115,26 +180,36 @@ export function BoardControls({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <PillGroup label="Sort">
-          <PillLink
-            href={boardHref(params, { sort: "edge" })}
-            active={params.sort === "edge"}
-          >
-            Edge
-          </PillLink>
-          <PillLink
-            href={boardHref(params, { sort: "confidence" })}
-            active={params.sort === "confidence"}
-          >
-            Confidence
-          </PillLink>
-          <PillLink
-            href={boardHref(params, { sort: "opponent_rank" })}
-            active={params.sort === "opponent_rank"}
-          >
-            Opp rank
-          </PillLink>
-        </PillGroup>
+        {showsCalls ? (
+          <PillGroup label="Sort">
+            <PillLink
+              href={boardHref(params, { sort: "edge" })}
+              active={params.sort === "edge"}
+            >
+              Edge
+            </PillLink>
+            <PillLink
+              href={boardHref(params, { sort: "confidence" })}
+              active={params.sort === "confidence"}
+            >
+              Confidence
+            </PillLink>
+            <PillLink
+              href={boardHref(params, { sort: "opponent_rank" })}
+              active={params.sort === "opponent_rank"}
+            >
+              Opp rank
+            </PillLink>
+          </PillGroup>
+        ) : (
+          // One order, stated rather than offered. Edge and confidence do not
+          // exist here, and a group holding a single active pill reads as a
+          // control that is stuck rather than as the answer to "how is this
+          // sorted".
+          <span className="text-dim text-[0.6875rem]">
+            Sorted by softest matchup
+          </span>
+        )}
 
         <PillGroup label="Hit rate">
           {hitRateWindows.map((window) => (
@@ -183,17 +258,19 @@ export function BoardControls({
           Top 25
         </Link>
 
-        <Link
-          href={boardHref(params, { edgesOnly: !params.edgesOnly })}
-          className={
-            "rounded-full border px-3 py-1 text-[0.625rem] font-bold uppercase tracking-label transition-colors " +
-            (params.edgesOnly
-              ? "border-target/50 bg-target/15 text-target"
-              : "border-border-subtle text-muted hover:text-ink")
-          }
-        >
-          Edges only
-        </Link>
+        {showsCalls ? (
+          <Link
+            href={boardHref(params, { edgesOnly: !params.edgesOnly })}
+            className={
+              "rounded-full border px-3 py-1 text-[0.625rem] font-bold uppercase tracking-label transition-colors " +
+              (params.edgesOnly
+                ? "border-target/50 bg-target/15 text-target"
+                : "border-border-subtle text-muted hover:text-ink")
+            }
+          >
+            Edges only
+          </Link>
+        ) : null}
 
         {/* THE NOUN IS NOT DECORATION. In card view this counts card keys — one
             per player — while a "row" in the read layer is one player-MARKET, of
@@ -208,7 +285,12 @@ export function BoardControls({
         </span>
       </div>
 
-      <FilterFields params={params} conferences={conferences} games={games} />
+      <FilterFields
+        params={params}
+        conferences={conferences}
+        games={games}
+        showsCalls={showsCalls}
+      />
     </div>
   );
 }

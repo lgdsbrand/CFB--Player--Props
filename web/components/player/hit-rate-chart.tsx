@@ -57,11 +57,20 @@ export function HitRateChart({
   side,
   step,
   season,
+  statesCall = true,
 }: {
   points: HitRateChartPoint[];
   line: number;
   unit: string | null;
   side: "over" | "under";
+  /**
+   * Whether this market publishes a call at all (`markets.publishes_call`).
+   *
+   * Only the stepper's caption cares: its second sentence warns that the
+   * model's called side stays put while the line moves, which is a sentence
+   * about a call this market does not make.
+   */
+  statesCall?: boolean;
   /**
    * The season on screen. Earlier games — an NFL sample topped up from last
    * season (`borrowsPriorSeasonForm`) — draw faded with a dashed edge and carry
@@ -126,6 +135,7 @@ export function HitRateChart({
           shifted={shifted}
           counts={counts}
           side={side}
+          statesCall={statesCall}
           onChange={setOffset}
         />
       ) : null}
@@ -295,6 +305,7 @@ function Stepper({
   shifted,
   counts,
   side,
+  statesCall,
   onChange,
 }: {
   line: number;
@@ -304,6 +315,7 @@ function Stepper({
   shifted: boolean;
   counts: { hits: number; decided: number; pushes: number; rate: number | null };
   side: "over" | "under";
+  statesCall: boolean;
   onChange: (next: number) => void;
 }) {
   const canDown = offset > bounds.min;
@@ -357,7 +369,9 @@ function Stepper({
       <p className="text-dim text-[0.625rem]">
         {shifted
           ? "Past games re-graded at a line no book posted, and the LAST 5 row below stays at the posted one. Ten games is a small sample and stepping until the number improves will always find one, so read this as history rather than as a signal — the model's own view at other lines is under Alternate lines."
-          : "Step the line to see how these games would have graded against it. The called side does not move with it."}
+          : statesCall
+            ? "Step the line to see how these games would have graded against it. The called side does not move with it."
+            : "Step the line to see how these games would have graded against it. There is no model call on this market to move."}
       </p>
     </div>
   );

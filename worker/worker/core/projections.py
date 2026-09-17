@@ -40,7 +40,7 @@ deriving picks belongs to the job, against the database, once books have posted.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -126,7 +126,7 @@ def is_projectable(row: dict[str, Any], week: int) -> bool:
     return float(row.get("prior_games_played") or 0) >= MIN_PRIOR_GAMES_TO_PROJECT
 
 
-def market_catalogue() -> list[dict[str, Any]]:
+def market_catalogue(sport: str) -> list[dict[str, Any]]:
     """Markets with their position applicability and resolved family.
 
     Part of the universe definition rather than a job detail: `market_positions`
@@ -134,6 +134,18 @@ def market_catalogue() -> list[dict[str, Any]]:
     nothing else, and it drives the position tabs and the stat selector on the
     board from the same rows (CLAUDE.md §7). One source, so the UI cannot offer
     a market the model does not produce.
+
+    `sport` IS REQUIRED, not defaulted. `markets.sport` (migration 0066) is NULL
+    on every market that exists in both leagues and names a sport only where one
+    genuinely exists in one — and a caller that forgets the predicate does not
+    fail, it silently projects a market the sport has no book for. The other
+    sport-blind reads in this repo all failed that way (six of them, none
+    raising), so this one cannot be omitted by accident.
+
+    FIRST-QUARTER MARKETS DO NOT COME BACK FROM HERE EVEN WHEN ACTIVE, because
+    this query starts FROM `market_positions` and they deliberately have no rows
+    there — they inherit their parent's positions instead (see
+    `first_quarter_catalogue`). A caller that wants them asks for them.
     """
     return fetch_all(
         """
@@ -148,8 +160,36 @@ def market_catalogue() -> list[dict[str, Any]]:
           from market_positions mp
           join markets m on m.key = mp.market_key
          where m.is_active
-        """
+           and (m.sport is null or m.sport::text = %s)
+        """,
+        (sport,),
     )
+
+
+def active_first_quarter_keys(sport: str) -> set[str]:
+    """Which first-quarter markets this sport is currently publishing.
+
+    THE DATABASE ROW IS THE SWITCH, not a flag in the job. `markets.is_active`
+    is what migration 0067 flips to put these live and what an UPDATE can flip
+    back if a week of them reads badly — without a deploy, and without the
+    weekly run and the board disagreeing about which markets exist for the
+    length of a release.
+
+    Returns an empty set for a sport with none, which is every sport but the
+    NFL: probed 2026-09-09, no college book anywhere posts a player quarter or
+    half market, so there is nothing for a college row to point at.
+    """
+    rows = fetch_all(
+        """
+        select key
+          from markets
+         where is_active
+           and parent_market_key is not null
+           and (sport is null or sport::text = %s)
+        """,
+        (sport,),
+    )
+    return {str(row["key"]) for row in rows}
 
 
 #: The family each first-quarter market is fitted with; see
@@ -162,28 +202,41 @@ FIRST_QUARTER_FAMILIES: dict[str, str] = {
 }
 
 
-def first_quarter_catalogue(catalogue: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def first_quarter_catalogue(
+    catalogue: Sequence[dict[str, Any]],
+    only: Collection[str] | None = None,
+) -> list[dict[str, Any]]:
     """The first-quarter markets, derived from the full-game rows they scale.
 
     DERIVED, NOT LISTED. A first-quarter market applies to exactly the positions
     its parent does and grades against the parent's column prefixed `q1_`, so
     writing those out a second time would be a second definition free to drift
     from the first. Anything a position gets for the full game it gets for the
-    first quarter, and nothing else.
+    first quarter, and nothing else. This is also why the Q1 rows carry no
+    `market_positions` rows of their own — `markets.parent_market_key`
+    (migration 0066) is the same fact in the database, for the web to read.
 
-    NOT IN THE ACTIVE CATALOGUE YET, on purpose. These markets are being
-    measured, not published; `market_catalogue` is what the board and the weekly
-    run read, and it stays untouched until the backtest says they are worth
-    showing. The yardage three do have `markets` rows since migration 0065, but
-    INACTIVE -- they exist so DraftKings' first-quarter lines can be stored.
-    The parent's `ladder_step` is dropped for the same reason -- a
-    first-quarter ladder is a display decision for when they ship.
+    NOT IN `market_catalogue()`, still on purpose and now for a narrower reason.
+    That query starts FROM `market_positions`, so these are invisible to it
+    whatever `is_active` says, and a caller opts in rather than filtering them
+    back out.
+
+    `only` RESTRICTS THE RESULT TO THESE KEYS, which is how the weekly run asks
+    for the ones the database says are live (`active_first_quarter_keys`) while
+    the backtest keeps asking for all four — it measures q1_anytime_td, which
+    has no `markets` row at all because it is one-way at every book and can
+    never be de-vigged. None means every market with a parent in `catalogue`.
+
+    The parent's `ladder_step` is dropped: a first-quarter ladder is a display
+    decision, and these markets publish no call to ladder.
     """
     parents = {parent: q1 for q1, parent in FIRST_QUARTER_PARENTS.items()}
     derived: list[dict[str, Any]] = []
     for market in catalogue:
         q1_key = parents.get(str(market["market_key"]))
         if q1_key is None:
+            continue
+        if only is not None and q1_key not in only:
             continue
         derived.append({
             **market,

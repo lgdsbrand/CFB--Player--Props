@@ -512,9 +512,11 @@ the by-hand Sunday/Monday capture after week 1's lines were lost to it.
   warning). Without one every run fails with a `ConfigError`.
 - **Its own job name,** so its hourly runs cannot stand in for the six-hourly
   NFL `ingest_odds` in the monitor's staleness check.
-- **Where the lines show:** `/no-vig` only. The `markets` rows are inactive
-  (migration 0065), so neither board reads them. Stored `is_closing = false`;
-  grade them with `grade_vs_book --first-quarter --include-non-closing`.
+- **Where the lines show:** the NFL board's **1ST QUARTER** scope, the player
+  page, and `/no-vig`. Migration 0067 activated the `markets` rows; before it
+  they were inactive and `/no-vig` was the only surface. Stored
+  `is_closing = false`; grade them with
+  `grade_vs_book --first-quarter --include-non-closing`.
 - **The window equals the cron period** (`tests/test_capture_first_quarter.py`
   pins it). Change one, change both.
 
@@ -524,6 +526,44 @@ the by-hand Sunday/Monday capture after week 1's lines were lost to it.
 By hand, a single run can still be narrowed with `ingest_odds --sport nfl
 --free --markets q1_pass_yards,q1_rush_yards,q1_rec_yards`. The three keys are
 NFL-only (`markets_for` refuses them for college, before any call).
+
+#### The first-quarter board — what it shows and what it deliberately does not
+
+`/props?sport=nfl&scope=q1`. A **MARKETS** pill group switches between FULL GAME
+and 1ST QUARTER; it appears only for a sport that has both, so the college board
+never shows it.
+
+**No model call, on purpose** (`markets.publishes_call = false`, migration
+0066). A first-quarter row shows the book's line, the two-way price, the L5/L10
+hit rate against that line and the opponent's rank — and no OVER/UNDER, no
+confidence, no edge, no projected range. The client asked for exactly that on
+2026-09-17; it is also the only honest option, since the Q1 walk put
+`q1_pass_yards`' top bin at 0.94 predicted against 0.71 observed.
+
+**The projection is still computed and stored.** The board is one row per
+projection (`v_board_rows`), so the row carrying the line has to exist, and
+`picks` still holds a real side and confidence so `grade_vs_book` can measure
+them. What is withheld is the display: migration 0068 NULLs `side`,
+`confidence`, `display_confidence`, `model_prob_over`, `edge` and the three
+projected quantiles **in the view**, so no reader of `v_board_rows` can print a
+first-quarter call by forgetting to ask. `v_cheat_sheet` and `board_counts()`
+exclude these markets entirely — both are lists of calls.
+
+**Controls that cannot apply are removed, not disabled:** EDGES ONLY, MIN
+CONFIDENCE and the EDGE/CONFIDENCE sorts all act on columns that are now NULL,
+and EDGES ONLY defaults from `app_config` — left in place it would have emptied
+the board and read as "no first-quarter props this week". The scope is sorted by
+softest matchup instead.
+
+**Turning it off is an UPDATE, not a deploy:**
+
+```sql
+update markets set is_active = false where key like 'q1\_%';
+```
+
+The weekly run reads `active_first_quarter_keys()` each time, so the next
+`run_projections` stops producing the rows and the scope pill disappears with
+them (`getMarkets` caches for five minutes).
 
 #### `generate_ai_reads` — Wednesday 14:00 UTC
 

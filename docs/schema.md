@@ -124,8 +124,8 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 ### Markets and odds
 | Table | Notes |
 |---|---|
-| `markets` | Catalogue. `stat_column` maps a market to the column it grades against; `ladder_step` the rung spacing. Readers take `is_active` rows only: the three `q1_*` yardage rows (0065) are **inactive**, there only so DraftKings' first-quarter lines can be stored, and they surface on `/no-vig` alone |
-| `market_positions` | Drives the position tabs and stat selector |
+| `markets` | Catalogue. `stat_column` maps a market to the column it grades against; `ladder_step` the rung spacing. Readers take `is_active` rows only. Three columns added in 0066: **`sport`** restricts a market to one league and NULL means both (the common case — the three `q1_*` rows are the only ones naming one); **`parent_market_key`** says a market is a segment of another, which is what lets a first-quarter market inherit its parent's positions instead of carrying `market_positions` rows; **`publishes_call`** says whether any surface may state an over/under and a confidence for it |
+| `market_positions` | Drives the position tabs and stat selector. **The `q1_*` markets deliberately have no rows here** — they inherit their parent's positions, so `market_catalogue()` (which starts FROM this table) never returns them and a caller opts in instead |
 | `sportsbooks` | |
 | `player_prop_lines` | **Append-only** line history; a moved line is a new row |
 
@@ -145,8 +145,8 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 |---|---|
 | `defense_position_splits_through(season, week)` | Cumulative splits, strict `week <` cutoff |
 | `v_latest_prop_lines` | Newest line per player/market/book + de-vigged probability |
-| `v_board_rows` | Main board, one row per **projection** (see below) |
-| `v_player_game_log` | Game log for the player detail chart |
+| `v_board_rows` | Main board, one row per **projection** (see below). Carries `publishes_call`, and **withholds the model's opinion where it is false** (0068): `side`, `confidence`, `display_confidence`, `model_prob_over`, `edge` and the three projected quantiles all come back NULL, while the line, the book and both prices come back unchanged. `picks` still stores the real values so `grade_vs_book` can measure them — it is the *view* that declines to publish, so no reader can print a first-quarter call by forgetting to ask. `v_cheat_sheet` and `board_counts()` exclude those markets outright, both being lists of calls |
+| `v_player_game_log` | Game log for the player detail chart. Carries the `q1_*` actuals too, so a first-quarter market grades against the same view every other market does |
 | `american_to_implied_probability`, `devig_two_way`, `edge_on_side` | Odds math |
 | `devig_two_way_proportional` / `_additive` / `_shin` | The three selectable de-vig methods (migration 0013) |
 | `devig_shin_z` | Shin's *z*, the implied informed-money share — a market-quality diagnostic, not used in pricing |

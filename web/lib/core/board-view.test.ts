@@ -511,12 +511,50 @@ test("an unpriced row is a lean, which is the state most of a live week is in", 
   assert.equal(callFor(row()).kind, "lean");
 });
 
+test("a market that publishes no call states nothing, even holding a full call", () => {
+  // The row is complete: a line, a side and a confidence, all computed and all
+  // stored. `publishes_call` is the only thing standing between them and the
+  // screen, so this is the test that the withholding actually happens rather
+  // than depending on first-quarter picks happening to come out empty.
+  const priced = row({ hasCall: true, side: "over", confidence: 0.83 });
+
+  assert.equal(callFor(priced, { publishesCall: true }).kind, "call");
+  assert.equal(callFor(priced, { publishesCall: false }).kind, "reference");
+});
+
+test("without a market the call is unchanged, so no caller is broken by the new state", () => {
+  const priced = row({ hasCall: true, side: "over", confidence: 0.83 });
+  assert.equal(callFor(priced).kind, "call");
+});
+
+test("a binary market that published no call would still state nothing", () => {
+  // Order matters: `publishes_call` is checked BEFORE `is_binary`, so a
+  // withheld anytime-TD probability does not leak out of the binary branch.
+  const scorer = row({ isBinary: true, modelProbOver: 0.42 });
+  assert.equal(callFor(scorer, { publishesCall: false }).kind, "reference");
+  assert.equal(callFor(scorer, { publishesCall: true }).kind, "binary");
+});
+
 // -----------------------------------------------------------------------------
 // Grading — shared by the card's last-5 row and the table's hit-rate columns
 // -----------------------------------------------------------------------------
 
-const REC_YARDS = { statColumn: "rec_yards", isBinary: false };
-const ANYTIME_TD = { statColumn: "offensive_tds", isBinary: true };
+const REC_YARDS = {
+  statColumn: "rec_yards",
+  isBinary: false,
+  publishesCall: true,
+};
+const ANYTIME_TD = {
+  statColumn: "offensive_tds",
+  isBinary: true,
+  publishesCall: true,
+};
+/** A first-quarter market: a line, a history, and no opinion. */
+const Q1_REC_YARDS = {
+  statColumn: "q1_rec_yards",
+  isBinary: false,
+  publishesCall: false,
+};
 
 function log(week: number, values: Partial<PlayerGameLogRow> = {}): PlayerGameLogRow {
   return {
@@ -544,6 +582,20 @@ function log(week: number, values: Partial<PlayerGameLogRow> = {}): PlayerGameLo
     recYards: null,
     recTds: null,
     offensiveTds: null,
+
+    // The first-quarter actuals are NFL-only and null everywhere else, which is
+    // the shape a college row really has. Spelled out rather than spread from a
+    // helper so a new column added to the row type fails here loudly, which is
+    // what these fixtures are for.
+    q1PassYards: null,
+    q1RushAttempts: null,
+    q1RushYards: null,
+    q1RushTds: null,
+    q1Targets: null,
+    q1Receptions: null,
+    q1RecYards: null,
+    q1RecTds: null,
+    q1OffensiveTds: null,
     ...values,
   };
 }
@@ -559,13 +611,45 @@ test("a row with no line grades nothing, and says so with an empty array", () =>
   assert.equal(seasonToDate(graded, 2025), null);
 });
 
+test("a market with no published call grades on the OVER, not on the stored side", () => {
+  // THE STORED SIDE IS THE WITHHELD OPINION. A first-quarter pick has a side
+  // like any other, and colouring the dots by it would publish through the
+  // chart exactly what the card declines to print. Over is the neutral reading
+  // and the one every props board uses: a green dot means he went over.
+  const graded = gradeRow(
+    row({ line: 50.5, side: "under" }),
+    Q1_REC_YARDS,
+    [log(1, { q1RecYards: 70 }), log(2, { q1RecYards: 20 })],
+  );
+
+  // Keyed by week rather than by position: `gradeRow` returns most-recent
+  // first, and an order-sensitive assertion here would be testing the sort.
+  const byWeek = new Map(graded.map((game) => [game.week, game.hit]));
+  assert.equal(byWeek.get(1), true, "70 cleared the 50.5 line");
+  assert.equal(byWeek.get(2), false, "20 did not");
+});
+
+test("a market with no published call needs a line but no side", () => {
+  // A row can reach the board before `_insert_picks` has a side for it. The
+  // full-game path bails, because a call with no side is not a call; the
+  // reference path only ever needed the line.
+  const graded = gradeRow(
+    { line: 50.5, side: null },
+    Q1_REC_YARDS,
+    [log(1, { q1RecYards: 70 })],
+  );
+
+  assert.equal(graded.length, 1);
+  assert.equal(graded[0].hit, true);
+});
+
 test("an unmapped stat column grades nothing rather than guessing", () => {
   // The market catalogue is a database table, so a market can be added by
   // INSERT with no deploy. An unmapped column must surface as "no data", never
   // as a coincidentally-named field's number.
   const graded = gradeRow(
     row({ line: 3.5, side: "over" }),
-    { statColumn: "tackles_for_loss", isBinary: false },
+    { statColumn: "tackles_for_loss", isBinary: false, publishesCall: true },
     [log(1, { recYards: 80 })],
   );
 

@@ -45,6 +45,35 @@ export type BoardFilters = {
   sport?: Sport;
 
   marketKey?: string;
+  /**
+   * Restrict to exactly these markets — how a board scope is expressed.
+   *
+   * ALWAYS SET IN PRACTICE, and never as "the ones I do not want". The full
+   * board sends the full-game keys and the first-quarter board sends the
+   * first-quarter ones, so neither is the absence of the other and a market
+   * added to the catalogue cannot silently appear in a list that was defined by
+   * exclusion. See `lib/core/market-scope.ts`.
+   *
+   * An EMPTY ARRAY means no market qualifies and the board is empty. That is a
+   * real answer — a sport with no first-quarter markets — and deliberately not
+   * the same as omitting this, which means no restriction at all.
+   */
+  marketKeys?: string[];
+  /**
+   * Only markets this product actually states something about.
+   *
+   * THE SAME QUESTION AS A SCOPE, ASKED WITHOUT THE CATALOGUE. `marketKeys`
+   * needs the market list in hand, which a page fetching the catalogue in the
+   * same wave as its rows does not have yet. `v_board_rows.publishes_call`
+   * (migration 0068) answers it inside the query, so a caller whose table IS a
+   * list of calls — the game page's props table — can say so in one predicate
+   * and without a second round trip.
+   *
+   * Not the same predicate as the board's scope, deliberately: the board splits
+   * on what a market IS (a segment of another one), this splits on what it
+   * CLAIMS. They coincide today and are free to stop.
+   */
+  publishesCallOnly?: boolean;
   positionGroup?: PositionGroup;
   gameId?: number;
   /** Restrict to these games — how the day filter is expressed. */
@@ -163,6 +192,11 @@ function buildBoardQuery(
     .eq("season", filters.season)
     .eq("week", filters.week);
 
+  // Scope first, then the reader's own market choice inside it. Both apply: a
+  // selected market is always one the scope already admits, so the pair can
+  // only ever narrow, never contradict.
+  if (filters.marketKeys) query = query.in("market_key", filters.marketKeys);
+  if (filters.publishesCallOnly) query = query.eq("publishes_call", true);
   if (filters.marketKey) query = query.eq("market_key", filters.marketKey);
   if (filters.positionGroup) {
     query = query.eq("position_group", filters.positionGroup);
@@ -452,7 +486,7 @@ export async function getRowsForCards(
   keys: CardKey[],
   filters: Pick<
     BoardFilters,
-    "season" | "week" | "marketKey" | "positionGroup"
+    "season" | "week" | "marketKey" | "marketKeys" | "positionGroup"
   >,
 ): Promise<BoardRow[]> {
   if (keys.length === 0) return [];
@@ -466,6 +500,13 @@ export async function getRowsForCards(
     .in("player_id", [...new Set(keys.map((key) => key.playerId))])
     .in("game_id", [...new Set(keys.map((key) => key.gameId))]);
 
+  // THE SCOPE HAS TO REACH HERE TOO. This read deliberately drops the filters
+  // that pick which PLAYERS make the page, and keeps the ones that decide which
+  // sub-cards a card shows. Scope is the second kind: without it a full-game
+  // card would grow three first-quarter sub-cards that the board's own query
+  // had already excluded, which is the panel-and-board disagreement in
+  // `lib/core/board-scope.ts` repeated one level down.
+  if (filters.marketKeys) query = query.in("market_key", filters.marketKeys);
   if (filters.marketKey) query = query.eq("market_key", filters.marketKey);
   if (filters.positionGroup) {
     query = query.eq("position_group", filters.positionGroup);

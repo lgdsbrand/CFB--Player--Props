@@ -62,6 +62,20 @@ function game(
     recYards: null,
     recTds: null,
     offensiveTds: null,
+
+    // The first-quarter actuals are NFL-only and null everywhere else, which is
+    // the shape a college row really has. Spelled out rather than spread from a
+    // helper so a new column added to the row type fails here loudly, which is
+    // what these fixtures are for.
+    q1PassYards: null,
+    q1RushAttempts: null,
+    q1RushYards: null,
+    q1RushTds: null,
+    q1Targets: null,
+    q1Receptions: null,
+    q1RecYards: null,
+    q1RecTds: null,
+    q1OffensiveTds: null,
     ...values,
   };
 }

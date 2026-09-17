@@ -28,7 +28,7 @@ type MarketPositionRow = {
  * type by hand, and two small reads of nine and seventeen rows are not worth
  * the cleverness.
  */
-async function readMarkets(): Promise<Market[]> {
+async function readMarkets(sport: Sport = DEFAULT_SPORT): Promise<Market[]> {
   const supabase = createServerSupabaseClient();
 
   const [markets, positions] = await Promise.all([
@@ -36,9 +36,19 @@ async function readMarkets(): Promise<Market[]> {
       .from("markets")
       .select(
         "key, display_name, short_label, emoji, stat_column, is_binary, " +
-          "default_line, unit, sort_order, ladder_step",
+          "default_line, unit, sort_order, ladder_step, sport, " +
+          "parent_market_key, publishes_call",
       )
       .eq("is_active", true)
+      // A NULL sport means every sport, which is what nine of the twelve rows
+      // carry: pass_yards is the same market in both leagues. Only a market
+      // that genuinely exists in one league names it, and the first-quarter
+      // three do because no college book anywhere posts a quarter market.
+      //
+      // WITHOUT THIS PREDICATE THE COLLEGE BOARD LISTS Q1 PASS YDS, which is
+      // the sport-blind read this repo has now shipped six times. The filter
+      // goes in with the column rather than after it.
+      .or(`sport.is.null,sport.eq.${sport}`)
       .order("sort_order"),
     supabase
       .from("market_positions")
@@ -59,7 +69,7 @@ async function readMarkets(): Promise<Market[]> {
     byMarket.set(row.market_key, list);
   }
 
-  return marketRows.map((row) => ({
+  const built = marketRows.map((row) => ({
     key: row.key as string,
     displayName: row.display_name as string,
     shortLabel: row.short_label as string | null,
@@ -77,7 +87,42 @@ async function readMarkets(): Promise<Market[]> {
         ? null
         : Number(row.ladder_step),
     positions: byMarket.get(row.key as string) ?? [],
+    parentMarketKey: (row.parent_market_key as string | null) ?? null,
+    publishesCall: row.publishes_call as boolean,
   }));
+
+  return inheritParentPositions(built);
+}
+
+/**
+ * Give every derived market the positions of the market it is derived from.
+ *
+ * A first-quarter market applies to exactly the positions its parent does —
+ * anything a tight end gets for the full game it gets for the first quarter,
+ * and nothing else — so it carries no `market_positions` rows of its own and
+ * would otherwise appear in no stat selector at all.
+ *
+ * THIS MIRRORS `projections.first_quarter_catalogue` ON THE WORKER SIDE, which
+ * derives the same rows the same way for the same reason: listing the mapping
+ * twice would let the Q1 tabs a tight end sees drift from the full-game ones
+ * the model actually produces for him.
+ *
+ * ONE HOP, NOT A WALK. `markets_parent_is_not_self` and migration 0066's guard
+ * between them refuse a self-reference and a parent that is itself derived, so
+ * a chain cannot form and this cannot loop. A parent missing from the list —
+ * possible if it were ever deactivated on its own — leaves the child with no
+ * positions, which reads as a market offered to nobody rather than as one
+ * silently offered to everybody.
+ */
+function inheritParentPositions(markets: Market[]): Market[] {
+  const byKey = new Map(markets.map((market) => [market.key, market]));
+
+  return markets.map((market) => {
+    if (market.parentMarketKey === null) return market;
+    const parent = byKey.get(market.parentMarketKey);
+    if (!parent || market.positions.length > 0) return market;
+    return { ...market, positions: parent.positions };
+  });
 }
 
 /** Markets offered for one position, in the order the selector should list them. */
@@ -131,6 +176,13 @@ async function readConferences(
  * sit in the board's opening wave alongside the week strip and the config — so
  * caching them removes a whole wait rather than a query. See `lib/data/cache.ts`
  * for why that distinction is the only one that matters here.
+ *
+ * BOTH TAKE A SPORT, AND THAT IS WHAT KEYS THE CACHE. `cachedRead` serialises
+ * the arguments into the key, so this is handled by passing one — but only for
+ * a caller that actually passes it. `getMarkets` is the fifth read to join the
+ * list `lib/core/sport.ts` keeps of reads that must be sport-keyed; a caller
+ * that omits the argument gets the college catalogue for the length of the TTL,
+ * which on the NFL board means no first-quarter markets and no error.
  */
 export const getMarkets = cachedRead("markets", readMarkets);
 export const getConferences = cachedRead("conferences", readConferences);

@@ -249,6 +249,28 @@ class TestCatalogue:
         assert touchdown["stat_column"] == "q1_offensive_tds"
         assert touchdown["is_binary"] is True and touchdown["default_line"] == 0.5
 
+    def test_only_restricts_to_the_markets_the_database_says_are_live(self):
+        """The weekly run publishes what `markets.is_active` says, and no more.
+
+        The backtest still measures q1_anytime_td, which has no `markets` row at
+        all -- it is one-way at every book, so it can never be de-vigged or
+        graded. Without this filter the weekly run would project it too and put
+        a market on the board that no migration ever activated.
+        """
+        derived = first_quarter_catalogue(PARENTS, only={"q1_rec_yards"})
+        assert [m["market_key"] for m in derived] == ["q1_rec_yards"]
+
+    def test_an_empty_only_publishes_nothing_rather_than_everything(self):
+        """A sport with no active first-quarter market gets none.
+
+        `only=set()` and `only=None` are different answers to different
+        questions -- "the database says none are live" against "do not filter" --
+        and collapsing them would put the whole first-quarter catalogue on the
+        board of a sport that had deliberately deactivated it.
+        """
+        assert first_quarter_catalogue(PARENTS, only=set()) == []
+        assert len(first_quarter_catalogue(PARENTS, only=None)) == 2
+
 
 class TestUsageFloor:
     def test_a_first_quarter_floor_is_the_parents_scaled_by_the_share(self):

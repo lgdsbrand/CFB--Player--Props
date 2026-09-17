@@ -59,6 +59,8 @@ from worker.core.projections import (
     MIN_PRIOR_GAMES_TO_PROJECT,
     MIN_USAGE_FRACTION_OF_BASELINE,
     ProjectedRow,
+    active_first_quarter_keys,
+    first_quarter_catalogue,
     market_catalogue,
     project_slate,
 )
@@ -1060,10 +1062,39 @@ def main(argv: list[str] | None = None) -> int:
         get_config_value_for_sport("changed_team_prior_multiplier", args.sport)
         or CHANGED_TEAM_PRIOR_MULTIPLIER
     )
-    catalogue = market_catalogue()
+    catalogue = market_catalogue(args.sport)
     if not catalogue:
         log.error("No active markets — did the seed migration run?")
         return 1
+
+    # FIRST-QUARTER MARKETS, IF THE DATABASE SAYS THIS SPORT PUBLISHES ANY.
+    #
+    # Opted into rather than filtered out, because they are derived from the
+    # full-game rows above and `market_catalogue` cannot return them (they carry
+    # no `market_positions` rows — see `first_quarter_catalogue`).
+    #
+    # THE ROW ON THE BOARD IS THE POINT, NOT THE NUMBER IN IT. These markets
+    # have `publishes_call = false` (migration 0066): no surface states an
+    # over/under or a confidence for them. The projection is still computed and
+    # stored because the board is one row per PROJECTION (`v_board_rows`), so
+    # without it there is nothing to hang DraftKings' first-quarter line, the
+    # player's Q1 history or the opponent's Q1 rank on. The client asked for
+    # exactly that and no more, 2026-09-17.
+    #
+    # Nothing here is gated on a sport name. `active_first_quarter_keys` asks
+    # the database, which answers for the NFL alone today because no college
+    # book posts a quarter market — a fact about books, not a rule in this job.
+    quarter_keys = active_first_quarter_keys(args.sport)
+    if quarter_keys:
+        derived = first_quarter_catalogue(catalogue, only=quarter_keys)
+        log.info(
+            "First-quarter markets active for %s: %s (%d player-market slots, "
+            "no call published)",
+            args.sport,
+            ", ".join(sorted(quarter_keys)),
+            len(derived),
+        )
+        catalogue = [*catalogue, *derived]
 
     config = {
         "season": season,

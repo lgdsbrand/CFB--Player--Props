@@ -51,6 +51,12 @@ import {
   type Sport,
 } from "@/lib/core/sport";
 import { getConferences, getMarkets } from "@/lib/data/catalogue";
+import {
+  MARKET_SCOPES,
+  hasScope,
+  marketsInScope,
+  scopeKeys,
+} from "@/lib/core/market-scope";
 import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
 import { getGameLogsByPlayer } from "@/lib/data/players";
@@ -84,7 +90,7 @@ export default async function Home({
   const [weeks, config, markets, conferences] = await Promise.all([
     getSlateWeeks(sport),
     getAppConfig(),
-    getMarkets(),
+    getMarkets(sport),
     getConferences(sport),
   ]);
 
@@ -113,7 +119,21 @@ export default async function Home({
   // The strip may have resolved to a different week than the URL asked for
   // (an unknown week falls back to the latest), so filters follow the resolved
   // one — otherwise the board would read one week and label itself another.
-  const resolved = { ...params, season: active.season, week: active.week };
+  // SCOPE FALLS BACK WHEN THE SPORT HAS NOTHING IN IT. `?scope=q1` on the
+  // college board would otherwise render an empty page under a heading claiming
+  // first-quarter props exist — no college book anywhere posts one. Same rule
+  // every other filter follows: an unusable value degrades, it does not throw.
+  //
+  // A PRESET IS A NAMED LIST OF CALLS, so it forces the full-game scope. "Best
+  // Plays" means the best plays the model has made, and a market that publishes
+  // no call has made none — `?preset=best&scope=q1` would otherwise ask for the
+  // most confident rows out of a set with no confidence at all.
+  const scope =
+    !params.preset && hasScope(markets, params.scope) ? params.scope : "full";
+  const scopedMarkets = marketsInScope(markets, scope);
+  const showsCalls = scopedMarkets.some((market) => market.publishesCall);
+
+  const resolved = { ...params, scope, season: active.season, week: active.week };
 
   // ONE instant for every read this render fires, so the rows, the counts and
   // the day pills cannot be measured against three different clocks across a
@@ -127,9 +147,15 @@ export default async function Home({
   // still apply: those are scope, not filters.
   const preset = resolved.preset;
 
+  // EVERY BOARD READ CARRIES IT, presets included. A preset is the absence of
+  // the reader's filters, not the absence of scope: "Best Plays" means the best
+  // full-game plays, and a first-quarter market has no call to be best at.
+  const marketKeys = scopeKeys(markets, scope);
+
   const filters: BoardFilters = preset
     ? {
         sport,
+        marketKeys,
         kickoffCutoff: cutoff,
         season: active.season,
         week: active.week,
@@ -142,6 +168,7 @@ export default async function Home({
       }
     : {
         sport,
+        marketKeys,
         kickoffCutoff: cutoff,
         season: active.season,
         week: active.week,
@@ -151,11 +178,20 @@ export default async function Home({
         conferenceName: resolved.conference,
         rankedOnly: resolved.rankedOnly,
         search: resolved.search,
-        edgesOnly: resolved.edgesOnly,
+        // BOTH OF THESE WOULD EMPTY THE FIRST-QUARTER BOARD, and silently.
+        // `edge` and `display_confidence` are NULL for a market that publishes
+        // no call (migration 0068), and `edge >= threshold` is false for NULL —
+        // so EDGES ONLY, whose default comes from `app_config` and may well be
+        // ON, would return nothing and read as "no first-quarter props this
+        // week" rather than as a filter that cannot apply here.
+        edgesOnly: showsCalls ? resolved.edgesOnly : false,
         edgeThreshold: config.edgeThreshold,
-        minConfidence: resolved.minConfidence,
+        minConfidence: showsCalls ? resolved.minConfidence : undefined,
         minOpponentRank: resolved.minOpponentRank,
-        sort: resolved.sort,
+        // Ordering by a column that is NULL on every row is not an order. The
+        // matchup rank is the one thing a first-quarter row can be ranked by
+        // that a reader asked for: softest defense first.
+        sort: showsCalls ? resolved.sort : "opponent_rank",
       };
 
   const view = resolveBoardView(resolved);
@@ -255,7 +291,11 @@ export default async function Home({
       <div className="flex flex-col gap-1">
         <span className="label-caption">Legends Sports · {SPORT_LABEL[sport]}</span>
         <h1 className="text-2xl font-extrabold tracking-tight">
-          {preset ? BOARD_PRESETS[preset].title : "Player Props Board"}
+          {preset
+            ? BOARD_PRESETS[preset].title
+            : scope === "full"
+              ? "Player Props Board"
+              : MARKET_SCOPES[scope].title}
         </h1>
         {/*
           THE SLATE SUMMARY LINE WAS REMOVED HERE, deliberately, and this note
@@ -277,7 +317,19 @@ export default async function Home({
         */}
       </div>
 
-      <WeekStrip weeks={weeks} active={active} basePath={BOARD_PATH} sport={sport} />
+      {MARKET_SCOPES[scope].blurb ? (
+        <p className="text-muted border-border-subtle rounded-xl border px-3 py-2 text-xs">
+          {MARKET_SCOPES[scope].blurb}
+        </p>
+      ) : null}
+
+      <WeekStrip
+        weeks={weeks}
+        active={active}
+        basePath={BOARD_PATH}
+        sport={sport}
+        scope={scope}
+      />
 
       {/* A preset is the ABSENCE of filters, so the day strip goes with the
           rest of them. The week strip stays: it is scope, and without it a
@@ -340,13 +392,15 @@ export default async function Home({
       ) : (
         <BoardControls
           params={resolved}
-          markets={markets}
+          markets={scopedMarkets}
+          allMarkets={markets}
           conferences={conferences}
           games={selectableGames}
           hitRateWindows={config.hitRateWindows}
           resultCount={board.resultCount}
           resultNoun={board.kind === "table" ? "prop" : "player"}
           view={view}
+          showsCalls={showsCalls}
         />
       )}
 
@@ -426,6 +480,7 @@ export default async function Home({
           hitRateWindows={config.hitRateWindows}
           hitRateWindow={resolved.hitRateWindow}
           edgeThreshold={config.edgeThreshold}
+          showsCalls={showsCalls}
         />
       ) : (
         /*

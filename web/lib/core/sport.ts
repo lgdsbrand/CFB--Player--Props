@@ -13,11 +13,17 @@
  * planner ignores.
  *
  * WHEN THE TOGGLE ARRIVES it becomes a URL parameter resolved once per request
- * and threaded through in place of this constant. The FOUR cached reads that
- * currently close over it — `slate-weeks`, `conferences`, the game selector and
- * `defense-ratings` — must take the sport into their cache KEY at that point,
- * or the second sport serves the first one's catalogue for the length of the
- * TTL.
+ * and threaded through in place of this constant. The FIVE cached reads that
+ * currently close over it — `slate-weeks`, `conferences`, the game selector,
+ * `defense-ratings` and `markets` — must take the sport into their cache KEY at
+ * that point, or the second sport serves the first one's catalogue for the
+ * length of the TTL.
+ *
+ * `markets` joined that list on 2026-09-17, when `markets.sport` (migration
+ * 0066) made the catalogue itself differ between the two: the NFL has three
+ * first-quarter markets no college book posts. Its failure is the quiet one —
+ * an NFL board served the college catalogue shows no first-quarter tab and
+ * raises nothing.
  *
  * `defense-ratings` joined that list in N4 and is the one worth naming twice.
  * It reads `defense_position_ratings`, which has no sport column of its own and

@@ -629,7 +629,7 @@ def main(argv: list[str] | None = None) -> int:
                 # but not corrected, so say which those are rather than printing
                 # a scale that was never applied. The MEAN correction has no
                 # such limit — every family can be moved.
-                graded = market_catalogue()
+                graded = market_catalogue(args.sport)
                 if args.first_quarter:
                     graded = [*graded, *first_quarter_catalogue(graded)]
                 fixed_width = {

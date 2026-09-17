@@ -238,6 +238,28 @@ export type PlayerGameLogRow = {
   recYards: number | null;
   recTds: number | null;
   offensiveTds: number | null;
+
+  /**
+   * First-quarter actuals (`player_game_stats.q1_*`, migration 0063).
+   *
+   * NFL ONLY — `build_quarter_stats` derives them from `plays.period` and
+   * verifies them against the box score, and it is run for the NFL alone. Every
+   * college row is null, which `statValue` already reads as "no data" rather
+   * than as a zero.
+   *
+   * NO `q1PassAttempts`, and that is a data fact rather than an omission: an
+   * NFL sack carries the passer's Incompletion row, so first-quarter attempts
+   * cannot be summed from play-by-play. No book posts the market either.
+   */
+  q1PassYards: number | null;
+  q1RushAttempts: number | null;
+  q1RushYards: number | null;
+  q1RushTds: number | null;
+  q1Targets: number | null;
+  q1Receptions: number | null;
+  q1RecYards: number | null;
+  q1RecTds: number | null;
+  q1OffensiveTds: number | null;
 };
 
 /** A market in the catalogue, with the positions it applies to. */
@@ -262,6 +284,29 @@ export type Market = {
   ladderStep: number | null;
   /** Positions this market is offered for, in display order. */
   positions: PositionGroup[];
+  /**
+   * The full-game market this one is a segment of, or null for a market in its
+   * own right (`markets.parent_market_key`, migration 0066).
+   *
+   * A derived market INHERITS ITS PARENT'S POSITIONS rather than carrying
+   * `market_positions` rows of its own, so `positions` above is filled from the
+   * parent — see `readMarkets`. Writing them out separately would be a second
+   * definition of which positions get Q1 receiving yards, free to drift from
+   * the one that decides who gets receiving yards.
+   */
+  parentMarketKey: string | null;
+  /**
+   * Whether any surface may state an OVER/UNDER and a confidence for this
+   * market (`markets.publishes_call`).
+   *
+   * FALSE IS NOT "NO DATA". The distribution is still computed and stored; the
+   * row still carries the book's line, the player's history against it and the
+   * opponent's rank. What it does not carry is our opinion. The first-quarter
+   * markets ship this way at the client's request, 2026-09-17, and because the
+   * Q1 walk measured q1_pass_yards' top bin at 0.94 predicted against 0.71
+   * observed.
+   */
+  publishesCall: boolean;
 };
 
 export type Conference = {

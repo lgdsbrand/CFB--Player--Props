@@ -532,7 +532,7 @@ def run(
             # stored, and the full-game one describes different markets.
             projected = project_slate(
                 AsOf(season=season, week=week, sport=sport),
-                first_quarter_catalogue(market_catalogue()),
+                first_quarter_catalogue(market_catalogue(sport)),
             )
             rows, unprojected = attach_projections(rows, projected, week)
             if unprojected:

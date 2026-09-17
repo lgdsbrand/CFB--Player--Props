@@ -44,9 +44,37 @@ export type BoardCall =
   /** A line exists and the model has taken a side. */
   | { kind: "call"; side: BetSide; confidence: number }
   /** No line to call against — the model's lean, and nothing to measure it on. */
-  | { kind: "lean" };
+  | { kind: "lean" }
+  /**
+   * A market this product states nothing about.
+   *
+   * NOT "no data" AND NOT AN ERROR. The distribution behind the row was
+   * computed and stored like any other; what is withheld is the claim. The row
+   * still carries the book's line, the player's record against it and the
+   * opponent's rank, which for a first-quarter market is the whole of what the
+   * client asked to see (2026-09-17) and the whole of what we can defend: the
+   * Q1 walk put q1_pass_yards' top bin at 0.94 predicted against 0.71 observed,
+   * and the full-game markets it scales from lose to a coin flip against real
+   * closing lines.
+   *
+   * DISTINCT FROM `lean`, which looks similar on screen and means the opposite.
+   * A lean is "the model has a view and no line to measure it against"; this is
+   * "there is a line and the model's view is not for publication". Collapsing
+   * them would make a first-quarter row imply a withheld opinion is coming.
+   */
+  | { kind: "reference" };
 
-export function callFor(row: BoardRow): BoardCall {
+/**
+ * What this row claims, given the market it belongs to.
+ *
+ * THE MARKET IS NOT OPTIONAL FOR CORRECTNESS ANY MORE. `publishes_call` lives
+ * on the catalogue row, not on the board row, so a caller that cannot supply
+ * the market gets the old behaviour — and for every market that publishes a
+ * call, which is all of them but three, that behaviour is identical. Passing it
+ * is what makes a first-quarter row state nothing.
+ */
+export function callFor(row: BoardRow, market?: Pick<Market, "publishesCall">): BoardCall {
+  if (market && !market.publishesCall) return { kind: "reference" };
   if (row.isBinary) return { kind: "binary", probability: row.modelProbOver };
   if (row.hasCall && row.side && row.confidence !== null) {
     return { kind: "call", side: row.side, confidence: row.confidence };
@@ -73,11 +101,22 @@ export function callFor(row: BoardRow): BoardCall {
  */
 export function gradeRow(
   row: Pick<BoardRow, "line" | "side">,
-  market: Pick<Market, "statColumn" | "isBinary"> | undefined,
+  market:
+    | Pick<Market, "statColumn" | "isBinary" | "publishesCall">
+    | undefined,
   games: PlayerGameLogRow[],
 ): GradedGame[] {
-  if (row.line === null || row.side === null || !market) return [];
-  const side: BetSide = market.isBinary ? "over" : row.side;
+  if (row.line === null || !market) return [];
+
+  // A MARKET THAT PUBLISHES NO CALL IS GRADED ON THE OVER, for the same reason
+  // a binary one is, arrived at from the opposite direction. There IS a stored
+  // side on a first-quarter pick — the model computes one like any other — and
+  // colouring the dots by it would publish through the chart exactly the
+  // opinion the row is deliberately withholding. Over is the neutral reading
+  // and the one every props board uses: a green dot means he went over.
+  const graded = market.isBinary || !market.publishesCall;
+  if (!graded && row.side === null) return [];
+  const side: BetSide = graded ? "over" : row.side!;
   return gradeGames(games, market.statColumn, row.line, side);
 }
 
@@ -90,7 +129,9 @@ export function gradeRow(
  */
 export function summariseRow(
   row: Pick<BoardRow, "line" | "side">,
-  market: Pick<Market, "statColumn" | "isBinary"> | undefined,
+  market:
+    | Pick<Market, "statColumn" | "isBinary" | "publishesCall">
+    | undefined,
   games: PlayerGameLogRow[],
   window: number,
 ): HitRateSummary | null {

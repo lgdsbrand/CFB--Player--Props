@@ -48,6 +48,19 @@ const STAT_COLUMN_FIELDS = {
   rec_yards: "recYards",
   rec_tds: "recTds",
   offensive_tds: "offensiveTds",
+
+  // First-quarter markets grade against the same log, one period narrower.
+  // NFL only in practice — every college row is null here, and a null value is
+  // already skipped rather than counted as a miss.
+  q1_pass_yards: "q1PassYards",
+  q1_rush_attempts: "q1RushAttempts",
+  q1_rush_yards: "q1RushYards",
+  q1_rush_tds: "q1RushTds",
+  q1_targets: "q1Targets",
+  q1_receptions: "q1Receptions",
+  q1_rec_yards: "q1RecYards",
+  q1_rec_tds: "q1RecTds",
+  q1_offensive_tds: "q1OffensiveTds",
 } as const satisfies Record<string, keyof PlayerGameLogRow>;
 
 export function statValue(

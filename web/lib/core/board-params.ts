@@ -18,6 +18,11 @@ import type { BoardSort } from "@/lib/data/board";
 // above can keep the alias because they are erased before Node sees them.
 import { POSITION_GROUPS, type PositionGroup } from "./types.ts";
 import { DEFAULT_SPORT, resolveSport, type Sport } from "./sport.ts";
+import {
+  FIRST_QUARTER_SCOPE,
+  resolveMarketScope,
+  type MarketScope,
+} from "./market-scope.ts";
 
 /**
  * How the board lays its results out.
@@ -94,6 +99,15 @@ export type BoardParams = {
    * a lost filter, it looks like an empty or wrong board.
    */
   sport?: Sport;
+  /**
+   * Whole games or one period of them. See `lib/core/market-scope.ts`.
+   *
+   * IN THE URL AND NOT A TAB'S LOCAL STATE, like every other filter, and for a
+   * sharper version of the usual reason: scope changes WHICH MARKETS EXIST, so
+   * losing it on the next click does not look like a dropped filter, it looks
+   * like the first-quarter props vanished.
+   */
+  scope: MarketScope;
   season?: number;
   week?: number;
   position?: PositionGroup;
@@ -162,6 +176,7 @@ export const BOARD_PATH = "/props";
  */
 const BOARD_PARAM_KEYS = [
   "sport",
+  "scope",
   "season", "week", "position", "market", "game", "day", "conference", "q",
   "sort", "edges", "top25", "conf", "rank", "window", "view", "preset", "page",
 ] as const;
@@ -278,6 +293,7 @@ export function parseBoardParams(
 
   return {
     sport: resolveSport(raw.sport),
+    scope: resolveMarketScope(raw.scope),
     season: int(raw.season),
     week: int(raw.week),
     position:
@@ -391,6 +407,10 @@ export function boardHref(
   // First, so a shared URL reads sport-first and so the one parameter that
   // changes which rows exist is the hardest to lose in a truncated link.
   if (next.sport && next.sport !== DEFAULT_SPORT) set("sport", next.sport);
+  // Beside sport and for the same reason: both decide which rows exist at all,
+  // so both belong at the front of a URL that may be truncated in a message.
+  // `full` is the default and is never written.
+  if (next.scope === "q1") set("scope", FIRST_QUARTER_SCOPE);
   set("season", next.season);
   set("week", next.week);
   set("position", next.position);
@@ -440,6 +460,10 @@ export function resetBoardHref(current: BoardParams): string {
       // would look like the reset had emptied the board rather than switched
       // it. Season and week survive for the same reason.
       sport: current.sport,
+      // SCOPE IS NOT A FILTER EITHER. Reset means "show me all of this list",
+      // and a reader clearing filters on the first-quarter board is not asking
+      // to be moved back to the full-game one.
+      scope: current.scope,
       season: current.season,
       week: current.week,
       sort: "edge",

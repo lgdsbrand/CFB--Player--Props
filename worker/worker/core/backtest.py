@@ -467,7 +467,7 @@ def walk_forward(
             "their actuals are derived and verified for the NFL alone "
             "(build_quarter_stats --reconcile)"
         )
-    catalogue = market_catalogue()
+    catalogue = market_catalogue(sport)
     if not catalogue:
         raise RuntimeError("no active markets — did the seed migration run?")
     if first_quarter:

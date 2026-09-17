@@ -6,6 +6,7 @@ import Link from "next/link";
 import { BOARD_PATH, scopedHref } from "@/lib/core/board-params";
 import { formatDateRange } from "@/lib/core/format";
 import type { Sport } from "@/lib/core/sport";
+import type { MarketScope } from "@/lib/core/market-scope";
 import type { SlateWeek } from "@/lib/core/types";
 
 /**
@@ -72,6 +73,7 @@ export function WeekStrip({
   weeks,
   active,
   sport,
+  scope,
   basePath = BOARD_PATH,
 }: {
   weeks: SlateWeek[];
@@ -86,12 +88,26 @@ export function WeekStrip({
    */
   sport: Sport;
   /**
+   * Which half of the catalogue the reader is in, when that is a thing on this
+   * page. See `lib/core/market-scope.ts`.
+   *
+   * THE SAME BUG AS THE MISSING SPORT ABOVE, one parameter along. Without it,
+   * pressing WEEK 3 on the first-quarter board lands on the full-game board for
+   * week 3 — a well-formed page of a different list, which is what makes this
+   * shape so hard to spot. Omitted entirely for the default scope, so every
+   * link the games index and the college board build is byte-identical to
+   * before.
+   */
+  scope?: MarketScope;
+  /**
    * Where a week card links. The strip appears above the board and above the
    * games index, and each must keep the reader on the page they are already on
    * — changing the week should not also change what they are looking at.
    */
   basePath?: string;
 }) {
+  // `scopedHref` omits an undefined extra rather than writing `scope=`.
+  const extras = { scope: scope === "q1" ? scope : undefined };
   const nav = useRef<HTMLElement>(null);
   const current = useRef<HTMLAnchorElement>(null);
   const [expanded, setExpanded] = useState(false);
@@ -148,7 +164,11 @@ export function WeekStrip({
             return (
               <Link
                 key={season}
-                href={scopedHref(basePath, { sport, season, week: landing.week })}
+                href={scopedHref(
+                  basePath,
+                  { sport, season, week: landing.week },
+                  extras,
+                )}
                 aria-current={isActive ? "true" : undefined}
                 className={
                   "rounded-full border px-2.5 py-1 text-[0.6875rem] font-bold tabular-nums transition-colors " +
@@ -176,11 +196,11 @@ export function WeekStrip({
             <Link
               key={`${week.season}-${week.week}`}
               ref={isActive ? current : undefined}
-              href={scopedHref(basePath, {
-                sport,
-                season: week.season,
-                week: week.week,
-              })}
+              href={scopedHref(
+                basePath,
+                { sport, season: week.season, week: week.week },
+                extras,
+              )}
               aria-current={isActive ? "page" : undefined}
               className={
                 "flex min-w-30 shrink-0 flex-col gap-0.5 rounded-xl border px-3 py-2 transition-colors " +

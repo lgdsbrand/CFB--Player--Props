@@ -5,10 +5,11 @@ import {
   formatAmericanOdds,
   formatConfidence,
   formatEdge,
+  formatLine,
   meetsEdgeThreshold,
 } from "@/lib/core/format";
 import type { HitRateSummary } from "@/lib/core/hit-rate";
-import type { BoardRow } from "@/lib/core/types";
+import type { BoardRow, Market } from "@/lib/core/types";
 
 /**
  * One market's sub-card inside a player card.
@@ -25,22 +26,41 @@ import type { BoardRow } from "@/lib/core/types";
  * plainly. College books post props on Thursday or Friday for Saturday games,
  * so for most of a live week most yardage markets have no line — that is the
  * behaviour CLAUDE.md §7 requires, not a degraded state to apologise for.
+ *
+ * A THIRD STATE, FOR A MARKET THIS PRODUCT STATES NOTHING ABOUT. First-quarter
+ * markets publish no call (`markets.publishes_call`), so the sub-card leads
+ * with the BOOK'S LINE where the call would be, and everything below it that
+ * derives from the withheld probability — the projected-vs-line bar, the edge —
+ * is omitted rather than dimmed. What remains is the line, the book's two-way
+ * price and the player's own record against that line, which is exactly the
+ * three things the client said he would read (2026-09-17).
+ *
+ * The omissions are the point. A greyed-out edge still tells a reader an edge
+ * was computed and would invite them to wonder what it said.
  */
 export function MarketRow({
   row,
+  market,
   hitRate,
   hitRateWindow,
   edgeThreshold,
 }: {
   row: BoardRow;
+  /**
+   * The catalogue row, for `publishes_call`. Optional only because the board
+   * row carries its own market label and a missing catalogue entry should not
+   * blank a card — absent, the sub-card behaves exactly as it always has.
+   */
+  market: Market | undefined;
   hitRate: HitRateSummary | null;
   hitRateWindow: number;
   edgeThreshold: number;
 }) {
   const isEdge = meetsEdgeThreshold(row.edge, edgeThreshold);
-  // The three states live in the core so the table renders the same ones — the
+  // The four states live in the core so the table renders the same ones — the
   // anytime-TD inversion below is too easy to get independently wrong twice.
-  const call = callFor(row);
+  const call = callFor(row, market);
+  const statesNothing = call.kind === "reference";
 
   return (
     <div className="panel-inset flex flex-col gap-2.5 p-3">
@@ -50,7 +70,9 @@ export function MarketRow({
           {row.marketLabel ?? row.marketName}
         </span>
 
-        {call.kind === "binary" ? (
+        {call.kind === "reference" ? (
+          <BookLine line={row.line} unit={market?.unit ?? null} />
+        ) : call.kind === "binary" ? (
           <BinaryProbability probability={call.probability} />
         ) : call.kind === "call" ? (
           <span className="flex items-center gap-2">
@@ -79,7 +101,7 @@ export function MarketRow({
         render as "unavailable" on every card. `markets.is_binary` exists as
         exactly this display hint.
       */}
-      {row.isBinary ? null : (
+      {row.isBinary || statesNothing ? null : (
         <ProjectionBar
           median={row.projectedMedian}
           p10={row.projectedP10}
@@ -106,7 +128,7 @@ export function MarketRow({
           )}
         </span>
 
-        {row.edge !== null ? (
+        {row.edge !== null && !statesNothing ? (
           <span
             className={
               "font-mono text-[0.6875rem] font-bold tabular-nums " +
@@ -120,12 +142,46 @@ export function MarketRow({
 
       <LastFive
         summary={hitRate}
-        side={row.isBinary ? "over" : row.side}
+        side={row.isBinary || statesNothing ? "over" : row.side}
         window={hitRateWindow}
         verb={row.isBinary ? "scored" : undefined}
         season={row.season}
       />
     </div>
+  );
+}
+
+/**
+ * The headline for a market that publishes no call: the book's number.
+ *
+ * It takes the slot the confidence percentage occupies on every other sub-card,
+ * and takes it deliberately. The client reads this board line-first — "I'm
+ * going to look at books line, their last 5/10 hit rate, what the defense might
+ * give up in 1st quarter and then play whatever" — so the line IS the headline
+ * here, not a footnote under a number we are not printing.
+ *
+ * No gradient. The cyan-to-indigo fill marks numbers this product is claiming
+ * (CLAUDE.md §7); a book's line is a fact we are relaying, and dressing it in
+ * the house accent would read as ours.
+ */
+function BookLine({ line, unit }: { line: number | null; unit: string | null }) {
+  if (line === null) {
+    return <span className="pill bg-panel text-muted">No line yet</span>;
+  }
+  return (
+    <span className="flex items-baseline gap-1.5">
+      <span className="text-dim text-[0.625rem] font-semibold uppercase tracking-label">
+        Line
+      </span>
+      <span className="text-lg font-extrabold leading-none tabular-nums">
+        {formatLine(line)}
+      </span>
+      {unit ? (
+        <span className="text-dim text-[0.625rem] font-semibold uppercase tracking-label">
+          {unit}
+        </span>
+      ) : null}
+    </span>
   );
 }
 

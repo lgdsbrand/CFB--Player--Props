@@ -76,6 +76,7 @@ export function BoardTable({
   hitRateWindows,
   hitRateWindow,
   edgeThreshold,
+  showsCalls = true,
 }: {
   rows: BoardRow[];
   marketsByKey: Map<string, Market>;
@@ -85,12 +86,28 @@ export function BoardTable({
   /** The window the detail's last-N dot row uses — the HIT RATE pill group. */
   hitRateWindow: number;
   edgeThreshold: number;
+  /**
+   * Whether this list's markets publish a call at all.
+   *
+   * THE COLUMNS GO, THEY DO NOT GO GREY. On the first-quarter board every
+   * market has `publishes_call = false`, so CHANCE, PROJ and EDGE would be a
+   * dash on every row from top to bottom — three columns of nothing, pushing
+   * the numbers the reader came for further off the side of a table that
+   * already scrolls below 1000px. A column of dashes also still says a figure
+   * was computed and is being withheld, which invites exactly the question the
+   * omission exists to close.
+   *
+   * A table-level decision because scope filters the rows, so a list is all
+   * calls or none. The cells guard themselves as well, so a mixed list — which
+   * the scope makes impossible today — degrades to dashes rather than leaking.
+   */
+  showsCalls?: boolean;
 }) {
   // Nine fixed columns — expander, player, prop, chance, proj, edge, odds, szn,
   // opp rk — plus one per configured hit-rate window. Derived rather than
   // written as a literal because the detail row spans it, and a colSpan that
   // drifts from the header is invisible until a column is added.
-  const columnCount = 9 + hitRateWindows.length;
+  const columnCount = (showsCalls ? 9 : 6) + hitRateWindows.length;
 
   return (
     <div className="panel overflow-hidden">
@@ -129,15 +146,19 @@ export function BoardTable({
               <th scope="col" className="py-2.5 pr-3 font-semibold">
                 Prop
               </th>
-              <th scope="col" className="py-2.5 pr-3 text-right font-semibold">
-                Chance
-              </th>
-              <th scope="col" className="py-2.5 pr-3 text-right font-semibold">
-                Proj
-              </th>
-              <th scope="col" className="py-2.5 pr-3 text-right font-semibold">
-                Edge
-              </th>
+              {showsCalls ? (
+                <>
+                  <th scope="col" className="py-2.5 pr-3 text-right font-semibold">
+                    Chance
+                  </th>
+                  <th scope="col" className="py-2.5 pr-3 text-right font-semibold">
+                    Proj
+                  </th>
+                  <th scope="col" className="py-2.5 pr-3 text-right font-semibold">
+                    Edge
+                  </th>
+                </>
+              ) : null}
               <th scope="col" className="py-2.5 pr-3 font-semibold">
                 Odds
               </th>
@@ -179,6 +200,7 @@ export function BoardTable({
                 hitRateWindow={hitRateWindow}
                 edgeThreshold={edgeThreshold}
                 columnCount={columnCount}
+                showsCalls={showsCalls}
                 striped={index % 2 === 1}
               />
             ))}
@@ -197,6 +219,7 @@ function PropRow({
   hitRateWindow,
   edgeThreshold,
   columnCount,
+  showsCalls,
   striped,
 }: {
   row: BoardRow;
@@ -206,9 +229,10 @@ function PropRow({
   hitRateWindow: number;
   edgeThreshold: number;
   columnCount: number;
+  showsCalls: boolean;
   striped: boolean;
 }) {
-  const call = callFor(row);
+  const call = callFor(row, market);
 
   // GRADED ONCE, then sliced per column. The card grades per market because it
   // shows one window; this shows three, and re-running `gradeGames` for each
@@ -230,15 +254,22 @@ function PropRow({
           <td className="py-2 pr-3 align-middle">
             <PropCell row={row} call={call} />
           </td>
-          <td className="py-2 pr-3 text-right align-middle">
-            <ChanceCell call={call} />
-          </td>
-          <td className="text-muted py-2 pr-3 text-right align-middle font-mono text-xs tabular-nums">
-            <ProjCell row={row} />
-          </td>
-          <td className="py-2 pr-3 text-right align-middle">
-            <EdgeCell edge={row.edge} edgeThreshold={edgeThreshold} />
-          </td>
+          {showsCalls ? (
+            <>
+              <td className="py-2 pr-3 text-right align-middle">
+                <ChanceCell call={call} />
+              </td>
+              <td className="text-muted py-2 pr-3 text-right align-middle font-mono text-xs tabular-nums">
+                <ProjCell row={row} call={call} />
+              </td>
+              <td className="py-2 pr-3 text-right align-middle">
+                <EdgeCell
+                  edge={call.kind === "reference" ? null : row.edge}
+                  edgeThreshold={edgeThreshold}
+                />
+              </td>
+            </>
+          ) : null}
           <td className="py-2 pr-3 align-middle">
             <OddsCell row={row} />
           </td>
@@ -282,6 +313,14 @@ function PlayerCell({ row }: { row: BoardRow }) {
             sport: row.sport,
             season: row.season,
             week: row.week,
+            // THE ROW IS A PLAYER-MARKET, so the link opens on that market
+            // rather than on whichever one sorts first. Without it, clicking a
+            // Q1 REC YDS row opened the player on PASS YDS — a full-game market
+            // leading with a call, which is the opposite of the list the reader
+            // was just in. It is the more faithful link for every market; the
+            // first-quarter scope is only where it became wrong rather than
+            // merely surprising.
+            market: row.marketKey,
           })}
           className="hover:text-accent-cyan truncate text-xs font-bold transition-colors"
         >
@@ -427,7 +466,17 @@ function ChanceCell({ call }: { call: ReturnType<typeof callFor> }) {
  * Binary markets get a dash: p10 and p90 collapse onto the same point, so there
  * is no meaningful projected count to print beside a probability.
  */
-function ProjCell({ row }: { row: BoardRow }) {
+function ProjCell({
+  row,
+  call,
+}: {
+  row: BoardRow;
+  call: ReturnType<typeof callFor>;
+}) {
+  // The projected median IS the withheld number for a market that publishes no
+  // call — printing it here would hand back through a side column exactly what
+  // the CHANCE column is declining to state.
+  if (call.kind === "reference") return <>—</>;
   if (row.isBinary) return <>—</>;
   const median = displayQuantile(row.projectedMedian);
   return <>{median === null ? "—" : formatLine(median)}</>;
@@ -561,9 +610,14 @@ function RowDetail({
   });
   const gameLine = formatGameLine(row.teamSpread, row.gameTotal);
 
+  // Same rule the summary row follows: a market that publishes no call shows no
+  // projected range either. The bar draws the projection AGAINST the line, so
+  // it is the withheld claim in picture form.
+  const statesNothing = call.kind === "reference";
+
   return (
     <div className="panel-inset flex flex-col gap-2.5 p-3">
-      {row.isBinary ? null : (
+      {row.isBinary || statesNothing ? null : (
         <ProjectionBar
           median={row.projectedMedian}
           p10={row.projectedP10}
@@ -575,7 +629,7 @@ function RowDetail({
 
       <LastFive
         summary={graded.length > 0 ? hitRate(graded, hitRateWindow) : null}
-        side={row.isBinary ? "over" : row.side}
+        side={row.isBinary || statesNothing ? "over" : row.side}
         window={hitRateWindow}
         verb={row.isBinary ? "scored" : undefined}
         season={row.season}
@@ -600,7 +654,12 @@ function RowDetail({
         {venue ? (
           <span className="text-dim truncate text-[0.625rem]">{venue}</span>
         ) : null}
-        {call.kind === "lean" ? (
+        {statesNothing ? (
+          <span className="text-dim text-[0.625rem]">
+            No model call on first-quarter markets — the line and the record
+            against it are the numbers here.
+          </span>
+        ) : call.kind === "lean" ? (
           <span className="text-dim text-[0.625rem]">
             No book line yet — the range above is the model&rsquo;s lean.
           </span>
@@ -612,6 +671,14 @@ function RowDetail({
             sport: row.sport,
             season: row.season,
             week: row.week,
+            // THE ROW IS A PLAYER-MARKET, so the link opens on that market
+            // rather than on whichever one sorts first. Without it, clicking a
+            // Q1 REC YDS row opened the player on PASS YDS — a full-game market
+            // leading with a call, which is the opposite of the list the reader
+            // was just in. It is the more faithful link for every market; the
+            // first-quarter scope is only where it became wrong rather than
+            // merely surprising.
+            market: row.marketKey,
           })}
           className="text-accent-cyan ml-auto shrink-0 text-[0.625rem] font-bold uppercase tracking-label hover:underline"
         >

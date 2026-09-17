@@ -67,7 +67,7 @@ const EXPECTED = {
     "conference_is_displayed", "display_confidence", "effective_sample",
     "venue_name", "venue_city", "venue_state",
     "team_spread", "game_total", "game_line_providers",
-    "team_poll_rank", "opponent_poll_rank", "sport",
+    "team_poll_rank", "opponent_poll_rank", "sport", "publishes_call",
     // Selected only by the player-detail query, never the board page — but named
     // here all the same. This guard exists to catch a column that vanished
     // underneath hand-written types, and a column read on one route only is
@@ -81,6 +81,13 @@ const EXPECTED = {
     "pass_attempts", "pass_completions", "pass_yards", "pass_tds",
     "interceptions", "rush_attempts", "rush_yards", "rush_tds", "targets",
     "receptions", "rec_yards", "rec_tds", "offensive_tds",
+    // NFL-only in the data and read for both sports, because a null here means
+    // "this league has no first-quarter actuals" and the reader already treats
+    // it that way. No q1_pass_attempts: a sack carries the passer's
+    // Incompletion row, so it cannot be summed from play-by-play.
+    "q1_pass_yards", "q1_rush_attempts", "q1_rush_yards", "q1_rush_tds",
+    "q1_targets", "q1_receptions", "q1_rec_yards", "q1_rec_tds",
+    "q1_offensive_tds",
   ],
   v_defense_position_game_log: [
     "split_id", "game_id", "defense_team_id", "offense_team_id",
@@ -159,9 +166,13 @@ const EXPECTED = {
   ],
   // `ladder_step` backs the alternate-line ladder AND the hit-rate chart's
   // line stepper; null on binary markets and only there.
+  // `sport` is FILTERED ON, not rendered, and is listed here for exactly that
+  // reason: a predicate on a column the anon role cannot see fails the same way
+  // a missing select column does, and silently.
   markets: [
     "key", "display_name", "short_label", "emoji", "stat_column", "is_binary",
     "default_line", "unit", "sort_order", "is_active", "ladder_step",
+    "sport", "parent_market_key", "publishes_call",
   ],
   market_positions: ["market_key", "position_group", "sort_order"],
   conferences: ["id", "name", "abbreviation", "is_displayed", "sport"],

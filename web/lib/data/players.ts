@@ -24,7 +24,13 @@ const COLUMNS =
   "neutral_site, " +
   "pass_attempts, pass_completions, pass_yards, pass_tds, interceptions, " +
   "rush_attempts, rush_yards, rush_tds, targets, receptions, rec_yards, " +
-  "rec_tds, offensive_tds";
+  "rec_tds, offensive_tds, " +
+  // First-quarter actuals (migration 0063), read for BOTH sports though only
+  // the NFL has them. Branching the column list on sport would mean two shapes
+  // for one row type and a mapper that has to guess which it was handed; a
+  // college row simply comes back null here, which is what it means.
+  "q1_pass_yards, q1_rush_attempts, q1_rush_yards, q1_rush_tds, q1_targets, " +
+  "q1_receptions, q1_rec_yards, q1_rec_tds, q1_offensive_tds";
 
 /**
  * One player's completed games, most recent first.
@@ -247,5 +253,15 @@ function toGameLogRow(row: Record<string, unknown>): PlayerGameLogRow {
     recYards: n("rec_yards"),
     recTds: n("rec_tds"),
     offensiveTds: n("offensive_tds"),
+
+    q1PassYards: n("q1_pass_yards"),
+    q1RushAttempts: n("q1_rush_attempts"),
+    q1RushYards: n("q1_rush_yards"),
+    q1RushTds: n("q1_rush_tds"),
+    q1Targets: n("q1_targets"),
+    q1Receptions: n("q1_receptions"),
+    q1RecYards: n("q1_rec_yards"),
+    q1RecTds: n("q1_rec_tds"),
+    q1OffensiveTds: n("q1_offensive_tds"),
   };
 }

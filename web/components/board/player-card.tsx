@@ -53,6 +53,10 @@ export function PlayerCard({
     sport: card.markets[0].sport,
     season: card.markets[0].season,
     week: card.markets[0].week,
+    // The card's LEADING market, which is the one the sort put it here for —
+    // and, on the first-quarter board, the only kind of market the card holds.
+    // Landing on a market the card does not show is a link to somewhere else.
+    market: card.markets[0].marketKey,
   });
 
   return (
@@ -197,6 +201,7 @@ export function PlayerCard({
           <MarketRow
             key={row.projectionId}
             row={row}
+            market={marketsByKey.get(row.marketKey)}
             hitRate={summariseRow(
               row,
               marketsByKey.get(row.marketKey),

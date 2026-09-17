@@ -80,10 +80,13 @@ export function FilterFields({
   params,
   conferences,
   games,
+  showsCalls = true,
 }: {
   params: BoardParams;
   conferences: Conference[];
   games: GameSummary[];
+  /** See `BoardControls` — a filter that cannot apply is not rendered. */
+  showsCalls?: boolean;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -247,20 +250,25 @@ export function FilterFields({
         </Select>
       </Field>
 
-      <Field label="Min confidence">
-        <Select
-          name="conf"
-          value={fields.conf}
-          onChange={(value) => setChoice({ conf: value })}
-        >
-          <option value="">Any</option>
-          <option value="0.55">55%</option>
-          <option value="0.6">60%</option>
-          <option value="0.65">65%</option>
-          <option value="0.7">70%</option>
-          <option value="0.8">80%</option>
-        </Select>
-      </Field>
+      {/* Removed, not disabled, on a board whose markets publish no confidence
+          — see `showsCalls`. A dropdown offering 55% through 80% where every
+          row's confidence is NULL would empty the board at the first choice. */}
+      {showsCalls ? (
+        <Field label="Min confidence">
+          <Select
+            name="conf"
+            value={fields.conf}
+            onChange={(value) => setChoice({ conf: value })}
+          >
+            <option value="">Any</option>
+            <option value="0.55">55%</option>
+            <option value="0.6">60%</option>
+            <option value="0.65">65%</option>
+            <option value="0.7">70%</option>
+            <option value="0.8">80%</option>
+          </Select>
+        </Field>
+      ) : null}
 
       {/*
         Rank 1 is the BEST defense, so the soft matchups this filter exists

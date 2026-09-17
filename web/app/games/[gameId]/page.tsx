@@ -70,7 +70,7 @@ export default async function GamePage({
     getAppConfig(),
     // Only for the display order of a player's markets. Cached seed data, so
     // this costs a map lookup rather than a round trip on most requests.
-    getMarkets(),
+    getMarkets(game.sport),
     getDefenseRatings(game.season, game.week, game.sport),
     // Every row for this game across both teams: ~140 on the largest game so
     // far, comfortably inside PostgREST's cap. `total` is checked below rather
@@ -84,6 +84,16 @@ export default async function GamePage({
       displayedConferencesOnly: false,
       limit: 1000,
       sort: "confidence",
+      // THIS TABLE IS A LIST OF CALLS — line, projection, side, confidence,
+      // edge. A first-quarter row publishes none of those (migration 0068), so
+      // it would sit here as a line beside four dashes, sorted by a confidence
+      // it does not have. The board offers the first-quarter list behind its
+      // own control; this page has no such control and should not half-show it.
+      //
+      // Filtered in the QUERY and not after it: this read is capped at 1,000
+      // rows and `truncated` is checked against the total, so dropping rows in
+      // the page would silently shrink a slate the cap had already cut.
+      publishesCallOnly: true,
     }),
     // Joins the existing wave rather than forming its own. A wave costs one
     // round trip whatever its width, so this read is effectively free here and

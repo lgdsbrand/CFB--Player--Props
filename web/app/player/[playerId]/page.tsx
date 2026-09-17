@@ -18,6 +18,7 @@ import { SiteHeader } from "@/components/site-header";
 import { BOARD_PATH, scopedHref, type RawParams } from "@/lib/core/board-params";
 import { defenseStatForMarket, rankBasis } from "@/lib/core/defense-view";
 import { isSupabaseConfigured } from "@/lib/core/env";
+import { isDerived } from "@/lib/core/market-scope";
 import { evidenceFor } from "@/lib/core/evidence";
 import {
   formatAmericanOdds,
@@ -407,8 +408,24 @@ export default async function PlayerDetail({
             {activeRow.line === null ? (
               <p className="text-muted max-w-prose text-xs">
                 No line posted for this market yet, so there is nothing to grade
-                past games against. The projected range below is the model&rsquo;s
-                lean; the call and confidence fill in when a book posts.
+                past games against.{" "}
+                {/* Explicit, not a literal space: a space that follows an
+                    expression OPENING a line is dropped by the JSX transform. */}
+                {statesCall ? (
+                  <>
+                    The projected range below is the model&rsquo;s lean; the call
+                    and confidence fill in when a book posts.
+                  </>
+                ) : (
+                  // THE FULL-GAME SENTENCE PROMISES TWO THINGS THAT WILL NEVER
+                  // ARRIVE HERE: there is no projected range below (the panel is
+                  // not rendered for a market that publishes no call), and the
+                  // call never fills in — that is the decision, not a wait.
+                  <>
+                    Only DraftKings posts first-quarter lines, and it posts them
+                    late; the record against the line appears here once one does.
+                  </>
+                )}
               </p>
             ) : (
               <HitRateChart
@@ -563,6 +580,7 @@ export default async function PlayerDetail({
 
           <Odds
             row={activeRow}
+            market={activeMarket}
             quotes={quotes.filter((q) => q.marketKey === activeRow.marketKey)}
           />
 
@@ -740,9 +758,11 @@ function Call({ row, market }: { row: BoardRow; market: Market | undefined }) {
 
 function Odds({
   row,
+  market,
   quotes,
 }: {
   row: BoardRow;
+  market: Market | undefined;
   quotes: Awaited<ReturnType<typeof getPlayerQuotes>>;
 }) {
   return (
@@ -750,8 +770,18 @@ function Odds({
       <h2 className="section-header">Odds (book)</h2>
       {quotes.length === 0 ? (
         <p className="text-muted text-xs">
-          No book has posted this market. College props go up Thursday or Friday
-          for Saturday games, so an empty panel early in the week is expected.
+          No book has posted this market.{" "}
+          {/* THREE DIFFERENT REASONS A PANEL IS EMPTY, and the page was giving
+              every reader the college one — telling an NFL reader about
+              Saturday games. Keyed on the MARKET and not just the sport,
+              because the first-quarter caveat is about those markets rather
+              than about the league: DraftKings is the only book that posts
+              them at all (probed 2026-09-09). */}
+          {market && isDerived(market)
+            ? "First-quarter lines come from DraftKings alone and go up close to kickoff, so an empty panel earlier in the week is expected."
+            : row.sport === "nfl"
+              ? "NFL props go up through the week, so an empty panel a few days out is expected."
+              : "College props go up Thursday or Friday for Saturday games, so an empty panel early in the week is expected."}
         </p>
       ) : (
         <table className="w-full border-collapse text-left text-xs">

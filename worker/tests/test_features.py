@@ -71,22 +71,37 @@ def populated_week(conn):
     """
     row = conn.execute(
         """
+        -- FULL-INGEST SEASONS, DERIVED ONCE. This was an EXISTS correlated on
+        -- `g.season`, which the planner cannot hoist: it ran a sequential scan
+        -- of `plays` (435k rows) for each of ~1,200 candidate games, and the
+        -- fixture took over two minutes -- once per test that asks for it. That
+        -- is what made the suite look deadlocked; there was never a second
+        -- pytest session to blame.
+        --
+        -- The rewrite is a transformation, not an approximation: the EXISTS is
+        -- true for a game exactly when its (season, sport) appears in this set,
+        -- so computing the set once and joining gives the same answer in one
+        -- pass. Six pairs today, 1.8s against 120s+.
+        --
+        -- STILL NOT A JOIN TO `plays` ITSELF, for the original reason: joining
+        -- games to plays on season alone multiplies each game by every play in
+        -- that season, 300k+ rows of cartesian product. The DISTINCT is what
+        -- keeps this a set of seasons rather than a set of plays.
+        --
+        -- STILL SCOPED TO THE SPORT. `plays` has no sport column, and matching
+        -- on season alone made an NFL-only season look like a full-ingest
+        -- college one the moment N4 landed NFL play-by-play -- so the sport
+        -- comes off the play's own GAME, on both sides.
+        with ingested as (
+          select distinct p.season, pg.sport
+            from plays p
+            join games pg on pg.id = p.game_id
+        )
         select g.season, g.week, count(*) as games
           from games g
+          join ingested i on i.season = g.season and i.sport = g.sport
          where g.week >= 4
            and g.sport = 'cfb'
-           -- full-ingest seasons only. EXISTS, not a join: joining games to
-           -- plays on season alone multiplies each game by every play in that
-           -- season, which is 300k+ rows of cartesian product.
-           --
-           -- THE EXISTS IS SCOPED TO THE SPORT TOO. `plays` has no sport column
-           -- and matching on season alone made an NFL-only season look like a
-           -- full-ingest college one the moment N4 landed NFL play-by-play.
-           and exists (
-             select 1 from plays p
-               join games pg on pg.id = p.game_id and pg.sport = g.sport
-              where p.season = g.season
-           )
          group by g.season, g.week
          order by count(*) desc, g.season desc
          limit 1
@@ -531,16 +546,20 @@ class TestOpeningWeekFrame:
     def opening_week(self, conn):
         row = conn.execute(
             """
+            -- Both season sets derived once rather than re-scanned per
+            -- candidate game, for the reason `populated_week` spells out: a
+            -- correlated EXISTS over `player_game_stats` (111k rows) cannot be
+            -- hoisted by the planner.
+            with stat_seasons as (
+              select distinct season from player_game_stats
+            ), roster_seasons as (
+              select distinct season from player_team_seasons
+            )
             select g.season
               from games g
              where g.week = 1
-               and exists (
-                     select 1 from player_game_stats s
-                      where s.season = g.season - 1
-                   )
-               and exists (
-                     select 1 from player_team_seasons r where r.season = g.season
-                   )
+               and g.season - 1 in (select season from stat_seasons)
+               and g.season in (select season from roster_seasons)
              group by g.season
              order by g.season desc
              limit 1
@@ -606,15 +625,20 @@ class TestPriorScoringRecord:
     def season_with_prior_plays(self, conn):
         row = conn.execute(
             """
+            -- Same hoist as `populated_week`, same reason.
+            with ingested as (
+              select distinct p.season, pg.sport
+                from plays p
+                join games pg on pg.id = p.game_id
+            )
             select g.season
               from games g
              where g.sport = 'cfb'
                -- Same sport on both sides of the season-1 lookup, for the
                -- reason spelled out in the schema-drift test above.
                and exists (
-                 select 1 from plays p
-                   join games pg on pg.id = p.game_id and pg.sport = g.sport
-                  where p.season = g.season - 1
+                 select 1 from ingested i
+                  where i.season = g.season - 1 and i.sport = g.sport
                )
              group by g.season
              order by g.season desc

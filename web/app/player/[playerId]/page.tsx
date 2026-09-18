@@ -8,6 +8,8 @@ import { TeamChip } from "@/components/board/team-chip";
 import { WeatherPanel } from "@/components/games/weather-panel";
 import { NotConfigured } from "@/components/not-configured";
 import { DefenseDetail } from "@/components/player/defense-detail";
+import { DefenseTendencies } from "@/components/player/defense-tendencies";
+import { sportHasCharting } from "@/lib/core/charting-view";
 import { GameLogTable } from "@/components/player/game-log-table";
 import { GameTabs } from "@/components/player/game-tabs";
 import { HitRateChart } from "@/components/player/hit-rate-chart";
@@ -60,6 +62,7 @@ import { getPlayerBoardRows } from "@/lib/data/board";
 import { getMarkets } from "@/lib/data/catalogue";
 import { getAppConfig } from "@/lib/data/config";
 import {
+  getDefenseCharting,
   getDefenseGameLog,
   getDefenseRanksAt,
   getDefenseRatings,
@@ -218,8 +221,10 @@ export default async function PlayerDetail({
     activeRow.positionGroup ?? (await getPlayerIdentity(playerId))?.positionGroup;
   if (!position) notFound();
 
-  const [gameLog, quotes, aiRead, ratings, defenseGames, conditions] =
-    await Promise.all([
+  const [
+    gameLog, quotes, aiRead, ratings, defenseGames, conditions,
+    { charting, fieldSize: chartingFieldSize },
+  ] = await Promise.all([
       getPlayerGameLog(playerId, {
         season: active.season,
         before: active.week,
@@ -243,6 +248,13 @@ export default async function PlayerDetail({
       // trip whatever its width, so the conditions read is effectively free
       // here and would cost a full ~415ms as a sixth wait.
       getGameConditions(activeRow.gameId),
+      // Same reasoning, and skipped outright for a sport with no charting so
+      // the college page does not pay for a table that is empty for it.
+      sportHasCharting(activeRow.sport)
+        ? getDefenseCharting(
+            activeRow.opponentTeamId, active.season, active.week,
+          )
+        : Promise.resolve({ charting: null, fieldSize: 0 }),
     ]);
 
   // Binary markets grade on the OVER whatever the call was, so a green bar
@@ -577,6 +589,26 @@ export default async function PlayerDetail({
             }
             asOfWeek={active.week}
           />
+
+          {/*
+            DIRECTLY UNDER THE DEFENSE PANEL, because it is the other half of
+            the same question and the two must be read together: that panel is
+            what the opponent CONCEDES, this is what it DOES. Rendered only
+            where a charting source exists, so the college page is unchanged
+            rather than carrying an empty panel all season.
+          */}
+          {sportHasCharting(activeRow.sport) ? (
+            <section className="panel flex flex-col gap-3 p-4">
+              <h2 className="section-header">Opponent tendencies</h2>
+              <DefenseTendencies
+                charting={charting}
+                fieldSize={chartingFieldSize}
+                opponentLabel={
+                  activeRow.opponentAbbreviation ?? activeRow.opponentSchool
+                }
+              />
+            </section>
+          ) : null}
 
           <WeatherPanel conditions={conditions} />
 

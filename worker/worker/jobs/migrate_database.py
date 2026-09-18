@@ -132,6 +132,15 @@ PLAN: tuple[TableSpec, ...] = (
                                        "where lookahead bias creeps in (CLAUDE.md §4)."),
     TableSpec("defense_position_game_splits", "Powers the defense-detail view."),
     TableSpec("defense_position_ratings", "Opponent-adjusted defensive ranks."),
+    # IN THE PLAN RATHER THAN SKIPPED, though `nfl_ingest_charting` rebuilds
+    # both in about thirty seconds from a free asset. Same call as `game_lines`
+    # and `team_poll_rankings` above: cheap to move (about 5,000 rows for four
+    # seasons), and moving them means the board's Blitz column is populated the
+    # moment the site is rather than at the next cron.
+    TableSpec("defense_charting_game_splits", "What a defense DID per game, "
+                                              "from FTN charting. NFL only."),
+    TableSpec("defense_charting_ratings", "Point-in-time blitz rate and box "
+                                          "counts, and the blitz rank."),
     TableSpec("player_prop_lines", "IRREPLACEABLE. 5,752 bought closing lines that "
                                    "cannot be re-purchased."),
     TableSpec("projections", "Rebuildable by run_projections, but moving them means "

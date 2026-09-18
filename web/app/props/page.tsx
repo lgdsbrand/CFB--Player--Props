@@ -57,8 +57,12 @@ import {
   marketsInScope,
   scopeKeys,
 } from "@/lib/core/market-scope";
+import { sportHasCharting } from "@/lib/core/charting-view";
 import { getAppConfig } from "@/lib/data/config";
-import { getDefenseRatings } from "@/lib/data/defense";
+import {
+  getChartingFieldSize,
+  getDefenseRatings,
+} from "@/lib/data/defense";
 import { getGameLogsByPlayer } from "@/lib/data/players";
 import { findWeek, getSlateGames, getSlateWeeks } from "@/lib/data/slate";
 import { getTeamDirectory } from "@/lib/data/teams";
@@ -245,7 +249,7 @@ export default async function Home({
       ? await loadTable(boardFilters, resolved.page, rowsPerPage(resolved))
       : await loadCards(boardFilters, resolved.page);
 
-  const [gameLogs, teamDirectory] = await Promise.all([
+  const [gameLogs, teamDirectory, chartingFieldSize] = await Promise.all([
     getGameLogsByPlayer(board.playerIds, {
       season: active.season,
       before: active.week,
@@ -255,6 +259,11 @@ export default async function Home({
       active.season,
       games.flatMap((game) => [game.homeTeamId, game.awayTeamId]),
     ),
+    // The blitz style band is a third of the RATED FIELD, which the page's own
+    // rows cannot supply because they are a filtered subset. Skipped entirely
+    // for a sport with no charting rather than reading a table that is empty
+    // for it — see `sportHasCharting`.
+    sportHasCharting(sport) ? getChartingFieldSize(active.season, active.week) : 0,
   ]);
 
   const { page, totalPages } = board;
@@ -481,6 +490,7 @@ export default async function Home({
           hitRateWindow={resolved.hitRateWindow}
           edgeThreshold={config.edgeThreshold}
           showsCalls={showsCalls}
+          chartingFieldSize={chartingFieldSize}
         />
       ) : (
         /*

@@ -199,6 +199,26 @@ export type BoardRow = {
   opponentQ1RushYardsAllowedPg: number | null;
   opponentQ1RecYardsAllowedPg: number | null;
 
+  /**
+   * What this week's opponent DOES, as opposed to what it concedes
+   * (migration 0072). NFL only — there is no college charting source.
+   *
+   * `opponentBlitzRank` is oriented **1 = blitzes most**, the opposite of
+   * `opponentRankVsPosition`, because that is the conventional reading of
+   * "first in blitz rate". It is the one rank this project publishes on a raw,
+   * unadjusted number, and it earned that: half-to-half Spearman +0.62 over
+   * 2023-25 against about +0.18 for the adjusted rank beside it. Read it
+   * through `lib/core/charting-view.ts`, which attaches the style label so the
+   * number never travels alone.
+   *
+   * `opponentHeavyBoxRate` has NO rank on purpose (+0.23). Print it; do not
+   * order or colour a board by it.
+   */
+  opponentBlitzRate: number | null;
+  opponentBlitzRank: number | null;
+  opponentHeavyBoxRate: number | null;
+  opponentChartingGames: number | null;
+
   conferenceName: string | null;
   conferenceIsDisplayed: boolean | null;
 
@@ -294,6 +314,27 @@ export type PlayerGameLogRow = {
   targetShare: number | null;
   rushShare: number | null;
   snapShare: number | null;
+};
+
+/**
+ * One defense's tendencies as they stood entering a week (migration 0072).
+ *
+ * `blitzRank` is null where the defense is under the dropback floor — unmeasured,
+ * which is NOT the same as unaggressive, so it is excluded from the ordering
+ * rather than given the last rank. `games` and `dropbacks` travel with it
+ * because entering week 2 the whole figure rests on one game.
+ */
+export type DefenseCharting = {
+  defenseTeamId: number;
+  season: number;
+  asOfWeek: number;
+  games: number;
+  dropbacks: number;
+  boxPlays: number;
+  blitzRate: number | null;
+  blitzRank: number | null;
+  meanPassRushers: number | null;
+  heavyBoxRate: number | null;
 };
 
 /** A market in the catalogue, with the positions it applies to. */

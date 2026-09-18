@@ -110,6 +110,8 @@ model so both boards report comparable numbers (CLAUDE.md §6).
 | Table | Notes |
 |---|---|
 | `player_game_stats` | **The only home for actuals.** `offensive_tds` generated (rush+rec, excludes passing and return TDs). `q1_*` are first-quarter actuals derived from play-by-play by `build_quarter_stats` (migration 0063); NULL means not derived, 0 means nothing in the quarter. `target_share` / `rush_share` are written by `build_usage_shares` and `snap_share` by the nflverse snap adapter (migration 0071) — target share is withheld where a team-game's attribution is incomplete, snap share is NFL-only |
+| `defense_charting_game_splits` | What a defense DID per game, from nflverse `ftn_charting`: dropbacks, blitzes, box counts (migration 0072). NFL only |
+| `defense_charting_ratings` | Point-in-time tendencies per `as_of_week`. `blitz_rank` is oriented **1 = blitzes most**, opposite to `rank_vs_position`. `heavy_box_rate` has no rank on purpose |
 | `plays` | PBP trimmed to what the split engine and goal-line model need |
 | `play_player_stats` | Per-play attribution. ~1M rows/season. `position_group` denormalized |
 

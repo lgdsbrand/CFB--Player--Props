@@ -19,6 +19,7 @@
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import type {
+  DefenseCharting,
   DefenseGameRow,
   DefenseSplitRow,
   PositionGroup,
@@ -292,3 +293,90 @@ function toRating(row: DbRow): DefenseRating {
  * written and the current week changes only when the ratings job runs.
  */
 export const getDefenseRatings = cachedRead("defense-ratings", readDefenseRatings);
+
+
+/**
+ * One defense's tendencies entering a week, plus the size of the rated field
+ * (migration 0072).
+ *
+ * TWO THINGS IN ONE READ, because the style band is a third of the FIELD rather
+ * than a fixed rate — so the caller needs both the opponent's rank and how many
+ * defenses carry one at that cutoff, and fetching those separately would let
+ * them describe two different cutoffs. There are 32 rows per cutoff, so reading
+ * the field costs nothing.
+ *
+ * NFL ONLY in practice. A college call returns `charting: null` with
+ * `fieldSize: 0`, which is what "no charting source" looks like.
+ */
+export async function getDefenseCharting(
+  defenseTeamId: number,
+  season: number,
+  asOfWeek: number,
+): Promise<{ charting: DefenseCharting | null; fieldSize: number }> {
+  const supabase = createServerSupabaseClient();
+
+  const rows = unwrap<DbRow[]>(
+    await supabase
+      .from("defense_charting_ratings")
+      .select(
+        "defense_team_id, season, as_of_week, games_included, dropbacks, " +
+          "box_plays, blitz_rate, blitz_rank, mean_pass_rushers, heavy_box_rate",
+      )
+      .eq("season", season)
+      .eq("as_of_week", asOfWeek),
+    "defense_charting_ratings",
+  );
+
+  const all: DefenseCharting[] = rows.map((row) => {
+    const n = (key: string) => (row[key] as number | null) ?? null;
+    return {
+      defenseTeamId: row.defense_team_id as number,
+      season: row.season as number,
+      asOfWeek: row.as_of_week as number,
+      games: (row.games_included as number | null) ?? 0,
+      dropbacks: (row.dropbacks as number | null) ?? 0,
+      boxPlays: (row.box_plays as number | null) ?? 0,
+      blitzRate: n("blitz_rate"),
+      blitzRank: n("blitz_rank"),
+      meanPassRushers: n("mean_pass_rushers"),
+      heavyBoxRate: n("heavy_box_rate"),
+    };
+  });
+
+  return {
+    charting: all.find((r) => r.defenseTeamId === defenseTeamId) ?? null,
+    // The RATED field, not every row: a defense under the dropback floor is
+    // unmeasured and carries no rank, so counting it would stretch the bands
+    // across teams that are not in the ordering at all.
+    fieldSize: all.filter((r) => r.blitzRank !== null).length,
+  };
+}
+
+
+/**
+ * How many defenses carry a blitz rank entering this week.
+ *
+ * The board needs this and not the rows themselves: the style band is a third
+ * of the RATED FIELD, and the field cannot be inferred from the page, which is
+ * a filtered subset. 32 rows, one round trip, and it joins a wave that is
+ * already being awaited.
+ *
+ * Returns 0 for a sport with no charting, which `blitzStyleFor` reads as "say
+ * nothing" rather than as an empty ordering.
+ */
+export async function getChartingFieldSize(
+  season: number,
+  asOfWeek: number,
+): Promise<number> {
+  const supabase = createServerSupabaseClient();
+  const rows = unwrap<DbRow[]>(
+    await supabase
+      .from("defense_charting_ratings")
+      .select("blitz_rank")
+      .eq("season", season)
+      .eq("as_of_week", asOfWeek)
+      .not("blitz_rank", "is", null),
+    "defense_charting_ratings (field size)",
+  );
+  return rows.length;
+}

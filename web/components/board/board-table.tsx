@@ -31,6 +31,10 @@ import {
 } from "@/lib/core/hit-rate";
 import { playerHref } from "@/lib/core/player-params";
 import type { BoardRow, Market, PlayerGameLogRow } from "@/lib/core/types";
+import {
+  blitzStyle,
+  formatRate,
+} from "@/lib/core/charting-view";
 import { formatUsageShare, usageForRow } from "@/lib/core/usage-view";
 
 /**
@@ -78,6 +82,7 @@ export function BoardTable({
   hitRateWindow,
   edgeThreshold,
   showsCalls = true,
+  chartingFieldSize = 0,
 }: {
   rows: BoardRow[];
   marketsByKey: Map<string, Market>;
@@ -103,6 +108,12 @@ export function BoardTable({
    * the scope makes impossible today — degrades to dashes rather than leaking.
    */
   showsCalls?: boolean;
+  /**
+   * Defenses carrying a blitz rank this week, or 0 where the sport has no
+   * charting. Zero drops the column entirely rather than printing a permanent
+   * line of dashes on the college board.
+   */
+  chartingFieldSize?: number;
 }) {
   // Ten fixed columns with calls — expander, player, prop, chance, proj, edge,
   // odds, szn, use, opp rk — plus one per configured hit-rate window. Without
@@ -115,7 +126,9 @@ export function BoardTable({
   // Derived rather than written as a literal because the detail row spans it,
   // and a colSpan that drifts from the header is invisible until a column is
   // added.
-  const columnCount = (showsCalls ? 10 : 8) + hitRateWindows.length;
+  const showsBlitz = chartingFieldSize > 0;
+  const columnCount =
+    (showsCalls ? 10 : 8) + (showsBlitz ? 1 : 0) + hitRateWindows.length;
 
   // The SAME window as the board's first hit-rate column, so the two numbers a
   // reader compares across a row describe the same games. Following
@@ -209,6 +222,15 @@ export function BoardTable({
               >
                 Use L{usageWindow}
               </th>
+              {showsBlitz ? (
+                <th
+                  scope="col"
+                  className="py-2.5 pr-3 text-right font-semibold"
+                  title="How often this opponent sends an extra rusher, over its games before this week. Coloured by STYLE, warm for blitz-heavy and cool for blitz-light — not good-to-bad, because a blitz means more single coverage AND faster throws, and neither direction has been measured here. The good-to-bad axis is Opp Rk beside it."
+                >
+                  Blitz
+                </th>
+              ) : null}
               <th
                 scope="col"
                 className="py-2.5 pr-3 text-right font-semibold"
@@ -232,6 +254,7 @@ export function BoardTable({
                 columnCount={columnCount}
                 showsCalls={showsCalls}
                 usageWindow={usageWindow}
+                chartingFieldSize={showsBlitz ? chartingFieldSize : 0}
                 striped={index % 2 === 1}
               />
             ))}
@@ -252,6 +275,7 @@ function PropRow({
   columnCount,
   showsCalls,
   usageWindow,
+  chartingFieldSize,
   striped,
 }: {
   row: BoardRow;
@@ -263,6 +287,7 @@ function PropRow({
   columnCount: number;
   showsCalls: boolean;
   usageWindow: number;
+  chartingFieldSize: number;
   striped: boolean;
 }) {
   const call = callFor(row, market);
@@ -332,6 +357,11 @@ function PropRow({
               window={usageWindow}
             />
           </td>
+          {chartingFieldSize > 0 ? (
+            <td className="py-2 pr-3 text-right align-middle">
+              <BlitzCell row={row} fieldSize={chartingFieldSize} />
+            </td>
+          ) : null}
           <td className="text-muted py-2 pr-3 text-right align-middle font-mono text-xs tabular-nums">
             {row.opponentRankVsPosition ?? "—"}
           </td>
@@ -589,6 +619,38 @@ function UsageCell({
       }`}
     >
       {formatUsageShare(summary.share)}
+    </span>
+  );
+}
+
+/**
+ * How aggressive this week's opponent is (migration 0072).
+ *
+ * THE RATE CARRIES THE COLOUR, not a bare rank, because "51%" says what it
+ * means on its own and "1" does not. The rank and the sample are in the title,
+ * and the player page prints both beside the label.
+ *
+ * WARM-TO-COOL, NOT GREEN-TO-RED. The band is a third of the rated field, and
+ * the ramp describes a style rather than rating a matchup — a blitz is good for
+ * some receivers and bad for others, and this project has measured neither. The
+ * good-to-bad axis is Opp Rk, in the next column.
+ */
+function BlitzCell({ row, fieldSize }: { row: BoardRow; fieldSize: number }) {
+  if (row.opponentBlitzRank === null || row.opponentBlitzRate === null) {
+    return <span className="text-dim text-xs">—</span>;
+  }
+  const style = blitzStyle(row.opponentBlitzRank, fieldSize);
+  const games = row.opponentChartingGames ?? 0;
+  return (
+    <span
+      className={"pill font-mono text-[0.6875rem] tabular-nums " + style.tone}
+      title={`${row.opponentAbbreviation ?? row.opponentSchool} blitzes on ${formatRate(
+        row.opponentBlitzRate,
+      )} of dropbacks — ${style.label.toLowerCase()}, ${row.opponentBlitzRank} of ${fieldSize}, over ${games} game${
+        games === 1 ? "" : "s"
+      } before this week`}
+    >
+      {formatRate(row.opponentBlitzRate)}
     </span>
   );
 }

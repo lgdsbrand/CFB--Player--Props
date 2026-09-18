@@ -1004,6 +1004,113 @@ check(G, "a snap share travels with a snap count", """
        and snaps is not null
 """, lambda r: r["bad"] == 0)
 
+# -----------------------------------------------------------------------------
+# Defensive charting (migration 0072, `nfl_ingest_charting`)
+# -----------------------------------------------------------------------------
+# The first RANK this project publishes on a raw, unadjusted number, and the
+# first it publishes at all since refusing one for the first quarter. These
+# checks hold the three things that decision rests on.
+
+# THE ORIENTATION, PINNED AGAINST REAL ROWS. `blitz_rank` runs 1 = BLITZES MOST,
+# the opposite of `rank_vs_position` (1 = allows the least), because that is the
+# conventional reading of "first in blitz rate". Two ranks on one page pointing
+# opposite ways is exactly the kind of thing that gets "tidied" into agreement
+# by someone who has not read migration 0072 -- and every surface's colour would
+# then be inverted with nothing failing.
+#
+# ASSERTED AS AN ORDERING, NOT AGAINST A RECOMPUTED rank(). The first version of
+# this check compared against SQL's `rank()` and failed on 12 rows of 704 --
+# every one of them correct. `rank()` gives ties the same number (1, 1, 3) while
+# the job assigns a strict sequence (1, 2, 3), so two defenses on identical
+# rates disagreed by construction. What the orientation actually means is that
+# no defense blitzing MORE ever carries a worse rank, which ties cannot violate.
+check(G, "blitz rank 1 is the defense that blitzes MOST", """
+    select count(*) as bad
+      from defense_charting_ratings a
+      join defense_charting_ratings b
+        on b.season = a.season and b.as_of_week = a.as_of_week
+     where a.blitz_rank is not null and b.blitz_rank is not null
+       and a.blitz_rate > b.blitz_rate
+       and a.blitz_rank > b.blitz_rank
+""", lambda r: r["bad"] == 0)
+
+# POINT-IN-TIME (CLAUDE.md §4). A rating at as_of_week = N must be computed from
+# games with week < N strictly. A display figure is not exempt: a week-2 board
+# showing what happened in week 2 is the same defect wherever the number lands.
+#
+# ASSERTED ON THE SAMPLE, not on the rate, because the rate check below already
+# proves the cutoff for anything it covers -- it recomputes from `week <
+# as_of_week` and compares. This one is the independent half: `games_included`
+# must equal the number of games actually before the cutoff, which catches a
+# rating built from the right games but counting the wrong ones, and covers the
+# rows the rate check cannot (a defense under the dropback floor has no rate).
+check(G, "games_included counts exactly the games before the cutoff", """
+    with counted as (
+      select r.defense_team_id, r.season, r.as_of_week, r.games_included,
+             (select count(*)
+                from defense_charting_game_splits s
+               where s.defense_team_id = r.defense_team_id
+                 and s.season = r.season
+                 and s.week < r.as_of_week) as prior_games
+        from defense_charting_ratings r
+    )
+    select count(*) as bad
+      from counted where games_included <> prior_games
+""", lambda r: r["bad"] == 0)
+
+# The stored rate must equal its own inputs. A 0.0001 tolerance, and the reason
+# is worth recording so nobody chases it: Python rounds a half to even and
+# Postgres rounds it away from zero, so 53/160 = 0.33125 stores as 0.3312 here
+# and recomputes as 0.3313 in SQL. Exactly one row of 704 differed when this was
+# written, by one unit in the fourth decimal, on a figure displayed to the
+# nearest percent.
+check(G, "every blitz rate equals the games behind it", """
+    with recomputed as (
+      select r.defense_team_id, r.season, r.as_of_week,
+             sum(s.blitz_plays)::numeric / nullif(sum(s.dropbacks), 0) as rate
+        from defense_charting_ratings r
+        join defense_charting_game_splits s
+          on s.defense_team_id = r.defense_team_id
+         and s.season = r.season
+         and s.week < r.as_of_week
+       group by 1, 2, 3
+    )
+    select count(*) as bad
+      from defense_charting_ratings r
+      join recomputed c
+        on c.defense_team_id = r.defense_team_id
+       and c.season = r.season and c.as_of_week = r.as_of_week
+     where r.blitz_rate is not null
+       and abs(r.blitz_rate - c.rate) > 0.0001
+""", lambda r: r["bad"] == 0)
+
+# A blitz cannot happen on a play with no pass rush, and a heavy box is a subset
+# of the charted boxes. Both are table constraints, so this catches a constraint
+# being dropped rather than data drifting past it.
+check(G, "charting counts never exceed their own denominators", """
+    select count(*) as bad from defense_charting_game_splits
+     where blitz_plays > dropbacks or heavy_box_plays > box_plays
+""", lambda r: r["bad"] == 0)
+
+# NO RANK ON HEAVY BOX. It measured +0.23 half-to-half against blitz rate's
+# +0.62, and a soft ordering printed beside a firm one in the same colour ramp
+# reads as equally solid. This refuses the column outright, the same way the
+# first-quarter check refuses an `adj_q1%` sibling.
+check(G, "heavy box carries no rank", """
+    select count(*) as columns from information_schema.columns
+     where table_name = 'defense_charting_ratings'
+       and column_name like '%box%rank%'
+""", lambda r: r["columns"] == 0, ["columns"])
+
+# NFL ONLY, and structurally: the sole writer is the nflverse adapter. A college
+# row here would mean something invented a charting source.
+check(G, "no college defense carries charting", """
+    select count(*) as bad
+      from defense_charting_ratings r
+      join teams t on t.id = r.defense_team_id
+     where t.sport <> 'nfl'
+""", lambda r: r["bad"] == 0)
+
 # Split by season_type since migration 0020. A single range over both would
 # have to be wide enough to admit a postseason week, which would stop it
 # catching the very thing it exists for — a regular-season week landing at 21.

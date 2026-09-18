@@ -348,6 +348,11 @@ services:
   # box-score row of a team-game, so it cannot run until the last of them has
   # landed. The snap SHARE is not written here -- it arrives with `snaps` in the
   # stats step, because it is the provider's own figure (migration 0071).
+  #
+  # `nfl_ingest_charting` LAST of all, and it needs `nfl_ingest_plays` above it:
+  # the FTN file names no team on any row, so the defense comes from our own
+  # plays through the nflverse play key. Newest step, so it goes where a failure
+  # can only cost itself.
   - type: cron
     name: nfl-props-ingest-results
     runtime: python
@@ -361,7 +366,8 @@ services:
       python -m worker.jobs.nfl_ingest_plays --current &&
       python -m worker.jobs.build_splits --current --sport nfl &&
       python -m worker.jobs.build_quarter_stats --current --sport nfl &&
-      python -m worker.jobs.build_usage_shares --current --sport nfl
+      python -m worker.jobs.build_usage_shares --current --sport nfl &&
+      python -m worker.jobs.nfl_ingest_charting --current
     envVars:
       - fromGroup: cfb-props-worker
 

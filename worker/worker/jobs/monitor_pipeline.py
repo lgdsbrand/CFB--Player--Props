@@ -302,6 +302,15 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
              "shares simply stop advancing while every other surface stands.",
     ),
     JobExpectation(
+        name="nfl_ingest_charting",
+        max_age_hours=36,
+        sport="nfl",
+        note="daily 08:20 UTC, last in the NFL results chain -- FTN defensive "
+             "charting behind the blitz rank. A warning: the board's Blitz "
+             "column freezes at last week's figures while everything else "
+             "advances, which reads as a quiet defense rather than a stale job.",
+    ),
+    JobExpectation(
         name="build_usage_shares",
         max_age_hours=36,
         sport="nfl",

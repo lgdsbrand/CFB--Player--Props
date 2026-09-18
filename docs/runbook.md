@@ -788,6 +788,55 @@ here (implied catch rate 66.8%, which is the real one), so any comparison of a
 college conversion rate against an NFL one compares an artifact with a
 measurement.
 
+#### `nfl_ingest_charting`
+
+```bash
+python -m worker.jobs.nfl_ingest_charting --current              # what the cron runs
+python -m worker.jobs.nfl_ingest_charting --seasons 2023 2024 2025 2026
+python -m worker.jobs.nfl_ingest_charting --seasons 2026 --dry-run
+```
+
+FTN charting into `defense_charting_game_splits`, then the point-in-time
+`defense_charting_ratings` — what a defense DOES, as opposed to what it allows.
+Two steps in one job because the second is a group-by rather than a fit. NFL
+only: there is no college charting source at any price.
+
+**Run it after `nfl_ingest_plays`.** The charting file names no team on any row,
+so the defense comes from our own `plays`, joined on the nflverse play key. It
+refuses a season with no stored plays rather than writing zero rows.
+
+**Expect about 27% of charted rows not to resolve, and do not "fix" it.** FTN
+charts kickoffs, punts and field goals; `plays` is trimmed to what the split
+engine and the goal-line model consume. The number that matters is the one under
+the denominator this job uses, and on **dropbacks it is 94-95%** in every season
+measured. The log prints it every run and warns below 85%. A fall in the
+headline rate usually just means more special teams; a fall in the dropback rate
+means the play key has drifted and every blitz rate rests on partial games.
+
+**Two denominators, and they are not interchangeable.** `dropbacks` counts plays
+with at least one pass rusher (46.5% of charted rows); `box_plays` counts plays
+with anyone in the box, runs included. Dividing blitzes by every charted play
+would report the league blitzing on 14% of snaps instead of 30%.
+
+**The blitz rank was measured before it was built.** Splitting each season at
+week 9 and correlating the two halves (Spearman, 32 defenses): blitz rate
++0.73 / +0.58 / +0.56 across 2023-25, mean **+0.62**. The first-quarter rate that
+was refused a rank came in at +0.05, and the opponent-adjusted `rank_vs_position`
+already published sits at about +0.18. **Heavy box measured +0.23 and carries no
+rank** — the rate is published, the ordering is not, because a soft ordering
+printed beside a firm one in the same colour ramp reads as equally solid.
+
+**Rank 1 = blitzes MOST**, the opposite of `rank_vs_position` (1 = allows the
+least), because that is the conventional reading of "first in blitz rate". Every
+surface prints the style label beside it. `audit_data` asserts the orientation
+against real rows, so "tidying" the two ranks into agreement fails loudly.
+
+**Week 2 is the first week it says anything**, and a Sunday board is reading one
+game. FTN publishes two to three days after a week is played, so entering week 2
+each defense has about 35 dropbacks behind its rate — enough to clear the floor
+in `core/charting.py`, not enough to lean on. The sample travels with the number
+on every surface for that reason.
+
 #### `build_usage_shares`
 
 ```bash

@@ -149,6 +149,12 @@ const COLUMNS =
   // Raw first-quarter allowed-per-game (migration 0070). No adjusted or ranked
   // sibling exists — see the column comment for the measurement.
   "opponent_q1_rush_yards_allowed_pg, opponent_q1_rec_yards_allowed_pg, " +
+  // What the opponent DOES (migration 0072). Read for both sports though
+  // only the NFL has it: a college row comes back null, which is what "no
+  // charting source" means, and branching the column list on sport would
+  // give one row type two shapes.
+  "opponent_blitz_rate, opponent_blitz_rank, opponent_heavy_box_rate, " +
+  "opponent_charting_games, " +
   "display_confidence, effective_sample, venue_name, venue_city, venue_state, " +
   "team_spread, game_total, game_line_providers, team_poll_rank, opponent_poll_rank, " +
   // Computed from now() at read time (migration 0052). Selected as well as
@@ -737,6 +743,11 @@ function toBoardRow(row: Record<string, unknown>): BoardRow {
     // arithmetic, the same trap `ladderStep` carries a note about.
     opponentQ1RushYardsAllowedPg: num(row.opponent_q1_rush_yards_allowed_pg),
     opponentQ1RecYardsAllowedPg: num(row.opponent_q1_rec_yards_allowed_pg),
+
+    opponentBlitzRate: num(row.opponent_blitz_rate),
+    opponentBlitzRank: num(row.opponent_blitz_rank),
+    opponentHeavyBoxRate: num(row.opponent_heavy_box_rate),
+    opponentChartingGames: num(row.opponent_charting_games),
 
     conferenceName: (row.conference_name as string | null) ?? null,
     conferenceIsDisplayed:

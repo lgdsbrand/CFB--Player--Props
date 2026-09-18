@@ -68,6 +68,8 @@ const EXPECTED = {
     "venue_name", "venue_city", "venue_state",
     "team_spread", "game_total", "game_line_providers",
     "team_poll_rank", "opponent_poll_rank", "sport", "publishes_call",
+    "opponent_blitz_rate", "opponent_blitz_rank", "opponent_heavy_box_rate",
+    "opponent_charting_games",
     // Raw first-quarter allowed-per-game (migration 0070). No adjusted or
     // ranked sibling exists, on purpose.
     "opponent_q1_rush_yards_allowed_pg", "opponent_q1_rec_yards_allowed_pg",
@@ -191,6 +193,14 @@ const EXPECTED = {
     "games_included", "adj_rush_yards_allowed_pg", "adj_rec_yards_allowed_pg",
     "adj_receptions_allowed_pg", "adj_rush_tds_allowed_pg",
     "adj_rec_tds_allowed_pg", "rank_vs_position", "shrinkage_weight",
+  ],
+  // What a defense DOES (migration 0072), read straight off the table rather
+  // than through a view: the player page needs the whole cutoff's field to size
+  // its style bands, which a per-row view could not give it.
+  defense_charting_ratings: [
+    "defense_team_id", "season", "as_of_week", "games_included", "dropbacks",
+    "box_plays", "blitz_rate", "blitz_rank", "mean_pass_rushers",
+    "heavy_box_rate",
   ],
   games: [
     "id", "season", "week", "start_date", "neutral_site", "home_team_id",

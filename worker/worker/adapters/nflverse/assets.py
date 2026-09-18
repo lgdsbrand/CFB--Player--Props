@@ -59,6 +59,18 @@ WHAT EACH ASSET IS FOR (measured 2026-09-05, not assumed)
     2026-09-09 20:20 Eastern, is the same kickoff The Odds API reports as
     2026-09-10T00:20Z, which is the cross-check that settled the timezone.
 
+  * `ftn_charting_{season}` — FTN's manual charting, and the only LIVE source
+    of defensive scheme this project has. Published weekly in season with a two
+    to three day lag: 2026 week 1 was up on 2026-09-17, 2,675 plays across 16
+    games. Carries `n_blitzers`, `n_pass_rushers` and `n_defense_box` per play,
+    joined on `nflverse_game_id` + `nflverse_play_id` (94.2% of charted
+    dropbacks match a stored play).
+
+    IT HAS NO COVERAGE SHELL. Man/zone and Cover-1/Cover-3 live in
+    `pbp_participation`, which is NOT read here and should not be added without
+    reading the note in `ingest_charting.py`: that asset publishes once, after a
+    season ends, so a man/zone panel would show last season's numbers all year.
+
   * `team_meta` / `team_seasons` — the 32 franchises: conference, division,
     full name, nickname and the two team colours the chips are drawn from.
 
@@ -88,6 +100,7 @@ ASSETS: dict[str, str] = {
     "roster": f"{RELEASE_BASE}/rosters/roster_{{season}}.csv",
     "play_by_play": f"{RELEASE_BASE}/pbp/play_by_play_{{season}}.csv",
     "snap_counts": f"{RELEASE_BASE}/snap_counts/snap_counts_{{season}}.csv",
+    "ftn_charting": f"{RELEASE_BASE}/ftn_charting/ftn_charting_{{season}}.csv",
     "players": f"{RELEASE_BASE}/players/players.csv",
     "schedule": f"{NFLDATA_BASE}/games.csv",
     "team_seasons": f"{NFLDATA_BASE}/teams.csv",
@@ -96,7 +109,7 @@ ASSETS: dict[str, str] = {
 
 #: Assets whose URL carries the season, so one file is one season.
 SEASON_IN_URL: frozenset[str] = frozenset(
-    {"weekly_stats", "roster", "play_by_play", "snap_counts"}
+    {"weekly_stats", "roster", "play_by_play", "snap_counts", "ftn_charting"}
 )
 
 #: Assets whose contents must include the season asked for.
@@ -109,7 +122,7 @@ SEASON_IN_URL: frozenset[str] = frozenset(
 #: schedule, the most volatile file here, unchecked.
 REQUIRE_SEASON_PRESENT: frozenset[str] = frozenset(
     {"weekly_stats", "roster", "play_by_play", "schedule", "team_seasons",
-     "snap_counts"}
+     "snap_counts", "ftn_charting"}
 )
 
 #: Columns in `team_meta` that must never be ingested — CLAUDE.md §7.

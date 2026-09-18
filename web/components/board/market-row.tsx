@@ -2,6 +2,10 @@ import { LastFive } from "@/components/board/last-five";
 import { ProjectionBar } from "@/components/board/projection-bar";
 import { callFor } from "@/lib/core/board-view";
 import {
+  formatUsageShare,
+  type UsageSummary,
+} from "@/lib/core/usage-view";
+import {
   formatAmericanOdds,
   formatConfidence,
   formatEdge,
@@ -43,6 +47,7 @@ export function MarketRow({
   market,
   hitRate,
   hitRateWindow,
+  usage,
   edgeThreshold,
 }: {
   row: BoardRow;
@@ -54,6 +59,8 @@ export function MarketRow({
   market: Market | undefined;
   hitRate: HitRateSummary | null;
   hitRateWindow: number;
+  /** Null where the market has no denominator, or no game in the window had one. */
+  usage: UsageSummary | null;
   edgeThreshold: number;
 }) {
   const isEdge = meetsEdgeThreshold(row.edge, edgeThreshold);
@@ -147,6 +154,22 @@ export function MarketRow({
         verb={row.isBinary ? "scored" : undefined}
         season={row.season}
       />
+
+      {/*
+        USAGE SITS UNDER THE LAST-5 ROW, one line, plain.
+
+        It is the only figure on this sub-card that needs neither a line nor a
+        call, so it is the one still standing on a market a book has not posted
+        — which is most of the week (CLAUDE.md §7). Muted and uncoloured on
+        purpose: a high target share is not a good bet, because the book prices
+        the role in, and tinting it would turn a description into a tip.
+      */}
+      {usage ? (
+        <p className="text-dim text-[0.625rem]" title={usage.stat.hint}>
+          {formatUsageShare(usage.share)} of his team&apos;s {usage.stat.noun}{" "}
+          per game over {usage.games} game{usage.games === 1 ? "" : "s"}
+        </p>
+      ) : null}
     </div>
   );
 }

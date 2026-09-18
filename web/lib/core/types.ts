@@ -276,6 +276,24 @@ export type PlayerGameLogRow = {
   q1RecYards: number | null;
   q1RecTds: number | null;
   q1OffensiveTds: number | null;
+
+  /**
+   * Usage share for THIS game — the player as a fraction of his own offence
+   * (migration 0071). Read through `lib/core/usage-view.ts`, which decides
+   * which of the three a market is read against.
+   *
+   * `targetShare` is NULL where the team's target attribution was too
+   * incomplete to divide by, not only where the player saw no targets, so it is
+   * absent on about one college team-game in seven. `snapShare` is nflverse's
+   * own `offense_pct` and is NFL-only; college has no snap source at all.
+   *
+   * WHOLE GAMES, including on a first-quarter row. There is no first-quarter
+   * team total to divide by, so these describe the player's role in the game
+   * rather than in the quarter.
+   */
+  targetShare: number | null;
+  rushShare: number | null;
+  snapShare: number | null;
 };
 
 /** A market in the catalogue, with the positions it applies to. */

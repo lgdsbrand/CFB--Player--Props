@@ -11,6 +11,7 @@ No network, no database.
 from __future__ import annotations
 
 import polars as pl
+import pytest
 
 from worker.adapters.nflverse.assets import (
     ASSETS,
@@ -19,7 +20,11 @@ from worker.adapters.nflverse.assets import (
     asset_url,
 )
 from worker.adapters.nflverse.ingest_reference import NflReferenceCounts
-from worker.adapters.nflverse.ingest_snaps import SNAP_COLUMN, build_pairs
+from worker.adapters.nflverse.ingest_snaps import (
+    SHARE_COLUMN,
+    SNAP_COLUMN,
+    build_pairs,
+)
 
 
 def frame(rows: list[dict]) -> pl.DataFrame:
@@ -28,6 +33,7 @@ def frame(rows: list[dict]) -> pl.DataFrame:
         "pfr_player_id": "BankKe01",
         "position": "WR",
         SNAP_COLUMN: 50,
+        SHARE_COLUMN: 0.75,
     }
     return pl.DataFrame([{**base, **r} for r in rows])
 
@@ -54,7 +60,7 @@ class TestResolution:
     def test_a_resolvable_row_becomes_a_pair(self):
         counts = NflReferenceCounts()
         pairs = build_pairs(frame([{}]), GAMES, PLAYERS, counts)
-        assert pairs == [(10, 900, 50)]
+        assert pairs == [(10, 900, 50, 0.75)]
         assert not counts.skipped
 
     def test_an_unknown_player_is_skipped_not_guessed(self):
@@ -82,8 +88,10 @@ class TestResolution:
     def test_zero_snaps_is_a_real_measurement_and_is_kept(self):
         """Distinct from blank: dressed, took no offensive snap."""
         counts = NflReferenceCounts()
-        pairs = build_pairs(frame([{SNAP_COLUMN: 0}]), GAMES, PLAYERS, counts)
-        assert pairs == [(10, 900, 0)]
+        pairs = build_pairs(
+            frame([{SNAP_COLUMN: 0, SHARE_COLUMN: 0.0}]), GAMES, PLAYERS, counts
+        )
+        assert pairs == [(10, 900, 0, 0.0)]
 
     def test_two_rows_for_one_player_and_game_are_summed(self):
         """Snaps are additive; letting one win would understate usage.
@@ -93,9 +101,30 @@ class TestResolution:
         """
         counts = NflReferenceCounts()
         pairs = build_pairs(
-            frame([{SNAP_COLUMN: 30}, {SNAP_COLUMN: 25}]), GAMES, PLAYERS, counts
+            frame([
+                {SNAP_COLUMN: 30, SHARE_COLUMN: 0.4},
+                {SNAP_COLUMN: 25, SHARE_COLUMN: 0.33},
+            ]),
+            GAMES, PLAYERS, counts,
         )
-        assert pairs == [(10, 900, 55)]
+        assert len(pairs) == 1
+        player, game, snaps, share = pairs[0]
+        assert (player, game, snaps) == (10, 900, 55)
+        assert share == pytest.approx(0.73)
+
+    def test_a_blank_share_beside_a_real_snap_count_stays_absent(self):
+        """NULL, not zero.
+
+        `snap_share` is the provider's own figure, so a missing one means the
+        provider did not say -- writing 0 would claim the player was on the
+        field for none of a game the snap count says he played in.
+        """
+        counts = NflReferenceCounts()
+        pairs = build_pairs(
+            frame([{SNAP_COLUMN: 42, SHARE_COLUMN: None}]), GAMES, PLAYERS, counts
+        )
+        assert pairs == [(10, 900, 42, None)]
+        assert not counts.skipped
 
     def test_the_same_player_in_two_games_stays_two_pairs(self):
         counts = NflReferenceCounts()
@@ -106,7 +135,7 @@ class TestResolution:
             ]),
             GAMES, PLAYERS, counts,
         )
-        assert sorted(pairs) == [(10, 900, 30), (10, 901, 40)]
+        assert sorted(pairs) == [(10, 900, 30, 0.75), (10, 901, 40, 0.75)]
 
 
 class TestAmbiguousPfrIdsAreExcluded:

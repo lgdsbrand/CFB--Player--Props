@@ -927,6 +927,83 @@ check(G, "no first-quarter rating is adjusted or ranked", """
        and (column_name like 'adj_q1%' or column_name like 'q1%rank%')
 """, lambda r: r["columns"] == 0, ["columns"])
 
+# -----------------------------------------------------------------------------
+# Usage share (migration 0071, `build_usage_shares`)
+# -----------------------------------------------------------------------------
+# A share is a fraction of a total the same table holds, so it has invariants a
+# yards figure does not, and each of these is one of them.
+
+# Every one of the three is a fraction. Above 1 means the numerator escaped its
+# denominator -- a player credited to the wrong team-game, or a team total
+# summed over the wrong grouping -- and would print as "134%" on the board.
+# Snap share is the one that can legitimately reach exactly 1.
+check(G, "every usage share is a fraction between 0 and 1", """
+    select count(*) as bad from player_game_stats
+     where target_share < 0 or target_share > 1
+        or rush_share   < 0 or rush_share   > 1
+        or snap_share   < 0 or snap_share   > 1
+""", lambda r: r["bad"] == 0)
+
+# THE WITHHOLDING RULE ACTUALLY HOLDS. `build_usage_shares` refuses a target
+# share from a team-game whose attributed targets fall under 80% of its pass
+# attempts, because those shares were measured to inflate by 1-2 points
+# (migration 0071). This is the check that the guard is still in the SQL: drop
+# it and college would gain about one team-game in seven, silently and in the
+# direction that flatters every receiver.
+check(G, "no target share is published on an incompletely attributed team-game", """
+    with team_game as (
+      select game_id, team_id,
+             sum(targets)       as team_targets,
+             sum(pass_attempts) as team_attempts
+        from player_game_stats group by 1, 2
+    )
+    select count(*) as bad
+      from player_game_stats s
+      join team_game tg on tg.game_id = s.game_id and tg.team_id = s.team_id
+     where s.target_share is not null
+       and (coalesce(tg.team_attempts, 0) = 0
+            or tg.team_targets::numeric < 0.80 * tg.team_attempts)
+""", lambda r: r["bad"] == 0)
+
+# A team's published shares sum to 1, which is what makes them shares. Checked
+# on team-games where EVERY row carries one, since a partial set cannot be
+# expected to: `targets is null` on one row leaves that row's share NULL by
+# design. Tolerance is a rounding band -- each share is stored to 4 decimals,
+# and 35 of them can drift a few units in the last place.
+check(G, "published target shares sum to 1 across a team-game", """
+    with team_game as (
+      select game_id, team_id,
+             count(*)                                     as rows_all,
+             count(*) filter (where targets is not null)  as rows_targeted,
+             count(target_share)                          as rows_shared,
+             sum(target_share)                            as total
+        from player_game_stats group by 1, 2
+    )
+    select count(*) as cells,
+           count(*) filter (where abs(total - 1) <= 0.001) as agree
+      from team_game
+     where rows_shared > 0 and rows_shared = rows_targeted
+""", lambda r: r["cells"] == 0 or r["agree"] / r["cells"] >= 0.999,
+      ["cells", "agree"])
+
+# SNAP SHARE IS THE PROVIDER'S AND THE NFL'S ALONE. College has no snap source
+# at all, so a college row carrying one means something has started deriving it
+# -- and the only denominator this table could supply is wrong, because the
+# offensive line takes snaps and has no box-score row.
+check(G, "no college player-game carries a snap share", """
+    select count(*) as bad from player_game_stats s
+      join games g on g.id = s.game_id
+     where g.sport = 'cfb' and s.snap_share is not null
+""", lambda r: r["bad"] == 0)
+
+# The two arrive on one source row and are written by one statement, so one
+# without the other means the pair has been split up somewhere.
+check(G, "a snap share travels with a snap count", """
+    select count(*) as bad from player_game_stats
+     where (snap_share is null) <> (snaps is null)
+       and snaps is not null
+""", lambda r: r["bad"] == 0)
+
 # Split by season_type since migration 0020. A single range over both would
 # have to be wide enough to admit a postseason week, which would stop it
 # catching the very thing it exists for — a regular-season week landing at 21.

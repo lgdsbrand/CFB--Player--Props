@@ -30,7 +30,11 @@ const COLUMNS =
   // for one row type and a mapper that has to guess which it was handed; a
   // college row simply comes back null here, which is what it means.
   "q1_pass_yards, q1_rush_attempts, q1_rush_yards, q1_rush_tds, q1_targets, " +
-  "q1_receptions, q1_rec_yards, q1_rec_tds, q1_offensive_tds";
+  "q1_receptions, q1_rec_yards, q1_rec_tds, q1_offensive_tds, " +
+  // Usage share (migration 0071). Read for both sports for the same reason as
+  // the first-quarter columns: `snap_share` is NFL-only and comes back null for
+  // college, which is what "no snap source" looks like on a row.
+  "target_share, rush_share, snap_share";
 
 /**
  * One player's completed games, most recent first.
@@ -263,5 +267,9 @@ function toGameLogRow(row: Record<string, unknown>): PlayerGameLogRow {
     q1RecYards: n("q1_rec_yards"),
     q1RecTds: n("q1_rec_tds"),
     q1OffensiveTds: n("q1_offensive_tds"),
+
+    targetShare: n("target_share"),
+    rushShare: n("rush_share"),
+    snapShare: n("snap_share"),
   };
 }

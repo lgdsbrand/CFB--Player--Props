@@ -44,7 +44,12 @@ from typing import Any
 import polars as pl
 
 from worker.adapters.nflverse.client import NflverseClient
-from worker.adapters.nflverse.mapping import SPORT, int_or_none, text_or_none
+from worker.adapters.nflverse.mapping import (
+    SPORT,
+    float_or_none,
+    int_or_none,
+    text_or_none,
+)
 from worker.db import execute, fetch_all
 from worker.logging_setup import get_logger
 
@@ -54,6 +59,19 @@ log = get_logger(__name__)
 #: stored: every market this project models is an offensive one, and a column
 #: nothing reads is a column that goes stale without anyone noticing.
 SNAP_COLUMN = "offense_snaps"
+
+#: The provider's own snap SHARE, landing in `player_game_stats.snap_share`
+#: (migration 0071). Taken rather than derived, because the denominator is not
+#: recoverable from our table: a snap row exists for every player on the field
+#: including the offensive line, a box-score row only for players with stats, so
+#: the largest count we store is a skill player's and any share computed against
+#: it would be too high. nflverse divides by the real team total.
+#:
+#: It arrives rounded to two decimals, which is the precision a figure displayed
+#: to the nearest percent needs and no more. Do not reconstruct team snaps from
+#: it: `offense_snaps / offense_pct` recovers the team total to within about
+#: half a snap, and a 1-snap player rounds to 0.01 and implies a 100-snap game.
+SHARE_COLUMN = "offense_pct"
 
 
 def load_pfr_index(counts: Any) -> dict[str, int]:
@@ -102,9 +120,15 @@ def build_pairs(
     games: dict[str, int],
     players: dict[str, int],
     counts: Any,
-) -> list[tuple[int, int, int]]:
-    """(player_id, game_id, snaps) for every row that resolves on both keys."""
-    pairs: dict[tuple[int, int], int] = {}
+) -> list[tuple[int, int, int, float | None]]:
+    """(player_id, game_id, snaps, share) for rows that resolve on both keys.
+
+    `share` is the provider's `offense_pct` and may be None on a row that has a
+    snap count but no percentage. That is absence, not zero, and it travels as
+    None so the column ends up NULL rather than claiming the player took no
+    share of a game he played in.
+    """
+    pairs: dict[tuple[int, int], tuple[int, float | None]] = {}
     for row in frame.to_dicts():
         pfr = text_or_none(row.get("pfr_player_id"))
         if pfr is None:
@@ -126,15 +150,28 @@ def build_pairs(
             counts.skip("snaps: blank offense_snaps")
             continue
 
+        share = float_or_none(row.get(SHARE_COLUMN))
+
         # A player traded mid-game does not exist, but a player can appear on
         # two rows of one game_id in the source when a franchise abbreviation
         # changed. Sum rather than let one silently win: snaps are additive and
         # a lost half would understate usage, which is the one direction the
         # floor must not be wrong in.
+        #
+        # The SHARE sums for the same reason and is safe to: both rows measure
+        # the same team's same game, so the two percentages share a denominator.
         prior = pairs.get((player_id, game_id))
-        pairs[(player_id, game_id)] = snaps if prior is None else prior + snaps
+        if prior is None:
+            pairs[(player_id, game_id)] = (snaps, share)
+        else:
+            prior_snaps, prior_share = prior
+            pairs[(player_id, game_id)] = (
+                prior_snaps + snaps,
+                share if prior_share is None
+                else prior_share + (share or 0.0),
+            )
 
-    return [(p, g, s) for (p, g), s in pairs.items()]
+    return [(p, g, s, pct) for (p, g), (s, pct) in pairs.items()]
 
 
 def run_nfl_snaps_ingest(
@@ -164,14 +201,16 @@ def run_nfl_snaps_ingest(
         return 0
 
     params = {
-        "players": [p for p, _, _ in pairs],
-        "games": [g for _, g, _ in pairs],
-        "snaps": [s for _, _, s in pairs],
+        "players": [p for p, _, _, _ in pairs],
+        "games": [g for _, g, _, _ in pairs],
+        "snaps": [s for _, _, s, _ in pairs],
+        "shares": [pct for _, _, _, pct in pairs],
     }
     values = """
-        select unnest(%(players)s::bigint[])  as player_id,
-               unnest(%(games)s::bigint[])    as game_id,
-               unnest(%(snaps)s::smallint[])  as snaps
+        select unnest(%(players)s::bigint[])    as player_id,
+               unnest(%(games)s::bigint[])      as game_id,
+               unnest(%(snaps)s::smallint[])    as snaps,
+               unnest(%(shares)s::numeric[])    as snap_share
     """
 
     # MATCHED IS COUNTED SEPARATELY FROM CHANGED, and the first version did not
@@ -194,11 +233,13 @@ def run_nfl_snaps_ingest(
     changed = execute(
         f"""
         update player_game_stats s
-           set snaps = v.snaps
+           set snaps      = v.snaps,
+               snap_share = v.snap_share
           from ({values}) v
          where s.player_id = v.player_id
            and s.game_id   = v.game_id
-           and s.snaps is distinct from v.snaps
+           and (s.snaps is distinct from v.snaps
+                or s.snap_share is distinct from v.snap_share)
         """,
         params,
     )
@@ -215,6 +256,7 @@ def run_nfl_snaps_ingest(
 
 
 __all__ = [
+    "SHARE_COLUMN",
     "SNAP_COLUMN",
     "build_pairs",
     "load_game_ids",

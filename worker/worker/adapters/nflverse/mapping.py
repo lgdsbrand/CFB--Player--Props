@@ -208,3 +208,18 @@ def int_or_none(value: object) -> int | None:
         return int(float(text))
     except (TypeError, ValueError):
         return None
+
+
+def float_or_none(value: object) -> float | None:
+    """The same absence rules as `int_or_none`, keeping the fractional part.
+
+    For the provider's already-computed ratios -- snap share, and anything else
+    that arrives as a proportion rather than a count.
+    """
+    text = text_or_none(value)
+    if text is None or text.upper() == "NA":
+        return None
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None

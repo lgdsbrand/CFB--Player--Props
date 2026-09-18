@@ -8,6 +8,7 @@ import { formatGameLine, formatKickoff, formatVenue } from "@/lib/core/format";
 import { playerHref } from "@/lib/core/player-params";
 import { gradeFor, gradeToneToken } from "@/lib/core/grade";
 import { summariseRow } from "@/lib/core/board-view";
+import { usageForRow } from "@/lib/core/usage-view";
 import type { PlayerCard as PlayerCardData } from "@/lib/core/board-view";
 import type { Market, PlayerGameLogRow } from "@/lib/core/types";
 
@@ -209,6 +210,14 @@ export function PlayerCard({
               hitRateWindow,
             )}
             hitRateWindow={hitRateWindow}
+            // The SAME window as the hit rate beside it, so the two figures on
+            // one sub-card describe the same games.
+            usage={usageForRow(
+              marketsByKey.get(row.marketKey),
+              gameLog,
+              hitRateWindow,
+              row.positionGroup,
+            )}
             edgeThreshold={edgeThreshold}
           />
         ))}

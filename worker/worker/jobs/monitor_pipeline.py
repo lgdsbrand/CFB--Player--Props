@@ -292,6 +292,25 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
              "actuals behind the Q1 markets. A warning: a missed day leaves Q1 "
              "hit rates one game behind while every full-game surface stands.",
     ),
+    JobExpectation(
+        name="build_usage_shares",
+        max_age_hours=36,
+        sport="cfb",
+        sport_scoped=True,
+        note="daily 08:00 UTC, last in the college results chain -- target and "
+             "rush share on the board and the player page. A warning: the "
+             "shares simply stop advancing while every other surface stands.",
+    ),
+    JobExpectation(
+        name="build_usage_shares",
+        max_age_hours=36,
+        sport="nfl",
+        sport_scoped=True,
+        note="daily 08:20 UTC, last in the NFL results chain. The SNAP share is "
+             "not written by this job -- it arrives with `snaps` in "
+             "nfl_ingest_stats -- so a stale run here leaves snap share current "
+             "and the two derived shares behind.",
+    ),
 )
 
 

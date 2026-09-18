@@ -14,6 +14,7 @@ import { HitRateChart } from "@/components/player/hit-rate-chart";
 import { LadderPanel } from "@/components/player/ladder-panel";
 import { MarketTabs } from "@/components/player/market-tabs";
 import { SplitGrid } from "@/components/player/split-grid";
+import { UsagePanel } from "@/components/player/usage-panel";
 import { SiteHeader } from "@/components/site-header";
 import { BOARD_PATH, scopedHref, type RawParams } from "@/lib/core/board-params";
 import { defenseStatForMarket, rankBasis } from "@/lib/core/defense-view";
@@ -513,6 +514,23 @@ export default async function PlayerDetail({
                 </div>
               </>
             )}
+          </section>
+
+          {/*
+            USAGE SITS BETWEEN THE SPLITS AND THE LOG, and reads from `gameLog`
+            rather than `sample`. Everything above needs a line to grade
+            against and empties out without one; a share is a fact about the
+            games themselves, so this panel is at its most useful in the part
+            of the week when the props are not up yet.
+          */}
+          <section className="panel flex flex-col gap-3 p-4">
+            <h2 className="section-header">Usage</h2>
+            <UsagePanel
+              games={gameLog}
+              position={position}
+              windows={config.hitRateWindows}
+              season={active.season}
+            />
           </section>
 
           <section className="panel flex flex-col gap-3 p-4">

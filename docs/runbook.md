@@ -788,6 +788,47 @@ here (implied catch rate 66.8%, which is the real one), so any comparison of a
 college conversion rate against an NFL one compares an artifact with a
 measurement.
 
+#### `build_usage_shares`
+
+```bash
+python -m worker.jobs.build_usage_shares --current --sport nfl    # what the cron runs
+python -m worker.jobs.build_usage_shares --sport cfb --seasons 2025 2026
+```
+
+Usage share into `player_game_stats.target_share` and `.rush_share` (migration
+0071) — a player's targets and carries as a fraction of his own team's in that
+game. Database only, free to re-run, and idempotent: the UPDATE compares before
+it writes, so a second pass over an unchanged season reports 0 rows changed.
+
+**Last in both results chains, and it cannot move earlier.** The denominator is
+a sum over every box-score row of a team-game, so it is not knowable until the
+last of them has landed.
+
+**It does NOT write `snap_share`.** That is nflverse's own `offense_pct`, written
+by the snap adapter beside `snaps` in `nfl_ingest_stats`. Team offensive snaps
+cannot be recovered from `player_game_stats` — the offensive line takes snaps and
+has no box-score row, so the largest count stored is a skill player's and any
+share derived against it would be too high in every row.
+
+**Target share is withheld where attribution is incomplete**, and the log says
+how often. A team-game whose attributed targets fall under 80% of its pass
+attempts publishes no target share at all, because those shares were measured to
+inflate: paired within player over cfb 2025 FBS, a receiver's mean share in
+those games ran 2.1 points above his own complete games (RB +2.2, TE +0.9). What
+is missing is whole roster rows, not a random scatter of targets, so the players
+who do appear absorb the share of those who do not.
+
+Expect roughly: NFL loses 0.2-0.5% of rows to the guard, college 2025 and 2026
+about 12%, college 2024 about 75% (its attribution has a 0.667 median), and
+college 2023 has no targets at all. **College target share is a 2025-onwards
+figure** and the guard is what says so.
+
+**Rush share has no such guard**, and that was measured rather than assumed:
+every rush has one carrier and both providers report rushers, so among FBS
+team-games 2 of 1,742 (2025) and 0 of 285 (2026) looked implausible. The college
+team-games that do are FCS opponents, whose box scores CFBD serves in fragments,
+and no FCS player is displayed anywhere.
+
 #### `build_quarter_stats`
 
 ```bash

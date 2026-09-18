@@ -31,6 +31,7 @@ import {
 } from "@/lib/core/hit-rate";
 import { playerHref } from "@/lib/core/player-params";
 import type { BoardRow, Market, PlayerGameLogRow } from "@/lib/core/types";
+import { formatUsageShare, usageForRow } from "@/lib/core/usage-view";
 
 /**
  * The board as a table: one row per PROP.
@@ -103,13 +104,24 @@ export function BoardTable({
    */
   showsCalls?: boolean;
 }) {
-  // Nine fixed columns — expander, player, prop, chance, proj, edge, odds, szn,
-  // opp rk — plus one per configured hit-rate window. Derived rather than
-  // written as a literal because the detail row spans it, and a colSpan that
-  // drifts from the header is invisible until a column is added.
-  // Nine fixed columns with calls; without them CHANCE/PROJ/EDGE go and a
-  // Q1 ALLOWED column arrives, so six plus one.
-  const columnCount = (showsCalls ? 9 : 7) + hitRateWindows.length;
+  // Ten fixed columns with calls — expander, player, prop, chance, proj, edge,
+  // odds, szn, use, opp rk — plus one per configured hit-rate window. Without
+  // calls, CHANCE/PROJ/EDGE go and a Q1 ALLOWED column arrives, so eight.
+  //
+  // USE IS ON BOTH BOARDS, unlike the three it sits beside: a share needs
+  // neither a line nor a call to be worth reading, so it is the one column that
+  // does not depend on the scope.
+  //
+  // Derived rather than written as a literal because the detail row spans it,
+  // and a colSpan that drifts from the header is invisible until a column is
+  // added.
+  const columnCount = (showsCalls ? 10 : 8) + hitRateWindows.length;
+
+  // The SAME window as the board's first hit-rate column, so the two numbers a
+  // reader compares across a row describe the same games. Following
+  // `hitRateWindow` instead would make the usage figure change when the SORT
+  // changed, which is a different thing from the window being read.
+  const usageWindow = hitRateWindows[0] ?? 5;
 
   return (
     <div className="panel overflow-hidden">
@@ -193,6 +205,13 @@ export function BoardTable({
               <th
                 scope="col"
                 className="py-2.5 pr-3 text-right font-semibold"
+                title={`How much of his own offence this player is: his share of the team's targets on a receiving prop, or of its carries on a rushing one, averaged over his last ${usageWindow} games. Blank on the passing props, which have no denominator, and on games whose box score carries no attribution.`}
+              >
+                Use L{usageWindow}
+              </th>
+              <th
+                scope="col"
+                className="py-2.5 pr-3 text-right font-semibold"
                 title="Opponent rank vs this position — 1 is the best defense, so a HIGH number is the softer matchup. Built from WHOLE games, including on the first-quarter board."
               >
                 Opp Rk
@@ -212,6 +231,7 @@ export function BoardTable({
                 edgeThreshold={edgeThreshold}
                 columnCount={columnCount}
                 showsCalls={showsCalls}
+                usageWindow={usageWindow}
                 striped={index % 2 === 1}
               />
             ))}
@@ -231,6 +251,7 @@ function PropRow({
   edgeThreshold,
   columnCount,
   showsCalls,
+  usageWindow,
   striped,
 }: {
   row: BoardRow;
@@ -241,6 +262,7 @@ function PropRow({
   edgeThreshold: number;
   columnCount: number;
   showsCalls: boolean;
+  usageWindow: number;
   striped: boolean;
 }) {
   const call = callFor(row, market);
@@ -302,6 +324,14 @@ function PropRow({
               <Q1AllowedCell row={row} />
             </td>
           )}
+          <td className="text-muted py-2 pr-3 text-right align-middle font-mono text-xs tabular-nums">
+            <UsageCell
+              row={row}
+              market={market}
+              games={games}
+              window={usageWindow}
+            />
+          </td>
           <td className="text-muted py-2 pr-3 text-right align-middle font-mono text-xs tabular-nums">
             {row.opponentRankVsPosition ?? "—"}
           </td>
@@ -513,6 +543,52 @@ function Q1AllowedCell({ row }: { row: BoardRow }) {
   return (
     <span title={`${allowed.label} allowed to ${row.positionGroup} per first quarter, before this week`}>
       {allowed.value.toFixed(1)}
+    </span>
+  );
+}
+
+/**
+ * The player's share of his own offence, on the denominator this market is
+ * read against (migration 0071).
+ *
+ * SHOWN WITHOUT A LINE AND WITHOUT A CALL, which is the point: it is a fact
+ * about the games rather than a claim about this one, so it is here on the
+ * first-quarter board, where nothing else on the row states an opinion, and on
+ * a full-game row whose book line has not gone up yet.
+ *
+ * PLAIN, NEVER COLOUR-CODED. A high target share is not a good bet — a book
+ * prices the role in — so tinting it green would restate a description as a
+ * recommendation. The same restraint the first-quarter allowed column keeps.
+ */
+function UsageCell({
+  row,
+  market,
+  games,
+  window,
+}: {
+  row: BoardRow;
+  market: Market | undefined;
+  games: PlayerGameLogRow[];
+  window: number;
+}) {
+  // Through `usageForRow`, the same call the card makes, so the two surfaces
+  // cannot map a market to different shares. No denominator for the passing
+  // markets and none before a player's first game; both read as "—" rather
+  // than as zero usage.
+  const summary = usageForRow(market, games, window, row.positionGroup);
+  if (!summary) return <span className="text-dim text-xs">—</span>;
+
+  return (
+    <span
+      title={`${row.playerName} took ${formatUsageShare(summary.share)} of his team's ${
+        summary.stat.noun
+      } per game over ${summary.games} game${summary.games === 1 ? "" : "s"}${
+        summary.missing > 0
+          ? `; ${summary.missing} more in this window had no attribution to divide`
+          : ""
+      }`}
+    >
+      {formatUsageShare(summary.share)}
     </span>
   );
 }

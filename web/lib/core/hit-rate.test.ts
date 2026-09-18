@@ -76,6 +76,9 @@ function game(
     q1RecYards: null,
     q1RecTds: null,
     q1OffensiveTds: null,
+    targetShare: null,
+    rushShare: null,
+    snapShare: null,
     ...values,
   };
 }

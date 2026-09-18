@@ -333,7 +333,12 @@ class TestSportGating:
         the single check read the college run and called both healthy while the
         NFL splits had been frozen for nearly three days.
         """
-        for name in ("build_splits", "run_projections", "ingest_odds"):
+        for name in (
+            "build_splits",
+            "run_projections",
+            "ingest_odds",
+            "build_usage_shares",
+        ):
             sports = {job.sport for job in MONITORED_JOBS if job.name == name}
             assert sports == set(MONITORED_SPORTS), (
                 f"{name} is expected for {sorted(sports)} but runs for "
@@ -345,7 +350,12 @@ class TestSportGating:
         """`sport_scoped` is what puts `metadata->>'sport'` in the staleness
         query. Setting it on a job only one sport writes would filter against a
         key that job never logs, and it would go stale-forever silently."""
-        shared = {"build_splits", "run_projections", "ingest_odds"}
+        shared = {
+            "build_splits",
+            "run_projections",
+            "ingest_odds",
+            "build_usage_shares",
+        }
         for job in MONITORED_JOBS:
             assert job.sport_scoped == (job.name in shared), (
                 f"{job.name} (sport={job.sport}) has sport_scoped="

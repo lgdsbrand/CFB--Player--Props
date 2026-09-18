@@ -140,7 +140,8 @@ services:
       python -m worker.jobs.ingest_stats --current &&
       python -m worker.jobs.ingest_ratings --current &&
       python -m worker.jobs.ingest_rankings --live --current &&
-      python -m worker.jobs.build_splits --current
+      python -m worker.jobs.build_splits --current &&
+      python -m worker.jobs.build_usage_shares --current --sport cfb
     envVars:
       - fromGroup: cfb-props-worker
 
@@ -175,7 +176,8 @@ services:
     startCommand: >-
       python -m worker.jobs.ingest_reference --current &&
       python -m worker.jobs.ingest_stats --current --incremental &&
-      python -m worker.jobs.build_splits --current
+      python -m worker.jobs.build_splits --current &&
+      python -m worker.jobs.build_usage_shares --current --sport cfb
     envVars:
       - fromGroup: cfb-props-worker
 
@@ -340,6 +342,12 @@ services:
   # with `&&` a failure stops everything after it: placed before the splits, a
   # fault in Q1 stats would freeze the NFL defensive ratings the whole board
   # depends on. Last, it can only cost itself.
+  #
+  # `build_usage_shares` goes after it for the same reason, and must come after
+  # `nfl_ingest_stats` for a different one: its denominator is a sum over every
+  # box-score row of a team-game, so it cannot run until the last of them has
+  # landed. The snap SHARE is not written here -- it arrives with `snaps` in the
+  # stats step, because it is the provider's own figure (migration 0071).
   - type: cron
     name: nfl-props-ingest-results
     runtime: python
@@ -352,7 +360,8 @@ services:
       python -m worker.jobs.nfl_ingest_stats --current &&
       python -m worker.jobs.nfl_ingest_plays --current &&
       python -m worker.jobs.build_splits --current --sport nfl &&
-      python -m worker.jobs.build_quarter_stats --current --sport nfl
+      python -m worker.jobs.build_quarter_stats --current --sport nfl &&
+      python -m worker.jobs.build_usage_shares --current --sport nfl
     envVars:
       - fromGroup: cfb-props-worker
 

@@ -118,6 +118,26 @@ export function formatCount(value: number): string {
   return COUNT.format(value);
 }
 
+/**
+ * An amount of money to two decimal places, e.g. "1,034.40". No symbol — the
+ * caller supplies it, because "$" sits inside the sentence often enough that
+ * baking it in here would fight the copy.
+ *
+ * PINNED TO en-US FOR THE REASON ABOVE THIS, which the arbitrage calculator
+ * rediscovered the hard way: `toLocaleString(undefined, ...)` on a Spanish
+ * machine rendered a $1,034.40 payout as "$1.034,40", read by this audience as
+ * one dollar. Two decimals always, never trimmed — a stake split of "470.2"
+ * is not a number anyone types into a betting slip.
+ */
+const MONEY = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+export function formatMoney(value: number): string {
+  return MONEY.format(value);
+}
+
 /** "Oct 28" */
 export function formatDateShort(iso: string | null): string {
   if (!iso) return "—";

@@ -49,6 +49,11 @@ export function SiteHeader({
     { href: "/games", label: "Games" },
     { href: "/cheat-sheets", label: "Sheets" },
     { href: "/no-vig", label: "No-Vig" },
+    // SIXTH LINK, ADDED 2026-09-21. The comment below is not decoration: a
+    // third link once pushed this row 0.7px past a 390px viewport and made
+    // every route on the site scroll sideways. Verified at 390 after adding
+    // this one — the nav absorbs it because of `min-w-0` and the scroller.
+    { href: "/arbitrage", label: "Arb" },
   ];
 
   return (

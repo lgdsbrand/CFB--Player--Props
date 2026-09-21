@@ -491,6 +491,7 @@ export default async function Home({
           edgeThreshold={config.edgeThreshold}
           showsCalls={showsCalls}
           chartingFieldSize={chartingFieldSize}
+          venue={resolved.venue}
         />
       ) : (
         /*
@@ -512,6 +513,7 @@ export default async function Home({
               gameLog={gameLogs.get(card.playerId) ?? []}
               hitRateWindow={resolved.hitRateWindow}
               edgeThreshold={config.edgeThreshold}
+              venue={resolved.venue}
             />
           ))}
         </section>

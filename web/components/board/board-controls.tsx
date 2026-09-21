@@ -224,6 +224,41 @@ export function BoardControls({
         </PillGroup>
 
         {/*
+          VENUE SITS BESIDE HIT RATE because it modifies it: the two together
+          read "his last 5 home games". The client asked for home/away
+          "as well as Last 5/10", and this is that intersection — the player
+          page has both cuts but only ever separately.
+
+          SECONDARY IN COLLEGE, DELIBERATELY (CLAUDE.md §7). It is a filter
+          rather than extra columns because a college away split is five or six
+          games; in the NFL it is a first-class cut and this is where it grows.
+
+          NEUTRAL SITES BELONG TO NEITHER SIDE, so HOME and AWAY do not add back
+          up to ALL. The label says "at" rather than "home/away" to avoid
+          implying a two-way partition of the schedule.
+        */}
+        <PillGroup label="At">
+          <PillLink
+            href={boardHref(params, { venue: "all" })}
+            active={params.venue === "all"}
+          >
+            All
+          </PillLink>
+          <PillLink
+            href={boardHref(params, { venue: "home" })}
+            active={params.venue === "home"}
+          >
+            Home
+          </PillLink>
+          <PillLink
+            href={boardHref(params, { venue: "away" })}
+            active={params.venue === "away"}
+          >
+            Away
+          </PillLink>
+        </PillGroup>
+
+        {/*
           THE DEFAULT FOLLOWS THE MARKET FILTER — see `resolveBoardView`. These
           pills always write an explicit value, so once a reader picks a layout
           it stops moving when they change market. `view` arrives resolved, so

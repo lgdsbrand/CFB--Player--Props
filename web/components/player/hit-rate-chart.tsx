@@ -259,8 +259,14 @@ export function HitRateChart({
  * "W17 '25" on one line is ~34px at this size, and ten of them do not fit a
  * 390px phone without overlapping. Recharts clones this element with the tick's
  * position and value, so every prop arrives optional.
+ *
+ * EXPORTED FOR `FormChart`, the no-line twin of this chart. Both draw the same
+ * games on the same axis and only differ in what they compare them against, so
+ * a second copy of this would be free to drift — and the two charts appear on
+ * the same page for different markets, where a mismatched axis would read as a
+ * rendering fault.
  */
-function WeekTick({
+export function WeekTick({
   x,
   y,
   payload,

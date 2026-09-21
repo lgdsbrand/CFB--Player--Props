@@ -27,6 +27,7 @@ import {
   formatHitRate,
   gradeGames,
   hitRate,
+  gamesAtVenue,
   priorSeasonCount,
   splitByVenue,
   statValue,
@@ -241,6 +242,52 @@ test("neutral sites count as neither home nor away", () => {
   assert.equal(split.home.length, 1);
   assert.equal(split.away.length, 1);
   assert.equal(split.neutral.length, 1);
+});
+
+// -----------------------------------------------------------------------------
+// The venue filter — the board's "At" pill group
+// -----------------------------------------------------------------------------
+
+test("the venue filter runs on the RAW log, so a window is taken after it", () => {
+  // The distinction this pins: "his last 2 HOME games" (weeks 5 and 3) rather
+  // than "the home games among his last 2" (week 5 alone). The second reading
+  // gives a column labelled L2 a denominator that moves for reasons the reader
+  // cannot see.
+  const log = [
+    game(5, { isHome: true }),
+    game(4, { isHome: false }),
+    game(3, { isHome: true }),
+    game(2, { isHome: false }),
+  ];
+
+  const home = gamesAtVenue(log, "home");
+
+  assert.deepEqual(
+    home.map((g) => g.week),
+    [5, 3],
+  );
+});
+
+test("neutral sites are in neither bucket, so home and away need not sum to all", () => {
+  // The same rule `splitByVenue` follows, asserted through the board's filter
+  // so the two cannot drift. A bowl game belongs to nobody.
+  const log = [
+    game(3, { isHome: true }),
+    game(2, { isHome: false }),
+    game(1, { isHome: true, neutralSite: true }),
+  ];
+
+  assert.equal(gamesAtVenue(log, "home").length, 1);
+  assert.equal(gamesAtVenue(log, "away").length, 1);
+  assert.equal(gamesAtVenue(log, "all").length, 3);
+});
+
+test("a player with no games at the chosen venue yields an empty log, not every game", () => {
+  // The board renders a dash from this. Falling back to the full log would be
+  // the dangerous failure: an AWAY column quietly showing home form.
+  const log = [game(2, { isHome: true }), game(1, { isHome: true })];
+
+  assert.deepEqual(gamesAtVenue(log, "away"), []);
 });
 
 // -----------------------------------------------------------------------------

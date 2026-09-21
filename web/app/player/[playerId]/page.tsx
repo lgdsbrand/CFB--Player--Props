@@ -11,6 +11,7 @@ import { DefenseDetail } from "@/components/player/defense-detail";
 import { DefenseTendencies } from "@/components/player/defense-tendencies";
 import { sportHasCharting } from "@/lib/core/charting-view";
 import { GameLogTable } from "@/components/player/game-log-table";
+import { FormChart } from "@/components/player/form-chart";
 import { GameTabs } from "@/components/player/game-tabs";
 import { HitRateChart } from "@/components/player/hit-rate-chart";
 import { LadderPanel } from "@/components/player/ladder-panel";
@@ -44,6 +45,12 @@ import {
   resolveGameId,
   rowsForGame,
 } from "@/lib/core/player-games";
+import {
+  formGames,
+  formSeasonToDate,
+  formWindows,
+} from "@/lib/core/form";
+import { FormGrid } from "@/components/player/form-grid";
 import { parsePlayerParams, playerHref } from "@/lib/core/player-params";
 import {
   rankBands,
@@ -286,6 +293,25 @@ export default async function PlayerDetail({
   );
   const borrowed = priorSeasonCount(sample, active.season);
 
+  // THE UNGRADED SAMPLE, for when no book has posted a line. It is built from
+  // the same log, trimmed by the same rule and ordered by the same comparator,
+  // so the bars a reader sees with no line are the same GAMES they would see
+  // with one — only the comparison is missing. Built unconditionally rather
+  // than inside the branch: it is a map over at most a few dozen rows, and
+  // keeping it out of the JSX keeps the branch below readable.
+  //
+  // The projected median is the mark. It is NULL on a market that withholds its
+  // call, in which case the chart shows the bars alone — still the last-N stats
+  // the client asked for.
+  const form = activeMarket ? formGames(gameLog, activeMarket.statColumn) : [];
+  const formSample = topUpFromPriorSeason(
+    form,
+    active.season,
+    Math.max(CHART_GAMES, ...config.hitRateWindows),
+  );
+  const formBorrowed = priorSeasonCount(formSample, active.season);
+  const formSzn = formSeasonToDate(form, active.season);
+
   const ranksByGame = await rankLookup(sample, position);
 
   const venue = formatVenue({
@@ -419,27 +445,77 @@ export default async function PlayerDetail({
             </header>
 
             {activeRow.line === null ? (
-              <p className="text-muted max-w-prose text-xs">
-                No line posted for this market yet, so there is nothing to grade
-                past games against.{" "}
-                {/* Explicit, not a literal space: a space that follows an
-                    expression OPENING a line is dropped by the JSX transform. */}
-                {statesCall ? (
-                  <>
-                    The projected range below is the model&rsquo;s lean; the call
-                    and confidence fill in when a book posts.
-                  </>
-                ) : (
-                  // THE FULL-GAME SENTENCE PROMISES TWO THINGS THAT WILL NEVER
-                  // ARRIVE HERE: there is no projected range below (the panel is
-                  // not rendered for a market that publishes no call), and the
-                  // call never fills in — that is the decision, not a wait.
-                  <>
-                    Only DraftKings posts first-quarter lines, and it posts them
-                    late; the record against the line appears here once one does.
-                  </>
-                )}
-              </p>
+              // NO LINE: THE GAMES STILL SHOW. This used to be the sentence
+              // alone, which meant a prop nobody had priced yet showed a reader
+              // nothing at all — and with the odds pool empty that is most of
+              // the board. The client asked for exactly this on 2026-09-21.
+              // Nothing here is graded; see `lib/core/form.ts`.
+              <>
+                <p className="text-muted max-w-prose text-xs">
+                  No line posted for this market yet, so nothing below is graded
+                  against one.{" "}
+                  {/* Explicit, not a literal space: a space that follows an
+                      expression OPENING a line is dropped by the JSX transform. */}
+                  {statesCall ? (
+                    <>
+                      The bars are his last {CHART_GAMES}{" "}
+                      games with the model&rsquo;s projection marked; the call
+                      and confidence fill in when a book posts.
+                    </>
+                  ) : (
+                    // THE CALL NEVER FILLS IN HERE — that is the decision, not
+                    // a wait. Only DraftKings posts first-quarter lines and it
+                    // posts them late, so the history is the honest number.
+                    <>
+                      The bars are his last {CHART_GAMES}{" "}
+                      first-quarter games. Only DraftKings posts first-quarter
+                      lines and posts them late; the record against the line
+                      appears once one does.
+                    </>
+                  )}
+                </p>
+
+                <FormChart
+                  points={formSample.slice(0, CHART_GAMES).map((game) => ({
+                    gameId: game.gameId,
+                    season: game.season,
+                    week: game.week,
+                    value: game.value,
+                    opponent: game.opponentAbbreviation ?? "—",
+                    isHome: game.isHome,
+                    neutralSite: game.neutralSite,
+                  }))}
+                  projected={activeRow.projectedMedian}
+                  unit={activeMarket?.unit ?? null}
+                  season={active.season}
+                />
+
+                <div className="flex flex-col gap-1.5">
+                  <span className="label-caption">
+                    Average per game · no line to grade against
+                  </span>
+                  <FormGrid
+                    splits={[
+                      ...formWindows(formSample, config.hitRateWindows),
+                      ...(formSzn
+                        ? [
+                            {
+                              key: "szn",
+                              label: "Szn",
+                              summary: formSzn,
+                            },
+                          ]
+                        : []),
+                    ]}
+                    unit={activeMarket?.unit ?? null}
+                    note={
+                      formBorrowed > 0
+                        ? `Includes ${formBorrowed} game${formBorrowed === 1 ? "" : "s"} from ${active.season - 1}, filling in while ${active.season} is short. Szn is this season only.`
+                        : undefined
+                    }
+                  />
+                </div>
+              </>
             ) : (
               <HitRateChart
                 points={sample.slice(0, CHART_GAMES).map((game) => ({
@@ -461,24 +537,42 @@ export default async function PlayerDetail({
               />
             )}
 
-            <LastFive
-              summary={
-                sample.length > 0
-                  ? hitRate(sample, config.hitRateWindows[0] ?? 5)
-                  : null
-              }
-              side={gradeSide}
-              window={config.hitRateWindows[0] ?? 5}
-              verb={activeMarket?.isBinary ? "scored" : undefined}
-              season={active.season}
-            />
+            {/*
+              ONLY WHERE THERE IS A LINE. With none, the AVERAGE PER GAME grid
+              above already carries the same games in more detail, and this row
+              rendered its "no line to grade against" empty state directly
+              beneath it — a panel contradicting itself two lines apart.
+              The board's card has no such grid, which is why `LastFive` still
+              takes a `form` prop for that surface.
+            */}
+            {activeRow.line !== null ? (
+              <LastFive
+                summary={
+                  sample.length > 0
+                    ? hitRate(sample, config.hitRateWindows[0] ?? 5)
+                    : null
+                }
+                side={gradeSide}
+                window={config.hitRateWindows[0] ?? 5}
+                verb={activeMarket?.isBinary ? "scored" : undefined}
+                season={active.season}
+              />
+            ) : null}
           </section>
 
           <section className="panel flex flex-col gap-3 p-4">
             <h2 className="section-header">Hit-rate splits</h2>
             {sample.length === 0 ? (
+              // THE AVERAGES ARE ALREADY ABOVE, so this says what is missing
+              // rather than repeating that there is no line. Venue and rank
+              // splits are hit rates by construction — there is no such thing
+              // as an unsplit "average vs a tough defense" that answers the
+              // same question — so they wait for a line rather than being
+              // reinvented as averages the client did not ask for.
               <p className="text-dim text-xs">
-                Nothing to split until this market has a line.
+                Hit-rate splits need a posted line. His per-game averages are
+                above; venue and opponent-rank splits appear once a book prices
+                this market.
               </p>
             ) : (
               <>

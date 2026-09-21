@@ -1,4 +1,5 @@
 import { LastFive } from "@/components/board/last-five";
+import type { FormSummary } from "@/lib/core/form";
 import { ProjectionBar } from "@/components/board/projection-bar";
 import { callFor } from "@/lib/core/board-view";
 import {
@@ -46,6 +47,7 @@ export function MarketRow({
   row,
   market,
   hitRate,
+  form,
   hitRateWindow,
   usage,
   edgeThreshold,
@@ -58,6 +60,11 @@ export function MarketRow({
    */
   market: Market | undefined;
   hitRate: HitRateSummary | null;
+  /**
+   * The same window as raw values, for a market with no posted line. Forwarded
+   * straight to `LastFive`, which shows one or the other and never both.
+   */
+  form: FormSummary | null;
   hitRateWindow: number;
   /** Null where the market has no denominator, or no game in the window had one. */
   usage: UsageSummary | null;
@@ -149,6 +156,7 @@ export function MarketRow({
 
       <LastFive
         summary={hitRate}
+        form={form}
         side={row.isBinary || statesNothing ? "over" : row.side}
         window={hitRateWindow}
         verb={row.isBinary ? "scored" : undefined}

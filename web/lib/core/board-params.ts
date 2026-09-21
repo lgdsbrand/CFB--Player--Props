@@ -87,6 +87,27 @@ export function isBoardPreset(value: string | undefined): value is BoardPreset {
   return value === "best" || value === "edges";
 }
 
+/**
+ * Which venue's games the hit-rate columns are measured over.
+ *
+ * SECONDARY IN COLLEGE, FIRST-CLASS IN THE NFL (CLAUDE.md §7), which is why it
+ * is a filter on the board rather than a set of extra columns: a college away
+ * split is five or six games and does not deserve permanent width next to L5.
+ *
+ * NEUTRAL SITES ARE IN NEITHER `home` NOR `away`, matching `splitByVenue`. A
+ * bowl game or a kickoff-classic neutral site belongs to no one, and folding it
+ * into whichever team the schedule listed first is how "home" quietly stops
+ * meaning home. So `home` + `away` need not add up to `all`, and that is
+ * correct rather than a rounding error.
+ */
+export type BoardVenue = "all" | "home" | "away";
+
+export const DEFAULT_BOARD_VENUE: BoardVenue = "all";
+
+export function resolveBoardVenue(value: string | undefined): BoardVenue {
+  return value === "home" || value === "away" ? value : DEFAULT_BOARD_VENUE;
+}
+
 export type BoardParams = {
   /**
    * Which sport's board this is.
@@ -139,6 +160,14 @@ export type BoardParams = {
   minOpponentRank?: number;
   hitRateWindow: number;
   /**
+   * Home, away, or every game. See `BoardVenue`.
+   *
+   * It narrows WHICH GAMES the L5 / L10 / SZN columns are computed from, so
+   * `venue=home` with `window=5` reads "his last five home games" — the
+   * intersection the player page's two separate split grids cannot show.
+   */
+  venue: BoardVenue;
+  /**
    * Undefined means "not chosen", which is NOT the same as `cards`. The default
    * depends on the market filter — see `resolveBoardView` — so storing a
    * concrete value here would freeze whichever layout the reader happened to
@@ -178,7 +207,8 @@ const BOARD_PARAM_KEYS = [
   "sport",
   "scope",
   "season", "week", "position", "market", "game", "day", "conference", "q",
-  "sort", "edges", "top25", "conf", "rank", "window", "view", "preset", "page",
+  "sort", "edges", "top25", "conf", "rank", "window", "venue", "view",
+  "preset", "page",
 ] as const;
 
 /**
@@ -312,6 +342,7 @@ export function parseBoardParams(
     minConfidence: float(raw.conf),
     minOpponentRank: int(raw.rank),
     hitRateWindow: int(raw.window) ?? DEFAULT_HIT_RATE_WINDOW,
+    venue: resolveBoardVenue(first(raw.venue)),
     view: view === "cards" || view === "table" ? view : undefined,
     preset: isBoardPreset(preset) ? preset : undefined,
     page: Math.max(int(raw.page) ?? 1, 1),
@@ -427,6 +458,7 @@ export function boardHref(
   if (next.hitRateWindow !== DEFAULT_HIT_RATE_WINDOW) {
     set("window", next.hitRateWindow);
   }
+  if (next.venue !== DEFAULT_BOARD_VENUE) set("venue", next.venue);
   // Written even when it matches what the default would pick. Omitting it would
   // turn an explicit choice back into "not chosen", so the next market change
   // would silently flip the layout out from under a reader who had just set it.
@@ -470,6 +502,7 @@ export function resetBoardHref(current: BoardParams): string {
       edgesOnly: false,
       rankedOnly: false,
       hitRateWindow: DEFAULT_HIT_RATE_WINDOW,
+      venue: DEFAULT_BOARD_VENUE,
       page: 1,
     },
     {},

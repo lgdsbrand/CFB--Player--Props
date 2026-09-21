@@ -1,3 +1,4 @@
+import { formatFormMean, type FormSummary } from "@/lib/core/form";
 import {
   formatHitRate,
   hitRateTone,
@@ -30,12 +31,23 @@ const TONE_CLASS = {
  */
 export function LastFive({
   summary,
+  form,
   side,
   window,
   verb,
   season,
 }: {
   summary: HitRateSummary | null;
+  /**
+   * The same games as raw values, used ONLY when there is no line and so no
+   * `summary`. The client asked for this on 2026-09-21: a prop nobody has
+   * priced still shows what the player has been doing.
+   *
+   * Never rendered alongside the dots. A row carrying both a hit rate and an
+   * average would put two differently-scaled numbers under one "LAST 5",
+   * which is the confusion `lib/core/form.ts` exists to avoid.
+   */
+  form?: FormSummary | null;
   side: "over" | "under" | null;
   window: number;
   /** The season on screen. Games from before it render hollow. */
@@ -48,6 +60,43 @@ export function LastFive({
   verb?: string;
 }) {
   if (!summary || summary.games.length === 0) {
+    // NO LINE, BUT STILL THE GAMES. Values instead of dots, because a dot
+    // encodes an outcome and there is none. The average leads and the games
+    // follow it, most recent first, matching the dot order above.
+    if (form && form.games.length > 0) {
+      return (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="text-dim text-[0.625rem] font-semibold uppercase tracking-label">
+            Last {window}
+          </span>
+          <span className="text-ink text-[0.625rem] font-bold tabular-nums">
+            {formatFormMean(form.mean)}
+          </span>
+          <span className="text-dim text-[0.625rem] font-semibold uppercase tracking-label">
+            avg
+          </span>
+          <span className="flex flex-wrap items-center gap-1 font-mono text-[0.625rem] tabular-nums">
+            {form.games.map((game) => (
+              <span
+                key={game.gameId}
+                title={`${game.season < season ? `${game.season} ` : ""}Wk ${game.week} ${game.isHome ? "vs" : "@"} ${game.opponentAbbreviation ?? "?"}: ${game.value}`}
+                className={
+                  game.season < season ? "text-dim/70" : "text-muted"
+                }
+              >
+                {game.value}
+              </span>
+            ))}
+          </span>
+          <span className="sr-only">
+            Averaging {formatFormMean(form.mean)} over his last{" "}
+            {form.played} games. No line has been posted, so none of these are
+            graded.
+          </span>
+        </div>
+      );
+    }
+
     return (
       <div className="text-dim flex items-center gap-1.5 text-[0.625rem] font-semibold uppercase tracking-label">
         Last {window}

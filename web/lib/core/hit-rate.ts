@@ -241,6 +241,13 @@ export function hitRate(graded: GradedGame[], window: number): HitRateSummary {
  * loaded at all is a sport policy (`borrowsPriorSeasonForm`), and a log holding
  * one season passes through unchanged.
  *
+ * GENERIC OVER THE ROW so the ungraded path can share it. A `FormGame`
+ * (`lib/core/form.ts`) has no line and no outcome, but topping a sample up is
+ * pure chronology — it reads season, week, kickoff and id and nothing else.
+ * Two copies of this trimming rule would be free to disagree about which games
+ * a young NFL season borrows, and then the chart and the columns beside it
+ * would describe different games.
+ *
  * THE L5/L10 WINDOWS DO NOT NEED IT, and it is worth knowing why. `orderGames`
  * puts every game from this season ahead of every game from last, so the first
  * N games of a two-season log already ARE this season topped up. This exists
@@ -248,11 +255,9 @@ export function hitRate(graded: GradedGame[], window: number): HitRateSummary {
  * game log — where an untrimmed log would pull in all of last season and keep
  * it there until December.
  */
-export function topUpFromPriorSeason(
-  graded: GradedGame[],
-  season: number,
-  minGames: number,
-): GradedGame[] {
+export function topUpFromPriorSeason<
+  T extends Pick<GradedGame, "season" | "week" | "startDate" | "gameId">,
+>(graded: T[], season: number, minGames: number): T[] {
   const ordered = [...graded].sort(orderGames);
   const current = ordered.filter((game) => game.season === season);
   const shortfall = minGames - current.length;
@@ -264,7 +269,10 @@ export function topUpFromPriorSeason(
 }
 
 /** How many games in a sample were played before `season` began. */
-export function priorSeasonCount(games: GradedGame[], season: number): number {
+export function priorSeasonCount(
+  games: readonly Pick<GradedGame, "season">[],
+  season: number,
+): number {
   return games.filter((game) => game.season < season).length;
 }
 
@@ -279,6 +287,43 @@ export function splitByVenue(graded: GradedGame[]): {
     away: graded.filter((g) => !g.isHome && !g.neutralSite),
     neutral: graded.filter((g) => g.neutralSite),
   };
+}
+
+/**
+ * Narrow a log to one venue, for the board's venue filter.
+ *
+ * GENERIC OVER THE ROW, and that is the point: it is applied to the RAW game
+ * log before anything reads it, so the hit-rate columns, the season-to-date
+ * column and the usage figures beside them are all computed from the same set
+ * of games. Filtering only the graded games would have left a card showing
+ * "L5 at home" next to a target share over every game, which is two different
+ * denominators under one heading.
+ *
+ * ORDER MATTERS AND IT IS THE OTHER REASON THIS EXISTS. It runs BEFORE a window
+ * is taken, so `venue=home, window=5` is "his last five HOME games" and not
+ * "the home games among his last five". The second reading gives a column
+ * labelled L5 a denominator that moves between 0 and 5 for reasons the reader
+ * cannot see, and on a college schedule it is 0 often enough to look broken.
+ *
+ * NEUTRAL SITES ARE IN NEITHER BUCKET, exactly as in `splitByVenue` — the one
+ * rule, written once. So `home` and `away` need not sum to `all`.
+ *
+ * `all` returns the same array rather than a copy: nothing downstream mutates
+ * it, and the board does this per visible row on every render.
+ *
+ * THE UNION IS SPELLED OUT RATHER THAN IMPORTED as `BoardVenue`. This module is
+ * loaded by Node's test runner, which does not understand the `@/*` alias, and
+ * `board-params` is the board's URL contract — a core primitive should not
+ * depend on it. Keep the two in step by hand; they are three literals.
+ */
+export function gamesAtVenue<T extends { isHome: boolean; neutralSite: boolean }>(
+  games: T[],
+  venue: "all" | "home" | "away",
+): T[] {
+  if (venue === "all") return games;
+  return venue === "home"
+    ? games.filter((g) => g.isHome && !g.neutralSite)
+    : games.filter((g) => !g.isHome && !g.neutralSite);
 }
 
 /**

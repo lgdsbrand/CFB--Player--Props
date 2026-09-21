@@ -38,6 +38,9 @@ const FULLY_FILTERED: BoardParams = {
   // `cfb` would pass while `boardHref` dropped the parameter entirely, since
   // an omitted sport parses back as college.
   sport: "nfl",
+  // Away, not "all": the default is never written to the URL, so a fixture
+  // holding it would let a dropped `venue` round-trip and still pass.
+  venue: "away",
   scope: "full",
   season: 2025,
   week: 8,
@@ -195,6 +198,7 @@ test("a basePath with no parameters left is the bare path", () => {
       rankedOnly: false,
       edgesOnly: false,
       hitRateWindow: 5,
+      venue: "all",
       sort: "edge",
       page: 1,
     },
@@ -213,6 +217,7 @@ const BARE: BoardParams = {
   sort: "edge",
   edgesOnly: false,
   rankedOnly: false,
+  venue: "all",
   hitRateWindow: DEFAULT_HIT_RATE_WINDOW,
   page: 1,
 };
@@ -279,6 +284,7 @@ test("leaving a preset for the full board drops it", () => {
 const bare = (sport: BoardParams["sport"]): BoardParams => ({
   sport,
   scope: "full",
+  venue: "all",
   season: 2026,
   week: 1,
   rankedOnly: false,

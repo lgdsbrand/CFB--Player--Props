@@ -8,6 +8,9 @@ import { formatGameLine, formatKickoff, formatVenue } from "@/lib/core/format";
 import { playerHref } from "@/lib/core/player-params";
 import { gradeFor, gradeToneToken } from "@/lib/core/grade";
 import { summariseRow } from "@/lib/core/board-view";
+import { gamesAtVenue } from "@/lib/core/hit-rate";
+import { formGames, formSummary } from "@/lib/core/form";
+import type { BoardVenue } from "@/lib/core/board-params";
 import { usageForRow } from "@/lib/core/usage-view";
 import type { PlayerCard as PlayerCardData } from "@/lib/core/board-view";
 import type { Market, PlayerGameLogRow } from "@/lib/core/types";
@@ -30,16 +33,26 @@ export function PlayerCard({
   gameLog,
   hitRateWindow,
   edgeThreshold,
+  venue = "all",
 }: {
   card: PlayerCardData;
   marketsByKey: Map<string, Market>;
   gameLog: PlayerGameLogRow[];
   hitRateWindow: number;
   edgeThreshold: number;
+  /**
+   * Which venue's games the hit rate and usage on every sub-card describe —
+   * the VENUE pill group. Narrowed once, below, for the same reason the table
+   * narrows once: the two figures on a sub-card must share a denominator.
+   */
+  venue?: BoardVenue;
 }) {
+  // The raw log, narrowed once. `summariseRow` and `usageForRow` below both
+  // read this rather than `gameLog`.
+  const atVenue = gamesAtVenue(gameLog, venue);
   const grade = gradeFor(card.topConfidence);
   const tone = gradeToneToken(grade);
-  const venue = formatVenue({
+  const venueLabel = formatVenue({
     name: card.venueName,
     city: card.venueCity,
     state: card.venueState,
@@ -133,9 +146,9 @@ export function PlayerCard({
             record is 55 characters before the city is added, and the card is
             one of three across at xl.
           */}
-          {venue ? (
-            <p className="text-dim truncate text-[0.6875rem]" title={venue}>
-              {venue}
+          {venueLabel ? (
+            <p className="text-dim truncate text-[0.6875rem]" title={venueLabel}>
+              {venueLabel}
             </p>
           ) : null}
 
@@ -206,15 +219,25 @@ export function PlayerCard({
             hitRate={summariseRow(
               row,
               marketsByKey.get(row.marketKey),
-              gameLog,
+              atVenue,
               hitRateWindow,
             )}
+            // The ungraded twin, used only when no book has posted a line.
+            // Built from the same venue-narrowed log the hit rate above uses.
+            form={(() => {
+              const market = marketsByKey.get(row.marketKey);
+              if (!market) return null;
+              return formSummary(
+                formGames(atVenue, market.statColumn),
+                hitRateWindow,
+              );
+            })()}
             hitRateWindow={hitRateWindow}
             // The SAME window as the hit rate beside it, so the two figures on
             // one sub-card describe the same games.
             usage={usageForRow(
               marketsByKey.get(row.marketKey),
-              gameLog,
+              atVenue,
               hitRateWindow,
               row.positionGroup,
             )}

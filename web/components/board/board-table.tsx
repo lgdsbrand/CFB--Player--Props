@@ -22,8 +22,18 @@ import {
   formatVenue,
   meetsEdgeThreshold,
 } from "@/lib/core/format";
+import type { BoardVenue } from "@/lib/core/board-params";
+import {
+  formatFormMean,
+  formGames,
+  formSeasonToDate,
+  formSummary,
+  type FormGame,
+  type FormSummary,
+} from "@/lib/core/form";
 import {
   formatHitRate,
+  gamesAtVenue,
   hitRate,
   hitRateTone,
   priorSeasonCount,
@@ -83,6 +93,7 @@ export function BoardTable({
   edgeThreshold,
   showsCalls = true,
   chartingFieldSize = 0,
+  venue = "all",
 }: {
   rows: BoardRow[];
   marketsByKey: Map<string, Market>;
@@ -114,6 +125,14 @@ export function BoardTable({
    * line of dashes on the college board.
    */
   chartingFieldSize?: number;
+  /**
+   * Which venue's games every game-derived column is measured over — the
+   * VENUE pill group. Secondary in college on purpose (CLAUDE.md §7).
+   *
+   * It narrows the log ONCE, in `PropRow`, rather than per column, so L5, L10,
+   * SZN and USE cannot end up describing different sets of games.
+   */
+  venue?: BoardVenue;
 }) {
   // Ten fixed columns with calls — expander, player, prop, chance, proj, edge,
   // odds, szn, use, opp rk — plus one per configured hit-rate window. Without
@@ -194,17 +213,19 @@ export function BoardTable({
                   key={window}
                   scope="col"
                   className="py-2.5 pr-3 text-right font-semibold"
-                  title={`Hit rate over this player's last ${window} games played, graded against the line showing now. * means some of those games are from last season, filling in while this one is short`}
+                  title={`Hit rate over this player's last ${window} ${venueWord(venue)} games played, graded against the line showing now. * means some of those games are from last season, filling in while this one is short`}
                 >
                   L{window}
+                  {venueMark(venue)}
                 </th>
               ))}
               <th
                 scope="col"
                 className="py-2.5 pr-3 text-right font-semibold"
-                title="Hit rate across this season up to (not including) the week on screen"
+                title={`Hit rate across this season up to (not including) the week on screen, over his ${venueWord(venue)} games`}
               >
                 Szn
+                {venueMark(venue)}
               </th>
               {showsCalls ? null : (
                 <th
@@ -218,9 +239,10 @@ export function BoardTable({
               <th
                 scope="col"
                 className="py-2.5 pr-3 text-right font-semibold"
-                title={`How much of his own offence this player is: his share of the team's targets on a receiving prop, or of its carries on a rushing one, averaged over his last ${usageWindow} games. Blank on the passing props, which have no denominator, and on games whose box score carries no attribution.`}
+                title={`How much of his own offence this player is: his share of the team's targets on a receiving prop, or of its carries on a rushing one, averaged over his last ${usageWindow} ${venueWord(venue)} games. Blank on the passing props, which have no denominator, and on games whose box score carries no attribution.`}
               >
                 Use L{usageWindow}
+                {venueMark(venue)}
               </th>
               {showsBlitz ? (
                 <th
@@ -254,6 +276,7 @@ export function BoardTable({
                 columnCount={columnCount}
                 showsCalls={showsCalls}
                 usageWindow={usageWindow}
+                venue={venue}
                 chartingFieldSize={showsBlitz ? chartingFieldSize : 0}
                 striped={index % 2 === 1}
               />
@@ -275,6 +298,7 @@ function PropRow({
   columnCount,
   showsCalls,
   usageWindow,
+  venue,
   chartingFieldSize,
   striped,
 }: {
@@ -287,16 +311,29 @@ function PropRow({
   columnCount: number;
   showsCalls: boolean;
   usageWindow: number;
+  venue: BoardVenue;
   chartingFieldSize: number;
   striped: boolean;
 }) {
   const call = callFor(row, market);
 
-  // GRADED ONCE, then sliced per column. The card grades per market because it
-  // shows one window; this shows three, and re-running `gradeGames` for each
+  // NARROWED ONCE, ON THE RAW LOG. Everything below reads `atVenue` rather
+  // than `games` — the graded columns, the season column and the usage cell.
+  // Filtering only the graded games would have printed "L5 at home" beside a
+  // target share taken over every game.
+  //
+  // THEN GRADED ONCE, and sliced per column. The card grades per market because
+  // it shows one window; this shows three, and re-running `gradeGames` for each
   // would walk the same season three times per row — 150 passes on a 50-row
   // page — for identical output.
-  const graded = gradeRow(row, market, games);
+  const atVenue = gamesAtVenue(games, venue);
+  const graded = gradeRow(row, market, atVenue);
+
+  // AND THE UNGRADED SAMPLE, for the rows no book has priced — which, with the
+  // odds pool empty, is most of them. The columns below fall back to a per-game
+  // average rather than printing a dash. Same games, same venue narrowing; only
+  // the comparison against a line is missing. See `lib/core/form.ts`.
+  const form = market ? formGames(atVenue, market.statColumn) : [];
   const label = `${row.playerName} ${row.marketLabel ?? row.marketName}`;
 
   return (
@@ -336,12 +373,14 @@ function PropRow({
               key={window}
               graded={graded}
               summary={graded.length > 0 ? hitRate(graded, window) : null}
+              form={formSummary(form, window)}
               season={row.season}
             />
           ))}
           <HitRateCell
             graded={graded}
             summary={seasonToDate(graded, row.season)}
+            form={formSeasonToDate(form, row.season)}
             season={row.season}
           />
           {showsCalls ? null : (
@@ -353,7 +392,7 @@ function PropRow({
             <UsageCell
               row={row}
               market={market}
-              games={games}
+              games={atVenue}
               window={usageWindow}
             />
           </td>
@@ -371,12 +410,35 @@ function PropRow({
         <RowDetail
           row={row}
           graded={graded}
+          form={form}
           call={call}
           hitRateWindow={hitRateWindow}
         />
       }
     />
   );
+}
+
+/**
+ * The one-letter marker a venue-filtered column carries, e.g. "L5·H".
+ *
+ * WHY MARK THE COLUMNS AT ALL when the pill group already shows the choice: a
+ * board gets screenshotted and pasted into a group chat, and "L5 61%" with no
+ * marker is a different claim from "L5·H 61%". Two characters keep the table
+ * honest away from its own controls.
+ */
+function venueMark(venue: BoardVenue) {
+  if (venue === "all") return null;
+  return (
+    <span className="text-dim font-normal">
+      ·{venue === "home" ? "H" : "A"}
+    </span>
+  );
+}
+
+/** "home" / "away" / "" for the column tooltips. Empty reads naturally: "his last 5 games". */
+function venueWord(venue: BoardVenue): string {
+  return venue === "all" ? "" : venue;
 }
 
 function PlayerCell({ row }: { row: BoardRow }) {
@@ -710,14 +772,47 @@ const TONE_CLASS = {
 function HitRateCell({
   graded,
   summary,
+  form,
   season,
 }: {
   graded: GradedGame[];
   summary: ReturnType<typeof hitRate> | null;
+  /**
+   * The same window as a per-game AVERAGE, shown only when there is no rate.
+   *
+   * IT MUST NOT READ AS A RATE, because it shares a column with them. Three
+   * things keep them apart: no percent sign, a forced decimal place
+   * (`formatFormMean`), and `text-muted` rather than the rate's bold tone
+   * colours. The tooltip says which it is in words.
+   */
+  form?: FormSummary | null;
   /** The season on screen; games before it are marked as borrowed. */
   season: number;
 }) {
   if (graded.length === 0 || !summary) {
+    // NO LINE: THE AVERAGE, NOT A DASH. A dash said "we know nothing about
+    // this player", which was never true — only the line was missing.
+    if (form && form.played > 0) {
+      const borrowedForm = priorSeasonCount(form.games, season);
+      return (
+        <td
+          className="text-muted py-2 pr-3 text-right align-middle font-mono text-xs tabular-nums"
+          title={
+            `Average, not a hit rate: ${formatFormMean(form.mean)} per game over ` +
+            `${form.played} game${form.played === 1 ? "" : "s"}` +
+            `${form.min !== null ? `, ${formatFormMean(form.min)} to ${formatFormMean(form.max)}` : ""}. ` +
+            `No book has posted a line, so there is nothing to grade against` +
+            `${borrowedForm > 0 ? ` · ${borrowedForm} of the games from ${season - 1}` : ""}.`
+          }
+        >
+          {formatFormMean(form.mean)}
+          {borrowedForm > 0 ? (
+            <span className="text-dim ml-0.5 font-normal">*</span>
+          ) : null}
+        </td>
+      );
+    }
+
     return (
       <td
         className="text-dim py-2 pr-3 text-right align-middle text-xs"
@@ -768,11 +863,14 @@ function HitRateCell({
 function RowDetail({
   row,
   graded,
+  form,
   call,
   hitRateWindow,
 }: {
   row: BoardRow;
   graded: GradedGame[];
+  /** The ungraded sample, for a market with no posted line. */
+  form: FormGame[];
   call: ReturnType<typeof callFor>;
   hitRateWindow: number;
 }) {
@@ -802,6 +900,7 @@ function RowDetail({
 
       <LastFive
         summary={graded.length > 0 ? hitRate(graded, hitRateWindow) : null}
+        form={formSummary(form, hitRateWindow)}
         side={row.isBinary || statesNothing ? "over" : row.side}
         window={hitRateWindow}
         verb={row.isBinary ? "scored" : undefined}

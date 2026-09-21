@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { NotConfigured } from "@/components/not-configured";
 import { PageLink } from "@/components/page-link";
+import { HowToReadNoVig } from "@/components/no-vig/how-to-read";
 import { NoVigTable } from "@/components/no-vig/no-vig-table";
 import { SiteHeader } from "@/components/site-header";
 import { WeekStrip } from "@/components/week-strip";
@@ -200,26 +201,18 @@ export default async function NoVig({
         prices and percentages, and a reader who stops at the first row must
         already know that none of it is a recommendation. The board makes claims
         about what will happen; this page only reports what is being charged.
+
+        It was a fixed paragraph until 2026-09-21, when the client asked for
+        "a expandable box or question mark people could hover over that would
+        explain what to look for". The collapsed summary carries every SENTENCE
+        that paragraph did — what the page shows, what hold is, what fair is,
+        and that none of it is ours. The one thing it drops is the inline link
+        to the board, which moved inside; that is not a navigation loss because
+        the site header links the board ("Props") from every page, and a link
+        nested in a `<summary>` toggles the box as well as following itself.
+        See `components/no-vig/how-to-read.tsx`.
       */}
-      <p className="border-border-subtle bg-panel/60 text-muted rounded-xl border px-3 py-2 text-xs">
-        <span className="text-ink font-bold uppercase tracking-label">
-          What this shows
-        </span>{" "}
-        — every two-way price on the slate with the book&rsquo;s margin removed.{" "}
-        {/* `{" "}` after the closing tag, not a plain space: a space that
-            follows an element OPENING a line is dropped in the build, and only
-            the rendered HTML shows it. This shipped as "fairis the price" and
-            is the fourth time this trap has bitten in this codebase. */}
-        <strong className="text-ink">Hold</strong> is what the book keeps;{" "}
-        <strong className="text-ink">fair</strong>{" "}
-        is the price the same
-        probability would carry at no margin. This is the market&rsquo;s number,
-        not ours — for what the model thinks, see the{" "}
-        <Link href={boardLink} className="text-accent-cyan hover:underline">
-          board
-        </Link>
-        .
-      </p>
+      <HowToReadNoVig boardLink={boardLink} />
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         {/* `flex-wrap` like the other two groups. Without it this row could not

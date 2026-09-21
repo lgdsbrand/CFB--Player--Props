@@ -1,4 +1,5 @@
 import { TeamChip } from "@/components/board/team-chip";
+import { NO_VIG_COLUMNS } from "@/components/no-vig/columns";
 import { formatAmericanOdds, formatLine } from "@/lib/core/format";
 import {
   booksDisagreeOnLine,
@@ -41,34 +42,47 @@ export function NoVigTable({
     <div className="panel overflow-x-auto">
       <table className="w-full min-w-[54rem] border-collapse text-sm">
         <thead>
+          {/*
+            HEADERS COME FROM `NO_VIG_COLUMNS`, not from nine hand-written
+            cells. Each one carries the same sentence the expandable glossary
+            above the table prints, and reading them from one array is what
+            stops a tooltip and the glossary from ever saying different things
+            about the same column.
+
+            THE DOTTED UNDERLINE IS THE POINT, not decoration. A bare `title`
+            is invisible: nothing on screen suggests there is anything to hover.
+            The underline is the only affordance a pointer user gets, and touch
+            users are served by the glossary instead, which is why that exists
+            rather than tooltips alone.
+          */}
           <tr className="text-dim text-left text-[0.625rem] font-bold uppercase tracking-label">
-            <th scope="col" className="px-3 py-2 font-bold">
-              Player
-            </th>
-            <th scope="col" className="px-2 py-2 font-bold">
-              Market
-            </th>
-            <th scope="col" className="px-2 py-2 text-right font-bold">
-              Line
-            </th>
-            <th scope="col" className="px-2 py-2 font-bold">
-              Book
-            </th>
-            <th scope="col" className="px-2 py-2 text-right font-bold">
-              Posted
-            </th>
-            <th scope="col" className="px-2 py-2 text-right font-bold">
-              Fair
-            </th>
-            <th scope="col" className="px-2 py-2 text-right font-bold">
-              Hold
-            </th>
-            <th scope="col" className="px-2 py-2 text-right font-bold">
-              Fair %
-            </th>
-            <th scope="col" className="px-3 py-2 text-right font-bold">
-              vs Mkt
-            </th>
+            {NO_VIG_COLUMNS.map((column, index) => (
+              <th
+                key={column.label}
+                scope="col"
+                className={
+                  "py-2 font-bold " +
+                  // First and last cells keep the table's outer gutter.
+                  (index === 0 || index === NO_VIG_COLUMNS.length - 1
+                    ? "px-3 "
+                    : "px-2 ") +
+                  (column.align === "right" ? "text-right" : "")
+                }
+              >
+                <span
+                  // The underline INHERITS the header's colour rather than
+                  // setting its own. It was `decoration-border-subtle` first,
+                  // which is rgba(255,255,255,0.06) — a 1px dotted line in it
+                  // is invisible at this text size, which makes the affordance
+                  // worse than no affordance: the tooltip is there and nothing
+                  // says so. Caught in a screenshot, not by typecheck or lint.
+                  className="cursor-help underline decoration-dotted underline-offset-2"
+                  title={column.help}
+                >
+                  {column.label}
+                </span>
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>

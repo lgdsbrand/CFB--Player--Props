@@ -10,7 +10,10 @@ import { NotConfigured } from "@/components/not-configured";
 import { DefenseDetail } from "@/components/player/defense-detail";
 import { DefenseTendencies } from "@/components/player/defense-tendencies";
 import { sportHasCharting } from "@/lib/core/charting-view";
-import { GameLogTable } from "@/components/player/game-log-table";
+import {
+  FormLogTable,
+  GameLogTable,
+} from "@/components/player/game-log-table";
 import { FormChart } from "@/components/player/form-chart";
 import { GameTabs } from "@/components/player/game-tabs";
 import { HitRateChart } from "@/components/player/hit-rate-chart";
@@ -312,7 +315,17 @@ export default async function PlayerDetail({
   const formBorrowed = priorSeasonCount(formSample, active.season);
   const formSzn = formSeasonToDate(form, active.season);
 
-  const ranksByGame = await rankLookup(sample, position);
+  // THE GAMES ON SCREEN, whether or not a book priced the market. The two
+  // samples hold the same games trimmed by the same rule; only the grade
+  // differs. Named once so the log, its empty state and the rank lookup below
+  // cannot end up describing different sets of games.
+  const logSample = activeRow.line !== null ? sample : formSample;
+
+  // THE RANKS FOLLOW THAT SAMPLE. Read off `sample` alone, this returned an
+  // empty map whenever no line was posted, which put an em dash in the Rk
+  // column of every row of the ungraded log — the one column there that says
+  // anything about the matchup.
+  const ranksByGame = await rankLookup(logSample, position);
 
   const venue = formatVenue({
     name: activeRow.venueName,
@@ -641,17 +654,41 @@ export default async function PlayerDetail({
 
           <section className="panel flex flex-col gap-3 p-4">
             <h2 className="section-header">Game log</h2>
-            <GameLogTable
-              games={sample}
-              unit={activeMarket?.unit ?? null}
-              rankByGameId={ranksByGame}
-              season={active.season}
-            />
-            {sample.length === 0 && gameLog.length > 0 ? (
+            {/*
+              THE LOG DOES NOT NEED A LINE — the games happened either way. It
+              used to render the graded table's empty state, "no line to grade
+              them against", directly beneath the chart that was already showing
+              those same games. `FormLogTable` drops the vs-line column and
+              keeps the other four.
+            */}
+            {activeRow.line !== null ? (
+              <GameLogTable
+                games={sample}
+                unit={activeMarket?.unit ?? null}
+                rankByGameId={ranksByGame}
+                season={active.season}
+              />
+            ) : (
+              <FormLogTable
+                games={formSample}
+                unit={activeMarket?.unit ?? null}
+                rankByGameId={ranksByGame}
+                season={active.season}
+              />
+            )}
+            {/*
+              THE ONE REMAINING REASON A LOG CAN BE EMPTY beside completed
+              games: the player has no recorded value for this market in any of
+              them — a back-up quarterback's attempts, a lineman on a receiving
+              tab. Both paths drop those games identically (`gradeGames` and
+              `formGames` both skip nulls), so this note is no longer about the
+              line and no longer contradicts the bars above it.
+            */}
+            {logSample.length === 0 && gameLog.length > 0 ? (
               <p className="text-dim text-xs">
                 {gameLog.length} completed game
-                {gameLog.length === 1 ? "" : "s"} on record, but this market has
-                no line to grade them against.
+                {gameLog.length === 1 ? "" : "s"} on record, none of them
+                carrying a figure for this market.
               </p>
             ) : null}
           </section>
@@ -755,6 +792,18 @@ export default async function PlayerDetail({
 }
 
 /**
+ * The four fields a rank lookup needs, rather than `GradedGame` — so the
+ * ungraded sample can use it unchanged. Both `GradedGame` and `FormGame`
+ * satisfy this; neither had to learn about the other.
+ */
+type RankedSampleGame = {
+  gameId: number;
+  season: number;
+  week: number;
+  opponentTeamId: number;
+};
+
+/**
  * Each past opponent's rank as it stood entering THAT game's week.
  *
  * Keyed by game id so the log and the splits agree cell for cell.
@@ -765,10 +814,10 @@ export default async function PlayerDetail({
  * game to a 2026 rank.
  */
 async function rankLookup(
-  graded: GradedGame[],
+  graded: RankedSampleGame[],
   position: PositionGroup,
 ): Promise<Map<number, number>> {
-  const bySeason = new Map<number, GradedGame[]>();
+  const bySeason = new Map<number, RankedSampleGame[]>();
   for (const game of graded) {
     const list = bySeason.get(game.season) ?? [];
     list.push(game);

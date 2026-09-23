@@ -19,6 +19,7 @@ import {
   arbitrage,
   breakEvenOtherSide,
   decimalToAmerican,
+  stakeForProfit,
 } from "./arbitrage.ts";
 
 // -----------------------------------------------------------------------------
@@ -159,4 +160,96 @@ test("a non-finite input yields null rather than a nonsense price", () => {
   // The guard exists for this and only this. No American price reaches an
   // implied probability of 1, so a reader cannot reach it.
   assert.equal(breakEvenOtherSide(Number.NaN), null);
+});
+
+// -----------------------------------------------------------------------------
+// The calculator run backwards — a target profit, not a stake
+// -----------------------------------------------------------------------------
+
+test("a target profit is cleared in BOTH outcomes, not on average", () => {
+  // The failure that matters: a split that pays the target if one side wins and
+  // less if the other does. Checked on each payout separately, never on a mean.
+  const plan = stakeForProfit({ priceA: 120, priceB: -105, targetProfit: 50 });
+
+  assert.ok(plan !== null);
+  assert.ok(
+    plan.payoutA - plan.totalStake >= 50,
+    `A pays ${plan.payoutA - plan.totalStake}`,
+  );
+  assert.ok(
+    plan.payoutB - plan.totalStake >= 50,
+    `B pays ${plan.payoutB - plan.totalStake}`,
+  );
+  assert.equal(plan.stakeA + plan.stakeB, plan.totalStake);
+});
+
+test("rounding is UP, so the worst case never lands under the target", () => {
+  // Rounding to NEAREST cent passes a spot check and fails somewhere out in the
+  // decimals, which is exactly the bug a reader cannot see. Swept across a
+  // range of prices and targets rather than trusted at one point.
+  for (const priceA of [105, 120, 150, 200, 340, -105, -120]) {
+    for (const priceB of [-100, -101, 105, 110, 130, 250]) {
+      for (const target of [1, 7.5, 50, 123.45, 1000]) {
+        const plan = stakeForProfit({ priceA, priceB, targetProfit: target });
+        if (plan === null) continue;
+
+        assert.ok(
+          plan.worstProfit >= target,
+          `${priceA}/${priceB} for ${target}: worst was ${plan.worstProfit}`,
+        );
+        // And not wildly over -- the padding is two cents, not a cushion.
+        assert.ok(
+          plan.worstProfit < target + 0.5,
+          `${priceA}/${priceB} for ${target}: overshot to ${plan.worstProfit}`,
+        );
+      }
+    }
+  }
+});
+
+test("no arb means no stake, rather than an enormous one", () => {
+  // A hold makes every split lose in one outcome, and scaling the stake scales
+  // the loss. Returning a very large number here would read as "possible but
+  // expensive", which is the opposite of true.
+  assert.equal(stakeForProfit({ priceA: -110, priceB: -110, targetProfit: 50 }), null);
+  // Exactly at break-even is not an arb either -- margin zero pays zero profit
+  // at every size.
+  assert.equal(stakeForProfit({ priceA: -110, priceB: 110, targetProfit: 50 }), null);
+  // A target of zero or less is not a question with an answer.
+  assert.equal(stakeForProfit({ priceA: 120, priceB: -105, targetProfit: 0 }), null);
+});
+
+test("the two directions agree: stake in, profit out, profit in, stake out", () => {
+  // The round trip is the real check on the algebra. Feeding the required total
+  // back through `arbitrage` must reproduce the same split and at least the
+  // profit asked for -- if the two functions ever disagree, one of them is
+  // wrong and the page would show both.
+  const plan = stakeForProfit({ priceA: 150, priceB: -120, targetProfit: 200 });
+  assert.ok(plan !== null);
+
+  const back = arbitrage({
+    priceA: 150,
+    priceB: -120,
+    stake: plan.totalStake,
+  });
+
+  assert.equal(back.isArbitrage, true);
+  assert.ok(Math.abs(back.stakeA - plan.stakeA) <= 0.01);
+  assert.ok(Math.abs(back.stakeB - plan.stakeB) <= 0.01);
+  assert.ok(back.worstProfit >= 200 - 0.01);
+});
+
+test("a thin arb answers with a large stake rather than refusing", () => {
+  // -101 / +102 arbs by a hair. The honest answer to "I want $100" there is a
+  // four-figure stake, and printing it is the point: it tells the reader what
+  // the thinness actually costs them.
+  const plan = stakeForProfit({ priceA: -101, priceB: 102, targetProfit: 100 });
+
+  assert.ok(plan !== null);
+  assert.ok(plan.margin < 0);
+  assert.ok(
+    plan.totalStake > 10000,
+    `a 0.2% edge needs a huge stake; got ${plan.totalStake}`,
+  );
+  assert.ok(plan.worstProfit >= 100);
 });

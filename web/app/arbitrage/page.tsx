@@ -56,9 +56,10 @@ export default async function Arbitrage({
           <span className="text-ink font-bold uppercase tracking-label">
             What this does
           </span>{" "}
-          — you give it both sides of a market and what you want to stake in
-          total; it says whether the two prices guarantee a profit, and how to
-          split the stake so both outcomes pay the same.{" "}
+          — you give it both sides of a market and it runs either way round:
+          from a stake you have, to the profit it guarantees; or from a profit
+          you want, to the stake each side needs. Both answers split the money
+          so the two outcomes pay the same.{" "}
           <strong className="text-ink">
             It does not look for arbs for you.
           </strong>{" "}
@@ -92,5 +93,5 @@ export default async function Arbitrage({
 export const metadata = {
   title: "Arbitrage Calculator · Legends Sports",
   description:
-    "Check whether two prices guarantee a profit, and how to split a stake between them.",
+    "Check whether two prices guarantee a profit, from a stake you have or a profit you want.",
 };

@@ -159,6 +159,105 @@ export function arbitrage({
 }
 
 /**
+ * The stake split that delivers a chosen profit, whichever side wins.
+ *
+ * THE CALCULATOR RUN BACKWARDS, and the client's stated reason for wanting one
+ * at all (2026-09-23): "is it possible to make it where you enter your profit
+ * you want out of the two and it would tell you how much you need for each?"
+ * Every calculator he could find takes a stake and reports the profit. A reader
+ * who knows what they want to clear has to guess a stake, read the profit, and
+ * guess again.
+ *
+ * THE ALGEBRA IS EXACT, NOT A SEARCH. Let `P` be the return in either outcome
+ * and `m` the implied sum. Each side stakes `P/decimal`, so the total staked is
+ * `P·m` and the profit is `P − P·m = P(1 − m)`. Inverting, `P = target/(1 − m)`
+ * and each stake follows. `m ≥ 1` is division by zero or worse — that is the
+ * no-arb case, and no stake of any size produces a guaranteed profit, which is
+ * why this returns null rather than a very large number.
+ *
+ * STAKES ROUND UP, NOT TO NEAREST. This is the whole reason the function does
+ * not simply divide. Rounding a stake DOWN shortens that side's payout, and a
+ * reader who asked for $50 and was handed a split paying $49.98 has been given
+ * the wrong answer to the question they asked. Rounding both up can only
+ * overshoot, and the two extra cents are why the target is padded by exactly
+ * that much before solving: the padding is spent on the rounding, and the
+ * printed worst-case profit is the one the caller asked for or a cent more.
+ *
+ * `worstProfit` IS STILL RETURNED AND THE VIEW STILL SHOWS IT. A derived
+ * guarantee is worth no more than an entered one, and the page prints what the
+ * split actually pays rather than echoing the target back.
+ */
+export type StakeForProfitInput = {
+  priceA: number;
+  priceB: number;
+  /** The profit wanted in EITHER outcome, not the sum of both. */
+  targetProfit: number;
+};
+
+export type StakeForProfitResult = {
+  decimalA: number;
+  decimalB: number;
+  impliedSum: number;
+  margin: number;
+  /** What the reader must put up in total to clear the target. */
+  totalStake: number;
+  stakeA: number;
+  stakeB: number;
+  payoutA: number;
+  payoutB: number;
+  worstPayout: number;
+  /** At or a cent above the target, never below. */
+  worstProfit: number;
+  returnOnStake: number;
+};
+
+/** Round up to whole cents. Fights floating point at the 1e-9 scale first. */
+function ceilCents(value: number): number {
+  return Math.ceil(Number((value * 100).toFixed(6))) / 100;
+}
+
+export function stakeForProfit({
+  priceA,
+  priceB,
+  targetProfit,
+}: StakeForProfitInput): StakeForProfitResult | null {
+  const decimalA = americanToDecimal(priceA);
+  const decimalB = americanToDecimal(priceB);
+  const impliedSum = 1 / decimalA + 1 / decimalB;
+
+  // NO ARB, NO ANSWER. Not "a big number": with a hold, every split loses in
+  // one outcome, and scaling the stake scales the loss with it.
+  if (!(impliedSum < 1) || !(targetProfit > 0)) return null;
+
+  // The two cents the two round-ups can cost, bought in advance.
+  const padded = targetProfit + 0.02;
+  const guaranteedReturn = padded / (1 - impliedSum);
+
+  const stakeA = ceilCents(guaranteedReturn / decimalA);
+  const stakeB = ceilCents(guaranteedReturn / decimalB);
+  const totalStake = toCents(stakeA + stakeB);
+
+  const payoutA = toCents(stakeA * decimalA);
+  const payoutB = toCents(stakeB * decimalB);
+  const worstPayout = Math.min(payoutA, payoutB);
+
+  return {
+    decimalA,
+    decimalB,
+    impliedSum,
+    margin: impliedSum - 1,
+    totalStake,
+    stakeA,
+    stakeB,
+    payoutA,
+    payoutB,
+    worstPayout,
+    worstProfit: toCents(worstPayout - totalStake),
+    returnOnStake: 1 / impliedSum - 1,
+  };
+}
+
+/**
  * The price the other side must beat for a pair to become an arb.
  *
  * Given one price, the break-even decimal on the other side is

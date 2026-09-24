@@ -108,12 +108,14 @@ def estimate_season_mb(season: int, mb_per_game: float) -> tuple[float, float]:
     row = fetch_one(
         """
         select (select count(*) from games
-                 where season = %(season)s and completed)              as played,
+                 where season = %(season)s and sport = %(sport)s
+                   and completed)                                      as played,
                (select count(distinct p.game_id) from plays p
                   join games g on g.id = p.game_id
-                 where g.season = %(season)s)                          as loaded
+                 where g.season = %(season)s and g.sport = %(sport)s)  as loaded
         """,
-        {"season": season},
+        # College only: this job loads CFBD, and NFL rows share these tables.
+        {"season": season, "sport": "cfb"},
     )
     played = int(row["played"] or 0)
     loaded = int(row["loaded"] or 0)

@@ -118,15 +118,18 @@ class TestThePartialReloadIsScoped:
         assert len(calls) == 1
         sql, params = calls[0]
         assert "game_id = any(%s)" in sql
-        # Our surrogate id, not the CFBD one.
-        assert params == (2026, [20])
+        # Our surrogate id, not the CFBD one — and never another sport's rows.
+        assert "g.sport = %s" in sql
+        assert params == ("cfb", 2026, [20])
 
     def test_a_full_reload_still_clears_the_season(self, monkeypatch):
         calls = self._deletes(monkeypatch, only_games=None)
 
         sql, params = calls[0]
-        assert "game_id" not in sql
-        assert params == (2026,)
+        assert "any(" not in sql
+        # Season-wide means THIS SPORT's season: plays holds NFL rows too.
+        assert "g.sport = %s" in sql
+        assert params == ("cfb", 2026)
 
     def test_an_empty_reload_deletes_nothing_at_all(self, monkeypatch):
         # The most dangerous case: an ordinary quiet weekday. A season-wide
@@ -147,7 +150,8 @@ class TestThePartialReloadIsScoped:
 
         sql, params = calls.calls[0]
         assert "game_id = any(%s)" in sql
-        assert params == (2026, [20])
+        assert "g.sport = %s" in sql
+        assert params == ("cfb", 2026, [20])
 
     def test_plays_skips_the_week_slices_when_there_is_nothing_to_reload(
         self, monkeypatch

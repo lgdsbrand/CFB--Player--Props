@@ -70,6 +70,17 @@ from worker.adapters.cfbd.mapping import (
 from worker.db import copy_into, execute, fetch_all, upsert
 from worker.logging_setup import get_logger
 
+# EVERY READ AND WRITE BELOW IS SCOPED TO THIS SPORT. `games`, `plays`,
+# `play_player_stats` and `player_game_stats` hold NFL rows for 2023 onwards,
+# and the last three carry `season` but no `sport`. Until 2026-09-24 this
+# adapter filtered on season alone, which (a) made the daily college run
+# overwrite NFL 2026 targets with receptions every morning via
+# `backfill_targets`, (b) crashed a 2023 backfill on NFL postseason weeks, and
+# (c) left `delete from plays where season = %s` one full-season run away from
+# deleting a whole NFL season. tests/test_stats_sport_scope.py pins that every
+# statement naming `season` also names the sport.
+SPORT = "cfb"
+
 log = get_logger(__name__)
 
 IMMUTABLE = None
@@ -131,9 +142,9 @@ class SeasonContext:
         games = fetch_all(
             """
             select id, cfbd_id, season, week, home_team_id, away_team_id
-              from games where season = %s
+              from games where season = %s and sport = %s
             """,
-            (season,),
+            (season, SPORT),
         )
         games_by_cfbd = {g["cfbd_id"]: g for g in games}
 
@@ -147,11 +158,13 @@ class SeasonContext:
         # historical defensive splits.
         positions = fetch_all(
             """
-            select distinct on (player_id) player_id, position_group
-              from player_team_seasons where season = %s
-             order by player_id, id
+            select distinct on (pts.player_id) pts.player_id, pts.position_group
+              from player_team_seasons pts
+              join teams t on t.id = pts.team_id
+             where pts.season = %s and t.sport = %s
+             order by pts.player_id, pts.id
             """,
-            (season,),
+            (season, SPORT),
         )
 
         return cls(
@@ -182,9 +195,10 @@ def week_slices(season: int) -> list[tuple[str, int]]:
     rows = fetch_all(
         """
         select distinct season_type::text as season_type, week
-          from games where season = %s order by season_type, week
+          from games where season = %s and sport = %s
+         order by season_type, week
         """,
-        (season,),
+        (season, SPORT),
     )
     return [
         (r["season_type"], week_for_api(r["week"], r["season_type"])) for r in rows
@@ -202,9 +216,9 @@ def unsettled_slices(season: int) -> set[tuple[str, int]]:
         """
         select distinct season_type::text as season_type, week
           from games
-         where season = %s and not completed
+         where season = %s and sport = %s and not completed
         """,
-        (season,),
+        (season, SPORT),
     )
     return {
         (r["season_type"], week_for_api(r["week"], r["season_type"])) for r in rows
@@ -230,6 +244,7 @@ def games_missing_play_stats(season: int) -> list[int]:
         select g.cfbd_id
           from games g
          where g.season = %s
+           and g.sport = %s
            and g.completed
            and g.cfbd_id is not null
            and not exists (
@@ -237,7 +252,7 @@ def games_missing_play_stats(season: int) -> list[int]:
                )
          order by g.week, g.cfbd_id
         """,
-        (season,),
+        (season, SPORT),
     )
     return [r["cfbd_id"] for r in rows]
 
@@ -412,11 +427,19 @@ def ingest_plays(
     # a season-wide delete cascades through play_player_stats and reissues every
     # plays.id, which only the full run is in a position to repair.
     if wanted is None:
-        deleted = execute("delete from plays where season = %s", (ctx.season,))
+        deleted = execute(
+            "delete from plays p using games g "
+            "where g.id = p.game_id and g.sport = %s and p.season = %s",
+            (SPORT, ctx.season),
+        )
     elif wanted:
         deleted = execute(
-            "delete from plays where season = %s and game_id = any(%s)",
-            (ctx.season, [ctx.game_id_by_cfbd[c] for c in sorted(wanted)]),
+            # game ids come from this sport's SeasonContext, so they are
+            # already scoped; the sport is restated so the rule has no exception.
+            "delete from plays p using games g "
+            "where g.id = p.game_id and g.sport = %s "
+            "and p.season = %s and p.game_id = any(%s)",
+            (SPORT, ctx.season, [ctx.game_id_by_cfbd[c] for c in sorted(wanted)]),
         )
     else:
         deleted = 0
@@ -446,7 +469,9 @@ def ingest_play_player_stats(
     play_id_by_cfbd = {
         r["cfbd_id"]: r["id"]
         for r in fetch_all(
-            "select id, cfbd_id from plays where season = %s", (ctx.season,)
+            "select p.id, p.cfbd_id from plays p join games g on g.id = p.game_id "
+            "where g.sport = %s and p.season = %s",
+            (SPORT, ctx.season),
         )
     }
     log.info(
@@ -546,12 +571,16 @@ def ingest_play_player_stats(
     # incremental run must leave the games it did not reload untouched.
     if wanted is None:
         deleted = execute(
-            "delete from play_player_stats where season = %s", (ctx.season,)
+            "delete from play_player_stats s using games g "
+            "where g.id = s.game_id and g.sport = %s and s.season = %s",
+            (SPORT, ctx.season),
         )
     elif wanted:
         deleted = execute(
-            "delete from play_player_stats where season = %s and game_id = any(%s)",
-            (ctx.season, [ctx.game_id_by_cfbd[c] for c in sorted(wanted)]),
+            "delete from play_player_stats s using games g "
+            "where g.id = s.game_id and g.sport = %s "
+            "and s.season = %s and s.game_id = any(%s)",
+            (SPORT, ctx.season, [ctx.game_id_by_cfbd[c] for c in sorted(wanted)]),
         )
     else:
         deleted = 0
@@ -595,15 +624,17 @@ def fix_swapped_pass_attribution(season: int) -> int:
     return execute(
         """
         with passers as (
-            select player_id, game_id
-              from player_game_stats
-             where season = %(season)s and coalesce(pass_attempts, 0) > 0
+            select pgs.player_id, pgs.game_id
+              from player_game_stats pgs
+              join games g on g.id = pgs.game_id and g.sport = %(sport)s
+             where pgs.season = %(season)s and coalesce(pgs.pass_attempts, 0) > 0
         ),
         swapped_plays as (
             select distinct rec.play_id
               from play_player_stats rec
               join passers p
                 on p.player_id = rec.player_id and p.game_id = rec.game_id
+              join games rg on rg.id = rec.game_id and rg.sport = %(sport)s
              where rec.season = %(season)s
                and rec.stat_type = 'Reception'
                -- and the Completion on that play belongs to a non-passer
@@ -627,7 +658,7 @@ def fix_swapped_pass_attribution(season: int) -> int:
          where t.play_id = s.play_id
            and t.stat_type in ('Reception', 'Completion')
         """,
-        {"season": season},  # type: ignore[arg-type]
+        {"season": season, "sport": SPORT},  # type: ignore[arg-type]
     )
 
 
@@ -664,6 +695,7 @@ def backfill_targets(season: int) -> int:
           from (
                 select p.id as pgs_id, t.n
                   from player_game_stats p
+                  join games g on g.id = p.game_id and g.sport = %(sport)s
                   left join (
                         select player_id, game_id, count(*) as n
                           from play_player_stats
@@ -676,7 +708,7 @@ def backfill_targets(season: int) -> int:
                ) tg
          where pgs.id = tg.pgs_id
         """,
-        {"season": season},  # type: ignore[arg-type]
+        {"season": season, "sport": SPORT},  # type: ignore[arg-type]
     )
 
 
@@ -702,7 +734,9 @@ def estimate_calls(
     if incremental:
         games = len(games_missing_play_stats(season))
     else:
-        games = len(fetch_all("select id from games where season = %s", (season,)))
+        games = len(fetch_all(
+            "select id from games where season = %s and sport = %s", (season, SPORT)
+        ))
     return slices * 2 + games
 
 

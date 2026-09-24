@@ -129,8 +129,21 @@ def _load_dotenv_if_present() -> None:
             load_dotenv(candidate, override=False)
 
 
+def _env(name: str) -> str:
+    """An environment value with surrounding whitespace removed.
+
+    Keys reach Render by hand-pasting, and a pasted trailing space or newline is
+    invisible in its UI. On 2026-09-24 `cfb-game-odds-weekday` got 401
+    INVALID_KEY on every run while `cfb-game-odds-saturday`, given the same
+    key, captured fine. No value read here (keys, URLs, names) has meaningful
+    edge whitespace, so trimming costs nothing and a whitespace-only value
+    counts as unset.
+    """
+    return (os.environ.get(name) or "").strip()
+
+
 def _require(name: str) -> str:
-    value = os.environ.get(name)
+    value = _env(name)
     if not value:
         raise ConfigError(
             f"Missing required environment variable {name!r}. "
@@ -140,7 +153,7 @@ def _require(name: str) -> str:
 
 
 def _optional(name: str, default: str | None = None) -> str | None:
-    value = os.environ.get(name)
+    value = _env(name)
     return value if value else default
 
 

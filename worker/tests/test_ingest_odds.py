@@ -313,6 +313,31 @@ class TestFlagParsing:
             _flag("ODDS_PREFER_FREE")
 
 
+class TestEnvValueTrimming:
+    """A pasted trailing space made the weekday game-odds service send an
+    invalid key on 2026-09-24. Keys are read trimmed."""
+
+    @pytest.mark.parametrize("raw", ["abc123 ", " abc123", "abc123\n", "\tabc123\r\n"])
+    def test_optional_trims_pasted_whitespace(self, raw, monkeypatch):
+        from worker.config import _optional
+        monkeypatch.setenv("ODDS_API_KEY_FREE", raw)
+        assert _optional("ODDS_API_KEY_FREE") == "abc123"
+
+    def test_whitespace_only_counts_as_unset(self, monkeypatch):
+        from worker.config import _optional
+        monkeypatch.setenv("ODDS_API_KEY_FREE", "  \n")
+        assert _optional("ODDS_API_KEY_FREE") is None
+        assert _optional("ODDS_API_KEY_FREE", "fallback") == "fallback"
+
+    def test_require_trims_and_rejects_whitespace_only(self, monkeypatch):
+        from worker.config import _require
+        monkeypatch.setenv("SUPABASE_DB_URL", " postgresql://x \n")
+        assert _require("SUPABASE_DB_URL") == "postgresql://x"
+        monkeypatch.setenv("SUPABASE_DB_URL", "   ")
+        with pytest.raises(ConfigError):
+            _require("SUPABASE_DB_URL")
+
+
 def _clear_odds_env(monkeypatch) -> None:
     """Remove every ODDS-ish variable the ambient environment may hold.
 

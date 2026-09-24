@@ -304,6 +304,22 @@ events came back and NONE matched a game fails on purpose.
 - **Never add the sharp regions to `DEFAULT_REGIONS`.** Props bill per region
   too; that would triple every prop capture.
 
+#### `build_team_strength` — not scheduled yet (game model, G2)
+
+```bash
+python -m worker.jobs.build_team_strength --current
+python -m worker.jobs.build_team_strength --seasons 2022 2023 2024 2025
+```
+
+Rebuilds `team_strength_ratings`: each team's opponent-adjusted offense and
+defense (points, pace, PPA per play, success rate) for every week, fitted on
+games BEFORE that week only (CLAUDE.md §4). The game model reads its features
+from here. No API calls; about a minute a season.
+
+A re-run deletes and rewrites the whole season, so it is always safe. `plays`
+holds NFL rows from 2025 and has no sport column: the build joins
+`games.sport`, and any new read of `plays` must do the same.
+
 #### `ingest_game_lines` — daily 10:00 UTC
 
 ```bash

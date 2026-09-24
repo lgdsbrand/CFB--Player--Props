@@ -193,3 +193,40 @@ def test_the_api_week_round_trips():
         for week in range(1, 17):
             stored = week_on_season_axis(week, season_type)
             assert week_for_api(stored, season_type) == week
+
+
+def test_line_scores_keep_every_period_in_place():
+    from worker.adapters.cfbd.mapping import line_scores_or_none
+
+    assert line_scores_or_none([0, 7, 0, 14]) == [0, 7, 0, 14]
+    # Overtime periods follow the fourth.
+    assert line_scores_or_none([7, 7, 3, 7, 7, 0]) == [7, 7, 3, 7, 7, 0]
+    assert line_scores_or_none(["3", 7.0, 0, 10]) == [3, 7, 0, 10]
+
+
+def test_a_line_score_with_any_bad_period_is_dropped_whole():
+    from worker.adapters.cfbd.mapping import line_scores_or_none
+
+    # Dropping one element would shift Q2 into Q1: a wrong 1Q score.
+    assert line_scores_or_none([None, 7, 0, 14]) is None
+    assert line_scores_or_none([0, "x", 0, 14]) is None
+    assert line_scores_or_none([0, -7, 0, 14]) is None
+    assert line_scores_or_none([7, 0, 14]) is None
+    assert line_scores_or_none(None) is None
+    assert line_scores_or_none([]) is None
+
+
+def test_the_current_season_is_never_served_from_the_permanent_cache():
+    # 2026-09-24: a cached 6 September /games response was written over
+    # production and un-played two weeks. Past seasons may cache forever.
+    from worker.adapters.cfbd.ingest_reference import (
+        IMMUTABLE,
+        LIVE_MAX_AGE_SECONDS,
+        season_max_age,
+    )
+
+    assert season_max_age(2026, 2026) == LIVE_MAX_AGE_SECONDS
+    assert season_max_age(2025, 2026) is IMMUTABLE
+    assert season_max_age(2027, 2026) == LIVE_MAX_AGE_SECONDS
+    # No configured current season: cannot tell, so cache as before.
+    assert season_max_age(2026, None) is IMMUTABLE

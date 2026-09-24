@@ -220,6 +220,23 @@ def bigint_or_none(value: object) -> int | None:
         return None
 
 
+def line_scores_or_none(value: object) -> list[int] | None:
+    """CFBD's per-period points (`homeLineScores`) as a smallint array.
+
+    ALL OR NOTHING. A list with one unreadable element becomes None rather
+    than a shorter list: dropping an element would shift every later period
+    left, so the second quarter would be stored as the first — a wrong 1Q
+    score that still sums plausibly. Fewer than four periods is also None; a
+    played game has at least four.
+    """
+    if not isinstance(value, (list, tuple)) or len(value) < 4:
+        return None
+    parsed = [smallint_or_none(v) for v in value]
+    if any(p is None or p < 0 for p in parsed):
+        return None
+    return parsed  # type: ignore[return-value]
+
+
 def smallint_or_none(value: object) -> int | None:
     """Coerce to int within Postgres smallint range, else None."""
     if value in (None, ""):

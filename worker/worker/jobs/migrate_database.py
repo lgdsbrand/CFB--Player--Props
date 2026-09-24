@@ -131,6 +131,9 @@ PLAN: tuple[TableSpec, ...] = (
     TableSpec("player_game_stats", "Game logs and hit rates."),
     TableSpec("team_rating_snapshots", "Point-in-time ratings. Re-deriving these is "
                                        "where lookahead bias creeps in (CLAUDE.md §4)."),
+    TableSpec("team_strength_ratings", "The game model's point-in-time team "
+                                       "features. Rebuildable from plays in "
+                                       "about a minute a season."),
     TableSpec("defense_position_game_splits", "Powers the defense-detail view."),
     TableSpec("defense_position_ratings", "Opponent-adjusted defensive ranks."),
     # IN THE PLAN RATHER THAN SKIPPED, though `nfl_ingest_charting` rebuilds

@@ -38,13 +38,14 @@ from worker.adapters.cfbd.mapping import (
     PositionNormalizer,
     bigint_or_none,
     inches_or_none,
+    line_scores_or_none,
     normalize_classification,
     normalize_season_type,
     pounds_or_none,
     smallint_or_none,
     week_on_season_axis,
 )
-from worker.db import fetch_id_map, upsert
+from worker.db import fetch_id_map, get_config_value, upsert
 from worker.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -59,9 +60,26 @@ log = get_logger(__name__)
 # schema.
 SPORT = "cfb"
 
-# Completed seasons are immutable, so their responses never expire. The caller
-# overrides this for the current season.
+# Completed seasons are immutable, so their responses never expire.
 IMMUTABLE = None
+
+# THE CURRENT SEASON IS NOT. Its schedule gains scores and completion flags
+# every week, and its rosters move. Until 2026-09-24 this module fetched every
+# season with IMMUTABLE — the comment here claimed "the caller overrides this
+# for the current season", and nothing did. Render never noticed, because each
+# cron run starts with an empty cache directory. A LOCAL run did: a /games
+# response cached on 6 September was served back and written over production,
+# marking weeks 2 and 3 unplayed with no scores until a live re-run restored
+# them. Fifteen minutes collapses a burst of re-runs into one call and is
+# otherwise always a live read.
+LIVE_MAX_AGE_SECONDS = 900.0
+
+
+def season_max_age(season: int, current_season: int | None) -> float | None:
+    """Cache lifetime for one season's responses: forever if finished, else live."""
+    if current_season is not None and season >= current_season:
+        return LIVE_MAX_AGE_SECONDS
+    return IMMUTABLE
 
 
 @dataclass
@@ -186,13 +204,18 @@ def ingest_venues(client: CfbdClient, counts: IngestCounts) -> None:
 # -----------------------------------------------------------------------------
 # Teams and team_seasons
 # -----------------------------------------------------------------------------
-def ingest_teams(client: CfbdClient, season: int, counts: IngestCounts) -> None:
+def ingest_teams(
+    client: CfbdClient,
+    season: int,
+    counts: IngestCounts,
+    max_age: float | None = IMMUTABLE,
+) -> None:
     """Ingest every team for a season, across all classifications.
 
     See the module docstring: FBS-only would break foreign keys on 14% of games.
     """
     rows = client.fetch("/teams", cfbd.TeamsApi, "get_teams",
-                        year=season, max_age=IMMUTABLE)
+                        year=season, max_age=max_age)
 
     team_payload = []
     for r in rows:
@@ -268,7 +291,12 @@ def ingest_teams(client: CfbdClient, season: int, counts: IngestCounts) -> None:
 # -----------------------------------------------------------------------------
 # Games
 # -----------------------------------------------------------------------------
-def ingest_games(client: CfbdClient, season: int, counts: IngestCounts) -> None:
+def ingest_games(
+    client: CfbdClient,
+    season: int,
+    counts: IngestCounts,
+    max_age: float | None = IMMUTABLE,
+) -> None:
     team_ids = fetch_id_map("teams", "cfbd_id")
     venue_ids = fetch_id_map("venues", "cfbd_id")
 
@@ -277,7 +305,7 @@ def ingest_games(client: CfbdClient, season: int, counts: IngestCounts) -> None:
         rows = client.fetch(
             "/games", cfbd.GamesApi, "get_games",
             year=season, season_type=season_type, classification="fbs",
-            max_age=IMMUTABLE,
+            max_age=max_age,
         )
 
         payload = []
@@ -319,6 +347,9 @@ def ingest_games(client: CfbdClient, season: int, counts: IngestCounts) -> None:
                     "away_team_id": away_id,
                     "home_points": smallint_or_none(r.get("homePoints")),
                     "away_points": smallint_or_none(r.get("awayPoints")),
+                    # Per-period points (migration 0076), for 1Q/1H grading.
+                    "home_line_scores": line_scores_or_none(r.get("homeLineScores")),
+                    "away_line_scores": line_scores_or_none(r.get("awayLineScores")),
                     "completed": bool(r.get("completed")),
                     "attendance": r.get("attendance"),
                 }
@@ -346,6 +377,7 @@ def ingest_rosters(
     season: int,
     counts: IngestCounts,
     normalizer: PositionNormalizer,
+    max_age: float | None = IMMUTABLE,
 ) -> None:
     """Ingest all FBS rosters for a season.
 
@@ -355,7 +387,7 @@ def ingest_rosters(
     """
     rows = client.fetch(
         "/roster", cfbd.TeamsApi, "get_roster",
-        year=season, classification="fbs", max_age=IMMUTABLE,
+        year=season, classification="fbs", max_age=max_age,
     )
 
     # players first: identity is independent of team, and a mid-season transfer
@@ -484,11 +516,18 @@ def run_reference_ingest(client: CfbdClient, seasons: list[int]) -> IngestCounts
     ingest_conferences(client, counts)
     ingest_venues(client, counts)
 
+    current = get_config_value("current_season")
+    current_season = int(current) if current is not None else None
+
     for season in seasons:
-        log.info("--- season %d ---", season)
-        ingest_teams(client, season, counts)
-        ingest_games(client, season, counts)
-        ingest_rosters(client, season, counts, normalizer)
+        max_age = season_max_age(season, current_season)
+        log.info(
+            "--- season %d (%s) ---",
+            season, "live" if max_age is not None else "cached",
+        )
+        ingest_teams(client, season, counts, max_age)
+        ingest_games(client, season, counts, max_age)
+        ingest_rosters(client, season, counts, normalizer, max_age)
 
     normalizer.report()
     return counts

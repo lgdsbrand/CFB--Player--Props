@@ -307,7 +307,79 @@ don't block progress and can be set later:
 
 ## 10. Out of scope / explicitly not now
 
-- Full **game-outcome / spread prediction** — different, harder, separate project.
+- ~~Full **game-outcome / spread prediction** — different, harder, separate project.~~
+  **Superseded 2026-09-23:** the client commissioned it as exactly that, a
+  separate paid project, built in this repo and this database. See §11.
 - Real team logo/wordmark assets — placeholders only until licensed.
 - Any per-page-view LLM calls — analysis is weekly and cached.
 - Betting, bankroll, or automated wagering features — this is an analysis tool.
+
+---
+
+## 11. Game model (separate project, commissioned 2026-09-23)
+
+A second paid project: **predicting college football games**, meaning moneyline,
+spread and total for the **full game, first half and first quarter**. It is
+separate from the player props **in the contract only**. In the code it
+follows every rule above: same repo, same database, same sport seam (§3), same
+point-in-time rule (§4), same edge definition (§6). §0's way of working
+applies. Go phase by phase, get a go-ahead on each plan, stop for review after
+each phase.
+
+**What the client asked for:** a slate table of games, each clickable into a
+detail view; ATS and over/under records and head-to-head history, in the style
+of the Covers screens he sent; sharp books against retail books side by side;
+1Q and 1H lines (he names FanDuel and DraftKings, likely Caesars); a weekly
+grading page. The method is open. He does not require decision trees and asked
+for "a better way" if there is one.
+
+**Rules that are not up for simplification:**
+
+- **The market never feeds the model.** `game_lines` and captured game odds are
+  display and grading data. A model that reads the line it is being compared
+  against measures the book against itself (see the header of
+  `worker/worker/adapters/cfbd/ingest_lines.py`). Adding a market feature needs
+  an explicit, written decision, not an import.
+- **A distribution, not a point.** Project the joint distribution of the two
+  scores, then derive win probability, cover probability and total probability
+  from it, including 1Q/1H. Every market is a probability per pick, as in §1.
+- **Nothing ships until it beats closing lines.** A point-in-time backtest graded
+  against closing prices decides whether projections go on the screen at all.
+  The player model lost to closing lines. Assume this one may too, and report
+  that plainly if it does. Compare candidate models (ratings/efficiency
+  score models against gradient boosting at least) rather than picking one up
+  front. With ~900 FBS games a season, overfitting is the default failure.
+- **Picks are frozen before kickoff.** Each pick is stamped with the time it
+  was made and the price it was made against, and never rewritten after
+  kickoff. A grading page built on picks that can be revised is not grading.
+- **"Sharp money" means sharp PRICES here.** Ticket and handle percentages are a
+  separate paid feed the Odds API does not sell. Until the client buys one, the
+  honest signal is line movement and sharp-book (Pinnacle, exchanges) against
+  retail prices. Never label either as betting percentages.
+
+**Odds costs are two different billing shapes. Check which before spending:**
+
+- The Odds API **bulk** `/odds` endpoint bills per market per region, regardless
+  of how many games: moneyline + spread + total across `us`, `us_ex`, `eu` is
+  **9 credits for the whole slate**.
+- **1Q/1H markets are per-event only**, billed markets × regions × games, the
+  same shape that drained the props pool. Plan them against the paid key.
+- The sharp regions (`eu` for Pinnacle, `us_ex` for Novig/ProphetX) go on the
+  **game** pull only. Adding them to the shared `DEFAULT_REGIONS` would multiply
+  the cost of every player-prop capture.
+- CFBD `/lines` (spread, total, moneyline, opening spread) costs no Odds API
+  credits and is already ingested.
+
+**Phases:**
+
+- **G0 — Scope.** This section.
+- **G1 — The screen, no model.** Game-odds capture (sharp + retail regions),
+  the slate table on `/games`, game detail with ATS/O-U, head-to-head and
+  open-vs-now line movement, and pick freezing wired in from day one.
+- **G2 — Data.** 2023 lines and a 2022 games/plays backfill; point-in-time weekly
+  team features (opponent-adjusted efficiency, pace, ratings as known before
+  week N).
+- **G3 — Model + backtest.** Candidate models, calibration and closing-line
+  grade. *Deliverable: the backtest report, reviewed before G4.*
+- **G4 — Projections on the screen**, 1Q/1H from the same distribution, the
+  weekly grading page.

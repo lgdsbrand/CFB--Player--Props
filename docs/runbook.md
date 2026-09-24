@@ -277,6 +277,33 @@ python -m worker.jobs.build_splits --seasons 2024
 **Monitored:** all four at `max_age_hours=200`; `ingest_stats` and `build_splits`
 critical.
 
+#### `ingest_game_odds` — Sun/Tue/Thu/Fri 23:00 UTC, Saturday 15:00/19:00/23:00 UTC
+
+```bash
+python -m worker.jobs.ingest_game_odds              # what both crons run
+python -m worker.jobs.ingest_game_odds --dry-run    # SPENDS 9 credits, writes nothing
+python -m worker.jobs.ingest_game_odds --paid       # bill the paid pool instead
+```
+
+The game model's odds capture (CLAUDE.md §11). Moneyline, spread and total
+from retail books, Pinnacle (`eu`) and the exchanges (`us_ex`) in ONE bulk
+call: **9 credits per run, whatever the size of the slate** — billed per
+market per region, not per event. Defaults to `ODDS_API_KEY_FREE`, which it
+shares with the NFL `capture_first_quarter`.
+
+Writes `game_odds`, append-only, and **only when a book's price moved** since
+its newest row, so a quiet run writes 0 rows and that is healthy. A run where
+events came back and NONE matched a game fails on purpose.
+
+- **Home and away are ours.** Each price is assigned by resolving its team name
+  against the matched game, never by the provider's home label — they disagree
+  at neutral sites. The spread is stored from our home team's perspective, the
+  same convention as `game_lines`.
+- **Started games are skipped.** The bulk endpoint serves in-play prices; one
+  of those would become the closing line.
+- **Never add the sharp regions to `DEFAULT_REGIONS`.** Props bill per region
+  too; that would triple every prop capture.
+
 #### `ingest_game_lines` — daily 10:00 UTC
 
 ```bash

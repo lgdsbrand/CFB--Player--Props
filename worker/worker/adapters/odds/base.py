@@ -155,6 +155,40 @@ class PropQuote:
         return [p for p in self.prices if p.is_two_way]
 
 
+@dataclass(frozen=True)
+class GameOutcome:
+    """One side of one book's game market, exactly as the provider sent it.
+
+    `name` is the provider's string: a team for h2h and spreads, "Over" or
+    "Under" for totals. Turning a team string into OUR home or away is NOT done
+    here, because it needs the game the event was matched to, and at a neutral
+    site the provider's home team is routinely our away team.
+    """
+
+    name: str
+    price: int | None
+    point: float | None
+
+
+@dataclass(frozen=True)
+class GameBookMarket:
+    """One book's one game market (h2h, spreads or totals) on one event."""
+
+    sportsbook_key: str
+    sportsbook_name: str
+    market: str
+    book_updated_at: datetime | None
+    outcomes: tuple[GameOutcome, ...]
+
+
+@dataclass(frozen=True)
+class GameEventOdds:
+    """Every book's game markets on one event, from the bulk odds endpoint."""
+
+    event: OddsEvent
+    markets: tuple[GameBookMarket, ...]
+
+
 @runtime_checkable
 class OddsAdapter(Protocol):
     """What every odds source must provide.

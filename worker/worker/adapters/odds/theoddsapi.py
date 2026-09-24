@@ -30,6 +30,9 @@ from typing import Any
 
 from worker.adapters.odds.base import (
     BookPrice,
+    GameBookMarket,
+    GameEventOdds,
+    GameOutcome,
     OddsEvent,
     PropQuote,
     QuotaSnapshot,
@@ -50,6 +53,14 @@ log = get_logger(__name__)
 ADAPTER_NAME = "theoddsapi"
 DEFAULT_REGIONS = "us"
 DEFAULT_ODDS_FORMAT = "american"
+
+# GAME odds only. The sharp books live outside `us`: Pinnacle in `eu`, Novig and
+# ProphetX in `us_ex` (measured on the 2026-09-23 slate). These regions are
+# passed to the bulk game call ALONE and must never reach DEFAULT_REGIONS: the
+# per-event props endpoint also bills per region, so widening the default would
+# triple the cost of every player-prop capture (CLAUDE.md §11).
+GAME_REGIONS = "us,us_ex,eu"
+GAME_MARKETS = ("h2h", "spreads", "totals")
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -171,6 +182,75 @@ def parse_event_odds(
     return quotes, diagnostics
 
 
+def _american(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _point(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_game_odds(payload: list[dict[str, Any]]) -> list[GameEventOdds]:
+    """Turn a bulk `/odds` response into per-event, per-book game markets.
+
+    Deliberately shallow: team strings stay the provider's, and pairing two
+    outcomes into a spread or total is left to the ingest job, which knows the
+    game. A market this function does not recognise is dropped here, since the
+    bulk call only ever asks for GAME_MARKETS.
+    """
+    events: list[GameEventOdds] = []
+    for item in payload or []:
+        event = OddsEvent(
+            event_id=str(item.get("id") or ""),
+            sport_key=str(item.get("sport_key") or ""),
+            commence_time=_parse_time(item.get("commence_time")),
+            home_team=str(item.get("home_team") or ""),
+            away_team=str(item.get("away_team") or ""),
+            raw={},
+        )
+        markets: list[GameBookMarket] = []
+        for bookmaker in item.get("bookmakers") or []:
+            book_key = str(bookmaker.get("key") or "")
+            if not book_key:
+                continue
+            book_name = str(bookmaker.get("title") or book_key)
+            for market in bookmaker.get("markets") or []:
+                key = str(market.get("key") or "")
+                if key not in GAME_MARKETS:
+                    continue
+                outcomes = tuple(
+                    GameOutcome(
+                        name=str(o.get("name") or "").strip(),
+                        price=_american(o.get("price")),
+                        point=_point(o.get("point")),
+                    )
+                    for o in market.get("outcomes") or []
+                )
+                markets.append(
+                    GameBookMarket(
+                        sportsbook_key=book_key,
+                        sportsbook_name=book_name,
+                        market=key,
+                        book_updated_at=_parse_time(
+                            market.get("last_update") or bookmaker.get("last_update")
+                        ),
+                        outcomes=outcomes,
+                    )
+                )
+        events.append(GameEventOdds(event=event, markets=tuple(markets)))
+    return events
+
+
 class TheOddsApiAdapter:
     """Live adapter. One instance holds one HTTP client and its usage counter.
 
@@ -253,6 +333,30 @@ class TheOddsApiAdapter:
                 sorted(diagnostics.markets_unmapped),
             )
         return quotes
+
+    def fetch_game_odds(
+        self,
+        *,
+        regions: str = GAME_REGIONS,
+        markets: tuple[str, ...] = GAME_MARKETS,
+    ) -> list[GameEventOdds]:
+        """Every event's game markets, from ONE bulk call.
+
+        Billed per market per region, NOT per event: 3 markets x 3 regions is 9
+        credits for the whole slate, measured 2026-09-23 on 71 events. That is
+        a different billing shape from `fetch_props`, and it is why game odds
+        are affordable when the props pool is not.
+
+        `regions` is a parameter of THIS call and never read from
+        `self.regions`, so the sharp regions cannot leak into prop captures.
+        """
+        payload = self._client.get(
+            f"/sports/{self.sport_key}/odds",
+            regions=regions,
+            markets=",".join(markets),
+            oddsFormat=DEFAULT_ODDS_FORMAT,
+        ) or []
+        return parse_game_odds(payload)
 
     # -- historical --------------------------------------------------------
     def historical_events(self, iso_timestamp: str) -> dict[str, Any]:

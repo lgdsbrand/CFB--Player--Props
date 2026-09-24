@@ -185,6 +185,14 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
         note="daily 10:00 UTC — CFBD spreads and totals, costs no odds credits",
     ),
     JobExpectation(
+        name="ingest_game_odds",
+        max_age_hours=60,
+        note="Sun/Tue/Thu/Fri 23:00 UTC plus three Saturday pulls — game odds "
+             "for the game model (CLAUDE.md §11). The longest scheduled gap is "
+             "48h (Sun->Tue, Tue->Thu). Not gated on odds_adapter: that switch "
+             "turns off the PLAYER prop capture, and this runs on the free key.",
+    ),
+    JobExpectation(
         name="ingest_rankings",
         max_age_hours=200,
         note="Sunday 09:00 UTC, chained — polls publish Sunday, one call/season",

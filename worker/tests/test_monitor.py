@@ -78,8 +78,27 @@ def _scheduled_jobs() -> dict[str, str]:
     return found
 
 
+def _cron_field(value: str, low: int, high: int, expression: str) -> list[int]:
+    """One cron field as the values it fires on. `*`, `*/n`, `n` and `a,b,c`."""
+    if value == "*":
+        return list(range(low, high + 1))
+    if value.startswith("*/") and value[2:].isdigit():
+        return list(range(low, high + 1, int(value[2:])))
+    parts = value.split(",")
+    if all(p.isdigit() for p in parts):
+        return sorted({int(p) for p in parts})
+    raise ValueError(f"unsupported cron form: {expression!r}")
+
+
 def _cron_period_hours(expression: str) -> float:
-    """How often a cron expression fires, for the forms this repo uses.
+    """The LONGEST gap between two firings of a cron expression, in hours.
+
+    Measured by enumerating one week of firings rather than read off the
+    expression's shape, because a day-of-week list is not "weekly": the game
+    odds capture fires Sun/Tue/Thu/Fri, whose longest gap is 48h, and calling
+    that 168h would force a staleness limit that notices a dead cron a week
+    late. For every single-value form this repo used before that, the result is
+    what the shape-based version returned (1, n, 24 or 168).
 
     Raises on anything it does not understand rather than guessing. A schedule
     this cannot read is a schedule whose expectation cannot be verified, and
@@ -89,15 +108,28 @@ def _cron_period_hours(expression: str) -> float:
     minute, hour, dom, month, dow = expression.split()
     if month != "*" or dom != "*":
         raise ValueError(f"unsupported cron form: {expression!r}")
-    if dow != "*":
-        return 168.0
-    if hour == "*":
-        return 1.0
-    if hour.startswith("*/"):
-        return float(hour[2:])
-    if hour.isdigit():
-        return 24.0
-    raise ValueError(f"unsupported cron form: {expression!r}")
+    minutes = _cron_field(minute, 0, 59, expression)
+    hours = _cron_field(hour, 0, 23, expression)
+    days = _cron_field(dow, 0, 6, expression)
+    firings = sorted(
+        d * 24 * 60 + h * 60 + m for d in days for h in hours for m in minutes
+    )
+    week = 7 * 24 * 60
+    # The gap that wraps from the last firing of the week to the first.
+    gaps = [b - a for a, b in zip(firings, firings[1:])]
+    gaps.append(firings[0] + week - firings[-1])
+    return max(gaps) / 60.0
+
+
+def test_cron_period_is_the_longest_gap() -> None:
+    assert _cron_period_hours("40 * * * *") == 1.0
+    assert _cron_period_hours("0 */6 * * *") == 6.0
+    assert _cron_period_hours("30 12 * * *") == 24.0
+    assert _cron_period_hours("0 9 * * 0") == 168.0
+    # Sun, Tue, Thu, Fri: Sun->Tue and Tue->Thu are the longest.
+    assert _cron_period_hours("0 23 * * 0,2,4,5") == 48.0
+    # Three firings on Saturday leave the other six days empty.
+    assert _cron_period_hours("0 15,19,23 * * 6") == 160.0
 
 
 def test_render_yaml_actually_parsed() -> None:

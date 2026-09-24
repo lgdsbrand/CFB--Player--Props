@@ -469,6 +469,47 @@ services:
     envVars:
       - fromGroup: cfb-props-worker
 
+  # GAME ODDS for the game model (CLAUDE.md §11, G1): moneyline, spread and
+  # total from retail books, Pinnacle (`eu`) and the exchanges (`us_ex`). ONE
+  # bulk call per run, billed per market per region, NOT per event: 9 credits
+  # for the whole slate, measured 2026-09-23 on 85 events and 27 books.
+  #
+  # TWO SERVICES BECAUSE THE WEEK IS UNEVEN. Openers post Sunday; the line then
+  # moves slowly until Saturday, when every kickoff window needs its own close.
+  #   weekday  Sun/Tue/Thu/Fri 23:00 UTC (7pm ET) — opener and drift
+  #   saturday 15:00, 19:00, 23:00 UTC (11am/3pm/7pm ET) — one pull ahead of
+  #            each of the noon, 3:30 and night windows, so each game's last
+  #            captured price is its closing line. Started games are never
+  #            captured: an in-play price would become the "close".
+  # Seven pulls = 63 credits a week, ~270 a month, which fits the FREE key's
+  # 500 alongside the NFL Q1 capture it shares that key with. More often needs
+  # the paid pool: add `--paid` to the command once it is topped up.
+  #
+  # NEEDS ODDS_API_KEY_FREE ON EACH SERVICE, set in its Environment tab: odds
+  # keys live on the odds services, not in the group (since 2026-09-03).
+  # Without it every run fails with a ConfigError, which the monitor reports.
+  - type: cron
+    name: cfb-game-odds-weekday
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 23 * * 0,2,4,5"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.ingest_game_odds
+    envVars:
+      - fromGroup: cfb-props-worker
+
+  - type: cron
+    name: cfb-game-odds-saturday
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0 15,19,23 * * 6"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.ingest_game_odds
+    envVars:
+      - fromGroup: cfb-props-worker
+
   # Daily 11:00 UTC, an hour after the game lines. Open-Meteo's forecast
   # endpoint is unauthenticated and free, and this makes roughly one call per
   # venue per day of the slate — about 99 on a full opening weekend. There is no

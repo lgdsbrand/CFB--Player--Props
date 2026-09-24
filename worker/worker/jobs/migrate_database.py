@@ -46,7 +46,8 @@ FOUR THINGS THAT SILENTLY CORRUPT A COPY-BASED MIGRATION, all handled here:
   4. **`backtest_predictions` is not all-or-nothing.** See its entry in the plan.
 
 Row triggers are not a problem: the nine `set_updated_at` triggers are BEFORE
-UPDATE, and COPY inserts.
+UPDATE, and COPY inserts. The one exception is `game_picks`, whose freeze
+trigger fires on insert too — see its entry in the plan.
 """
 
 from __future__ import annotations
@@ -143,6 +144,17 @@ PLAN: tuple[TableSpec, ...] = (
                                           "counts, and the blitz rank."),
     TableSpec("player_prop_lines", "IRREPLACEABLE. 5,752 bought closing lines that "
                                    "cannot be re-purchased."),
+    TableSpec("game_odds", "IRREPLACEABLE in practice. Captured game-odds "
+                           "history, sharp books included; the historical "
+                           "endpoint re-sells it at 10x the live price."),
+    # IN THE PLAN although its rows cannot be COPYed once their game has kicked
+    # off: the freeze trigger fires on insert. It has to be here anyway —
+    # truncate_all needs every child of `games` in its one statement — and the
+    # result is the right failure: a move with played picks in it stops loudly
+    # at this table instead of leaving the picks behind. Relaxing the trigger
+    # for a move is a decision to make by hand, never a flag on this job.
+    TableSpec("game_picks", "Frozen model picks. Empty until the game model "
+                            "ships; see the note above before moving any."),
     TableSpec("projections", "Rebuildable by run_projections, but moving them means "
                              "the board is live the moment the site is."),
     TableSpec("picks", "Same. Also carries the generated confidence/edge columns "

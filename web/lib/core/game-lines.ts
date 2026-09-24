@@ -232,3 +232,74 @@ export function teamRecord(games: GradedGame[], teamId: number): TeamRecord {
 export function formatRecord(w: number, l: number, p = 0): string {
   return p > 0 ? `${w}-${l}-${p}` : `${w}-${l}`;
 }
+
+// =============================================================================
+// The game model's fair line (CLAUDE.md §11, G4)
+// =============================================================================
+// SHOWN AS A NUMBER, NEVER AS A CALL. The G3 backtest found the model less
+// accurate than the closing line, so nothing here compares the model with a
+// book or says which side to take. Its picks exist, frozen, as a private
+// shadow test (migration 0078), and nothing on the site reads them.
+
+export type ModelPeriod = "full" | "h1" | "q1";
+
+export interface ModelRange {
+  mean: number;
+  p10: number;
+  p90: number;
+}
+
+/** One row of `game_projections`. Margin is HOME minus AWAY. */
+export interface GameProjection {
+  gameId: number;
+  modelVersion: string;
+  evidencePhase: "early" | "later";
+  pHomeWin: number;
+  madeAt: string;
+  periods: Record<ModelPeriod, { margin: ModelRange; total: ModelRange }>;
+}
+
+export const MODEL_PERIOD_LABELS: Record<ModelPeriod, string> = {
+  full: "Full game",
+  h1: "1st half",
+  q1: "1st quarter",
+};
+
+/**
+ * The model's margin as a fair spread naming the favourite: a projected home
+ * win by 9.3 is "UGA -9.3". One decimal on purpose: a model number is not a
+ * book line and should not look like one rounded to the half point.
+ */
+export function modelSpreadLabel(margin: number, home: string, away: string): string {
+  const points = Math.abs(margin).toFixed(1);
+  if (points === "0.0") return "PK";
+  return margin > 0 ? `${home} -${points}` : `${away} -${points}`;
+}
+
+/** "ALA by 3 to UGA by 21": the 80% range of the margin in team terms. */
+export function marginRangeLabel(
+  range: ModelRange,
+  home: string,
+  away: string,
+): string {
+  const side = (margin: number) => {
+    const points = Math.round(Math.abs(margin));
+    if (points === 0) return "level";
+    return `${margin > 0 ? home : away} by ${points}`;
+  };
+  return `${side(range.p10)} to ${side(range.p90)}`;
+}
+
+/** "38 to 62". */
+export function totalRangeLabel(range: ModelRange): string {
+  return `${Math.round(range.p10)} to ${Math.round(range.p90)}`;
+}
+
+/** The favourite and its win probability, e.g. { team: "UGA", p: 0.78 }. */
+export function modelFavourite(
+  pHomeWin: number,
+  home: string,
+  away: string,
+): { team: string; p: number } {
+  return pHomeWin >= 0.5 ? { team: home, p: pHomeWin } : { team: away, p: 1 - pHomeWin };
+}

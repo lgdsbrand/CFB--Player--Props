@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { TeamChip } from "@/components/board/team-chip";
 import { BookOddsPanel } from "@/components/games/book-odds-panel";
 import { MatchupGrid } from "@/components/games/matchup-grid";
+import { ModelLinePanel } from "@/components/games/model-line-panel";
 import { PropsTable } from "@/components/games/props-table";
 import { RecordsPanel } from "@/components/games/records-panel";
 import { WeatherPanel } from "@/components/games/weather-panel";
@@ -26,6 +27,7 @@ import { getDefenseRatings } from "@/lib/data/defense";
 import {
   getEarliestSeason,
   getGameBookOdds,
+  getGameProjections,
   getHeadToHead,
   getSeasonResults,
 } from "@/lib/data/game-odds";
@@ -84,6 +86,7 @@ export default async function GamePage({
     seasonGames,
     meetings,
     earliestSeason,
+    projections,
   ] = await Promise.all([
     getAppConfig(),
     // Only for the display order of a player's markets. Cached seed data, so
@@ -121,6 +124,7 @@ export default async function GamePage({
     getSeasonResults(game.season, [game.homeTeamId, game.awayTeamId], game.startDate),
     getHeadToHead(game.homeTeamId, game.awayTeamId, game.startDate),
     getEarliestSeason(game.sport),
+    getGameProjections([gameId]),
   ]);
 
   const truncated = page.total > page.rows.length;
@@ -203,16 +207,15 @@ export default async function GamePage({
         {venue ? <p className="text-dim text-xs">{venue}</p> : null}
 
         {/* Stated on the page, not just in a comment: whose numbers these
-            are. The game model (CLAUDE.md §11) is in build and publishes
-            nothing until it has beaten closing lines in a backtest, so until
-            then every game-level number on this page is the market's. */}
+            are. The game model (CLAUDE.md §11) did not beat closing lines in
+            its backtest, so its numbers sit in their own labelled panel below
+            and never share a line with the market's. */}
         <p className="text-dim text-[0.6875rem]">
           The spread and total are the median across{" "}
           {game.gameLineProviders ?? 0} sportsbook
           {game.gameLineProviders === 1 ? "" : "s"}, ingested from
-          CollegeFootballData. They are the market&rsquo;s numbers — the game
-          model&rsquo;s own projection appears here once it has been
-          backtested.
+          CollegeFootballData. They are the market&rsquo;s numbers. The game
+          model&rsquo;s own fair line is in its panel below.
         </p>
       </header>
 
@@ -220,8 +223,15 @@ export default async function GamePage({
           frame everything below — a 20 mph crosswind is the reason a passing
           matchup that looks soft may not play soft. The position table is the
           deep-dive and reads slower, so it follows. */}
-      {/* The game model's panels (CLAUDE.md §11, G1): market numbers only
-          until the model is backtested. */}
+      {/* The game model's panels (CLAUDE.md §11). Its fair line first,
+          labelled and with no call (G4), then the market's prices by book. */}
+      <ModelLinePanel
+        projection={projections.get(gameId) ?? null}
+        home={game.homeAbbreviation ?? game.homeSchool}
+        away={game.awayAbbreviation ?? game.awaySchool}
+        completed={game.completed}
+      />
+
       <BookOddsPanel
         odds={bookOdds}
         home={game.homeAbbreviation ?? game.homeSchool}

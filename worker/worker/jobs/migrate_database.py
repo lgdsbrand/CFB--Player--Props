@@ -156,8 +156,11 @@ PLAN: tuple[TableSpec, ...] = (
     # result is the right failure: a move with played picks in it stops loudly
     # at this table instead of leaving the picks behind. Relaxing the trigger
     # for a move is a decision to make by hand, never a flag on this job.
-    TableSpec("game_picks", "Frozen model picks. Empty until the game model "
-                            "ships; see the note above before moving any."),
+    TableSpec("game_picks", "Frozen model picks, the shadow test (0078). See "
+                            "the note above before moving any."),
+    TableSpec("game_projections", "The game model's fair lines. Rebuildable for "
+                                  "games not yet played; a finished game's row is "
+                                  "the last pre-kickoff projection and is not."),
     TableSpec("projections", "Rebuildable by run_projections, but moving them means "
                              "the board is live the moment the site is."),
     TableSpec("picks", "Same. Also carries the generated confidence/edge columns "

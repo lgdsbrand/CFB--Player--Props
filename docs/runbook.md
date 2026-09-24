@@ -304,7 +304,7 @@ events came back and NONE matched a game fails on purpose.
 - **Never add the sharp regions to `DEFAULT_REGIONS`.** Props bill per region
   too; that would triple every prop capture.
 
-#### `build_team_strength` — not scheduled yet (game model, G2)
+#### `build_team_strength` — daily 08:00 UTC, end of the CFB results chain (game model)
 
 ```bash
 python -m worker.jobs.build_team_strength --current
@@ -319,6 +319,49 @@ from here. No API calls; about a minute a season.
 A re-run deletes and rewrites the whole season, so it is always safe. `plays`
 holds NFL rows from 2025 and has no sport column: the build joins
 `games.sport`, and any new read of `plays` must do the same.
+
+Scheduled as the last step of `cfb-props-ingest-results`, because next week's
+rows only exist once this week's games are in, and `run_game_model` refuses to
+project a game whose week has no rows. **Monitored:** 36h.
+
+#### `run_game_model` — daily 09:30/15:30/19:30/23:30 UTC (game model, G4)
+
+```bash
+python -m worker.jobs.run_game_model              # what the cron runs
+python -m worker.jobs.run_game_model --dry-run    # fit and print, write nothing
+```
+
+Fits the ratings model on every completed game since 2022 and, for each
+current-season game that has not kicked off:
+
+- writes `game_projections`: projected margin and total for the full game, 1H
+  and 1Q with 80% ranges, and home win probability. The site shows these as a
+  **labelled fair line with no call**, because the G3 backtest found the model
+  does not beat closing lines.
+- writes `game_picks`, the **shadow test**: a pick where the model's
+  probability beats one book's vig-free price by 5% or more. The book is
+  Pinnacle when it priced the market, else DraftKings, else FanDuel. A pick
+  stands at the price it was made against; a new row is written only when the
+  model switches side. The database freezes picks at kickoff, and since
+  migration 0078 no visitor can read them.
+
+Picks need fresh prices: if the last successful `ingest_game_odds` is over 36h
+old the run writes projections and **no picks**, and says so in the log. A
+game whose week has no `team_strength_ratings` yet is not projected at all.
+**Monitored:** 26h. No API calls, about a minute.
+
+#### `grade_game_picks` — on demand (game model, G4)
+
+```bash
+python -m worker.jobs.grade_game_picks
+python -m worker.jobs.grade_game_picks --season 2026 --weeks 4 5
+```
+
+Read-only summary of the shadow picks on finished games: W-L-P and ROI at the
+price taken, and closing line value against the same book's last captured
+price before kickoff (points for spreads and totals; probability where the
+line did not move). It counts how many closes were captured within 6h of
+kickoff, because a missed Saturday capture makes the "close" a stale price.
 
 #### `run_game_backtest` — on demand (game model, G3)
 

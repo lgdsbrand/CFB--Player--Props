@@ -10,7 +10,9 @@ import {
   spreadMoveToward,
   totalMoveLabel,
   formatPoints,
+  modelSpreadLabel,
   type GameOddsSummary,
+  type GameProjection,
 } from "@/lib/core/game-lines";
 import type { GameSummary } from "@/lib/core/types";
 
@@ -18,9 +20,10 @@ import type { GameSummary } from "@/lib/core/types";
  * The slate as a table of game lines (CLAUDE.md §11, G1) — what the client
  * asked for: a table of games, each one clickable.
  *
- * EVERY NUMBER HERE IS THE MARKET'S. The game model's own projection is a
- * later column (G4). Until then the page says so, rather than letting a
- * Pinnacle probability read as ours.
+ * EVERY NUMBER HERE IS THE MARKET'S EXCEPT THE "MODEL" COLUMN (G4), which is
+ * the game model's fair line. It is never coloured or compared with the
+ * market: the model did not beat closing lines in its backtest, and a
+ * highlighted disagreement would be a pick in all but name.
  *
  * Spread columns name the favourite ("UGA -7.0"); the stored line is from the
  * home team's perspective and is flipped only by `spreadLabel`.
@@ -28,9 +31,11 @@ import type { GameSummary } from "@/lib/core/types";
 export function LinesTable({
   games,
   odds,
+  projections,
 }: {
   games: GameSummary[];
   odds: Map<number, GameOddsSummary>;
+  projections: Map<number, GameProjection>;
 }) {
   const priced = games.filter((game) => odds.has(game.gameId)).length;
 
@@ -43,10 +48,12 @@ export function LinesTable({
           Pinnacle; retail is the median of the US books (DraftKings, FanDuel,
           BetMGM, BetRivers, Caesars, Fanatics). Win % is Pinnacle&rsquo;s
           moneyline with the vig removed.{" "}
-          <strong className="text-ink">These are market numbers</strong>
+          <strong className="text-ink">Model is our game model&rsquo;s fair
+          line, not a pick</strong>
           {/* Explicit: a space opening a line after an element is dropped. */}
-          {" "}— the game model&rsquo;s projections join this table once it
-          has been backtested.
+          {" "}— tested on 2023 to 2025 it was less accurate than the closing
+          line, so it is shown for reference and never set against a book.
+          Every other column is the market&rsquo;s.
         </p>
       </div>
 
@@ -57,7 +64,7 @@ export function LinesTable({
         </p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[52rem] border-collapse text-sm">
+          <table className="w-full min-w-[58rem] border-collapse text-sm">
             <thead>
               <tr className="border-border-subtle border-b">
                 <Th>Game</Th>
@@ -67,6 +74,7 @@ export function LinesTable({
                 <Th>Total</Th>
                 <Th>Sharp total</Th>
                 <Th>Win %</Th>
+                <Th>Model</Th>
                 <Th right>Books</Th>
               </tr>
             </thead>
@@ -76,6 +84,7 @@ export function LinesTable({
                   key={game.gameId}
                   game={game}
                   odds={odds.get(game.gameId)}
+                  projection={projections.get(game.gameId)}
                 />
               ))}
             </tbody>
@@ -99,7 +108,15 @@ function Th({ children, right }: { children: React.ReactNode; right?: boolean })
   );
 }
 
-function LineRow({ game, odds }: { game: GameSummary; odds?: GameOddsSummary }) {
+function LineRow({
+  game,
+  odds,
+  projection,
+}: {
+  game: GameSummary;
+  odds?: GameOddsSummary;
+  projection?: GameProjection;
+}) {
   const home = game.homeAbbreviation ?? game.homeSchool;
   const away = game.awayAbbreviation ?? game.awaySchool;
   const spreads = odds?.spreads;
@@ -198,6 +215,21 @@ function LineRow({ game, odds }: { game: GameSummary; odds?: GameOddsSummary }) 
           value={favourite ? `${favourite.team} ${formatFair(favourite.p)}` : null}
           note={favourite && !fairIsSharp ? "consensus" : null}
         />
+      </td>
+      <td className="py-2.5 pr-3">
+        {/* Muted, never highlighted: see the header comment. */}
+        {projection ? (
+          <span className="flex flex-col gap-0.5">
+            <span className="text-muted text-sm font-bold whitespace-nowrap tabular-nums">
+              {modelSpreadLabel(projection.periods.full.margin.mean, home, away)}
+            </span>
+            <span className="text-dim text-[0.6875rem] whitespace-nowrap tabular-nums">
+              total {projection.periods.full.total.mean.toFixed(1)}
+            </span>
+          </span>
+        ) : (
+          <span className="text-dim text-xs">—</span>
+        )}
       </td>
       <td className="text-muted py-2.5 text-right text-xs tabular-nums">
         {spreads?.books ?? h2h?.books ?? totals?.books ?? "—"}

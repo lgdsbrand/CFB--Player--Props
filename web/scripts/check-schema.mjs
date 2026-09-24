@@ -189,6 +189,14 @@ const EXPECTED = {
     "first_line", "captured_at", "first_captured_at",
   ],
   v_game_line_consensus: ["game_id", "spread", "over_under"],
+  game_projections: [
+    "game_id", "model_version", "evidence_phase", "p_home_win", "made_at",
+    "margin_mean", "margin_p10", "margin_p90", "total_mean", "total_p10",
+    "total_p90", "h1_margin_mean", "h1_margin_p10", "h1_margin_p90",
+    "h1_total_mean", "h1_total_p10", "h1_total_p90", "q1_margin_mean",
+    "q1_margin_p10", "q1_margin_p90", "q1_total_mean", "q1_total_p10",
+    "q1_total_p90",
+  ],
   // `ladder_step` backs the alternate-line ladder AND the hit-rate chart's
   // line stepper; null on binary markets and only there.
   // `sport` is FILTERED ON, not rendered, and is listed here for exactly that

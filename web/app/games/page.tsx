@@ -22,7 +22,7 @@ import {
 } from "@/lib/core/slate-days";
 import { getConferences } from "@/lib/data/catalogue";
 import { getDefenseRatings } from "@/lib/data/defense";
-import { getGameOddsSummaries } from "@/lib/data/game-odds";
+import { getGameOddsSummaries, getGameProjections } from "@/lib/data/game-odds";
 import { getSlateGames } from "@/lib/data/games";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
 import { getTeamDirectory } from "@/lib/data/teams";
@@ -47,8 +47,9 @@ import { getSlateConditions } from "@/lib/data/weather";
  * IT IS NOT (YET) A GAME PREDICTION MODEL. When this view was agreed, CLAUDE.md
  * §10 put game prediction out of scope; on 2026-09-23 the client commissioned
  * it as a separate project (§11). The Lines view is that project's first
- * screen, and until its model is backtested the only numbers here describing
- * the game itself are the books'.
+ * screen. Its model did not beat closing lines in the backtest, so the only
+ * model number here is the Lines view's labelled fair-line column; everything
+ * else describing the game is the books'.
  */
 
 /**
@@ -152,12 +153,12 @@ export default async function Games({
 
   // CARDS STAYS THE DEFAULT. `resolveBoardView` is not used here: its default
   // is the board's (table when no market is chosen), and borrowing it would
-  // flip this page's layout for everyone who never touched the toggle. Lines
-  // is opt-in until the game model has a projection to put in it.
+  // flip this page's layout for everyone who never touched the toggle.
   const showLines = params.view === "table";
-  const odds = showLines
-    ? await getGameOddsSummaries(shown.map((game) => game.gameId))
-    : new Map();
+  const shownIds = shown.map((game) => game.gameId);
+  const [odds, projections] = showLines
+    ? await Promise.all([getGameOddsSummaries(shownIds), getGameProjections(shownIds)])
+    : [new Map(), new Map()];
 
   const conferenceLabel = params.conference ?? "displayed conferences";
 
@@ -273,7 +274,7 @@ export default async function Games({
           </p>
         </div>
       ) : showLines ? (
-        <LinesTable games={shown} odds={odds} />
+        <LinesTable games={shown} odds={odds} projections={projections} />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {shown.map((game) => (

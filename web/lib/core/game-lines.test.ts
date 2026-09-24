@@ -7,11 +7,15 @@ import {
   formatPoints,
   formatRecord,
   lineMove,
+  marginRangeLabel,
+  modelFavourite,
+  modelSpreadLabel,
   sharpRetailGap,
   spreadLabel,
   spreadMoveToward,
   teamRecord,
   totalMoveLabel,
+  totalRangeLabel,
   totalResult,
   type GameMarketSummary,
   type GradedGame,
@@ -133,4 +137,18 @@ test("a team record counts games without a line separately", () => {
   assert.equal(record.noLine, 1);
   assert.equal(formatRecord(3, 1), "3-1");
   assert.equal(formatRecord(3, 1, 1), "3-1-1");
+});
+
+test("the model's fair spread names the favourite and keeps one decimal", () => {
+  assert.equal(modelSpreadLabel(9.34, "UGA", "CLEM"), "UGA -9.3");
+  assert.equal(modelSpreadLabel(-3, "UGA", "CLEM"), "CLEM -3.0");
+  assert.equal(modelSpreadLabel(0.02, "UGA", "CLEM"), "PK");
+});
+
+test("the model's ranges read in team terms", () => {
+  const margin = { mean: 9, p10: -3.4, p90: 21.2 };
+  assert.equal(marginRangeLabel(margin, "UGA", "CLEM"), "CLEM by 3 to UGA by 21");
+  assert.equal(marginRangeLabel({ mean: 0, p10: 0.2, p90: 7 }, "UGA", "CLEM"), "level to UGA by 7");
+  assert.equal(totalRangeLabel({ mean: 50, p10: 37.6, p90: 62.2 }), "38 to 62");
+  assert.deepEqual(modelFavourite(0.3, "UGA", "CLEM"), { team: "CLEM", p: 0.7 });
 });

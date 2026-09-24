@@ -193,6 +193,20 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
              "turns off the PLAYER prop capture, and this runs on the free key.",
     ),
     JobExpectation(
+        name="build_team_strength",
+        max_age_hours=36,
+        note="daily 08:00 UTC, last step of the CFB results chain — the game "
+             "model's point-in-time team features. Without it next week's games "
+             "have no strength rows and run_game_model will not project them.",
+    ),
+    JobExpectation(
+        name="run_game_model",
+        max_age_hours=26,
+        note="daily 09:30/15:30/19:30/23:30 UTC — the game model's fair lines "
+             "and shadow picks (CLAUDE.md §11, G4). Longest gap is 10h "
+             "(23:30->09:30); 26h tolerates two missed runs in a row.",
+    ),
+    JobExpectation(
         name="ingest_rankings",
         max_age_hours=200,
         note="Sunday 09:00 UTC, chained — polls publish Sunday, one call/season",

@@ -177,7 +177,8 @@ services:
       python -m worker.jobs.ingest_reference --current &&
       python -m worker.jobs.ingest_stats --current --incremental &&
       python -m worker.jobs.build_splits --current &&
-      python -m worker.jobs.build_usage_shares --current --sport cfb
+      python -m worker.jobs.build_usage_shares --current --sport cfb &&
+      python -m worker.jobs.build_team_strength --current
     envVars:
       - fromGroup: cfb-props-worker
 
@@ -507,6 +508,24 @@ services:
     schedule: "0 15,19,23 * * 6"
     buildCommand: pip install -r requirements.txt
     startCommand: python -m worker.jobs.ingest_game_odds
+    envVars:
+      - fromGroup: cfb-props-worker
+
+  # THE GAME MODEL (CLAUDE.md §11, G4): fair lines for the site and the frozen
+  # shadow picks. Thirty minutes after each odds capture (23:00 daily covers the
+  # weekday pulls, 15:00/19:00 the Saturday ones), so a pick is made against a
+  # price at most half an hour old; the 09:30 run picks up the team strength the
+  # 08:00 results chain rebuilt. Four runs every day because a run where nothing
+  # moved writes no pick rows and just refreshes the projections. No API calls,
+  # about a minute each.
+  - type: cron
+    name: cfb-game-model
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "30 9,15,19,23 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.run_game_model
     envVars:
       - fromGroup: cfb-props-worker
 

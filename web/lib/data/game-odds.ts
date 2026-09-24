@@ -14,6 +14,8 @@ import type {
   BookOdds,
   GameMarketSummary,
   GameOddsSummary,
+  GameProjection,
+  ModelPeriod,
   GradedGame,
   MarketRole,
   OddsMarket,
@@ -78,6 +80,61 @@ export async function getGameOddsSummaries(
     entry[summary.market] = summary;
     out.set(summary.gameId, entry);
   }
+  return out;
+}
+
+// =============================================================================
+// The game model's fair lines (CLAUDE.md §11, G4)
+// =============================================================================
+// One row per game per model version; a game with none has not been projected
+// yet (its week's team strength is built once the previous week is played).
+// `game_picks` is deliberately NOT read anywhere: the picks are a private
+// shadow test, and since migration 0078 the public key cannot read them.
+
+const MODEL_VERSION = "ratings-v1";
+
+const PROJECTION_COLUMNS = [
+  "game_id", "model_version", "evidence_phase", "p_home_win", "made_at",
+  ...(["margin", "total", "h1_margin", "h1_total", "q1_margin", "q1_total"] as const)
+    .flatMap((t) => [`${t}_mean`, `${t}_p10`, `${t}_p90`]),
+].join(", ");
+
+function toProjection(row: DbRow): GameProjection {
+  const range = (prefix: string) => ({
+    mean: Number(row[`${prefix}_mean`]),
+    p10: Number(row[`${prefix}_p10`]),
+    p90: Number(row[`${prefix}_p90`]),
+  });
+  const period = (p: ModelPeriod) => {
+    const stem = p === "full" ? "" : `${p}_`;
+    return { margin: range(`${stem}margin`), total: range(`${stem}total`) };
+  };
+  return {
+    gameId: row.game_id as number,
+    modelVersion: row.model_version as string,
+    evidencePhase: row.evidence_phase as GameProjection["evidencePhase"],
+    pHomeWin: Number(row.p_home_win),
+    madeAt: row.made_at as string,
+    periods: { full: period("full"), h1: period("h1"), q1: period("q1") },
+  };
+}
+
+/** The model's projection per game, keyed by game id. One row per game. */
+export async function getGameProjections(
+  gameIds: number[],
+): Promise<Map<number, GameProjection>> {
+  const out = new Map<number, GameProjection>();
+  if (gameIds.length === 0) return out;
+  const supabase = createServerSupabaseClient();
+  const rows = unwrap<DbRow[]>(
+    await supabase
+      .from("game_projections")
+      .select(PROJECTION_COLUMNS)
+      .in("game_id", gameIds)
+      .eq("model_version", MODEL_VERSION),
+    "game_projections",
+  );
+  for (const row of rows) out.set(row.game_id as number, toProjection(row));
   return out;
 }
 

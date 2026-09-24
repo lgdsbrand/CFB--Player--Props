@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { DayStrip } from "@/components/day-strip";
 import { GameCard } from "@/components/games/game-card";
+import { LinesTable } from "@/components/games/lines-table";
 import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
 import { WeekStrip } from "@/components/week-strip";
@@ -21,6 +22,7 @@ import {
 } from "@/lib/core/slate-days";
 import { getConferences } from "@/lib/data/catalogue";
 import { getDefenseRatings } from "@/lib/data/defense";
+import { getGameOddsSummaries } from "@/lib/data/game-odds";
 import { getSlateGames } from "@/lib/data/games";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
 import { getTeamDirectory } from "@/lib/data/teams";
@@ -42,10 +44,11 @@ import { getSlateConditions } from "@/lib/data/weather";
  * consensus spread and total from CFBD, the poll ranks, and the position splits
  * the model already consumes.
  *
- * IT IS NOT A GAME PREDICTION MODEL. CLAUDE.md §10 puts full game-outcome and
- * spread prediction out of scope, and that was reaffirmed with the client when
- * this view was agreed: it is a view over existing outputs. The only numbers
- * here describing the game itself are the book's.
+ * IT IS NOT (YET) A GAME PREDICTION MODEL. When this view was agreed, CLAUDE.md
+ * §10 put game prediction out of scope; on 2026-09-23 the client commissioned
+ * it as a separate project (§11). The Lines view is that project's first
+ * screen, and until its model is backtested the only numbers here describing
+ * the game itself are the books'.
  */
 
 /**
@@ -147,6 +150,15 @@ export default async function Games({
 
   const shown = narrowToDay(inConference, activeDay);
 
+  // CARDS STAYS THE DEFAULT. `resolveBoardView` is not used here: its default
+  // is the board's (table when no market is chosen), and borrowing it would
+  // flip this page's layout for everyone who never touched the toggle. Lines
+  // is opt-in until the game model has a projection to put in it.
+  const showLines = params.view === "table";
+  const odds = showLines
+    ? await getGameOddsSummaries(shown.map((game) => game.gameId))
+    : new Map();
+
   const conferenceLabel = params.conference ?? "displayed conferences";
 
   // Two independent narrowings, so the sentence is composed rather than
@@ -202,6 +214,20 @@ export default async function Games({
         ))}
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="label-caption">View</span>
+        <ConferencePill
+          href={boardHref(linkParams, { view: undefined }, GAMES_PATH)}
+          active={!showLines}
+          label="Cards"
+        />
+        <ConferencePill
+          href={boardHref(linkParams, { view: "table" }, GAMES_PATH)}
+          active={showLines}
+          label="Lines"
+        />
+      </div>
+
       {played > 0 ? (
         <p className="text-dim border-border-subtle rounded-xl border px-3 py-2 text-xs">
           <span className="text-muted font-bold uppercase tracking-label">
@@ -246,6 +272,8 @@ export default async function Games({
             to see the rest of the slate.
           </p>
         </div>
+      ) : showLines ? (
+        <LinesTable games={shown} odds={odds} />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {shown.map((game) => (

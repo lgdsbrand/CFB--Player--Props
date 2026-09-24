@@ -174,6 +174,21 @@ const EXPECTED = {
     "home_spread", "game_total", "game_line_providers", "home_poll_rank",
     "away_poll_rank", "projections", "players", "calls",
   ],
+  // The game model's screens (CLAUDE.md §11, migrations 0074-0075).
+  // `period` is filtered on, never selected.
+  v_game_odds_summary: [
+    "game_id", "period", "market", "books", "consensus_line",
+    "consensus_first_line", "consensus_fair", "sharp_line", "sharp_first_line",
+    "sharp_fair", "sharp_first_fair", "exchange_line", "exchange_fair",
+    "retail_line", "retail_first_line", "retail_fair", "sharp_books",
+    "exchange_books", "retail_books", "first_seen_at", "last_moved_at",
+  ],
+  v_game_odds_current: [
+    "game_id", "period", "sportsbook_key", "sportsbook_name", "market_role",
+    "market", "line", "home_price", "away_price", "over_price", "under_price",
+    "first_line", "captured_at", "first_captured_at",
+  ],
+  v_game_line_consensus: ["game_id", "spread", "over_under"],
   // `ladder_step` backs the alternate-line ladder AND the hit-rate chart's
   // line stepper; null on binary markets and only there.
   // `sport` is FILTERED ON, not rendered, and is listed here for exactly that
@@ -202,9 +217,11 @@ const EXPECTED = {
     "box_plays", "blitz_rate", "blitz_rank", "mean_pass_rushers",
     "heavy_box_rate",
   ],
+  // `home_points`, `away_points` and `completed` back the game model's ATS and
+  // head-to-head reads (lib/data/game-odds.ts).
   games: [
     "id", "season", "week", "start_date", "neutral_site", "home_team_id",
-    "away_team_id", "sport",
+    "away_team_id", "sport", "home_points", "away_points", "completed",
   ],
   // Conference membership is season-scoped because realignment moves teams
   // between the seasons this project covers, so the weekly-targets directory

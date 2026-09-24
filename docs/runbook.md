@@ -320,6 +320,23 @@ A re-run deletes and rewrites the whole season, so it is always safe. `plays`
 holds NFL rows from 2025 and has no sport column: the build joins
 `games.sport`, and any new read of `plays` must do the same.
 
+#### `run_game_backtest` — on demand (game model, G3)
+
+```bash
+python -m worker.jobs.run_game_backtest
+python -m worker.jobs.run_game_backtest --test-seasons 2023 2024 2025 --train-from 2022
+```
+
+Walk-forward backtest of the two game models (ratings and gradient boosting)
+against CFBD's closing lines, and the report at
+`docs/game-model-backtest.html`. Each test season is predicted by models
+trained on earlier seasons only; the current season's completed games are an
+extra out-of-sample block. Reads the database only, about a minute.
+
+The closing line GRADES and never predicts: `game_data.FEATURE_COLUMNS` is the
+only list a model trains on, and `tests/test_game_model.py` fails if a `mkt_`
+column reaches it.
+
 #### `ingest_game_lines` — daily 10:00 UTC
 
 ```bash

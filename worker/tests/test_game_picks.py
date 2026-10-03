@@ -113,3 +113,12 @@ def test_grade_reports_prob_clv_only_when_the_line_did_not_move():
     assert g.result == "loss" and g.profit == -1.0 and g.clv_points == 0.0
     assert g.clv_prob > 0  # -105 taken, fair close ~52.4%
     assert grade(pick, 7, 50, None).clv_points is None
+
+
+def test_the_game_model_freezes_no_moneyline_picks():
+    """The spread pick's opinion at long odds: variance, no information (week 4:
+    9 wins on 44 picks where the book's own prices expected 17)."""
+    from worker.jobs.run_game_model import PICK_MARKETS
+
+    assert "h2h" not in PICK_MARKETS
+    assert set(PICK_MARKETS) == {"spreads", "totals"}

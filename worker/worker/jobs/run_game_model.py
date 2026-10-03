@@ -61,7 +61,14 @@ STALE_ODDS_HOURS = 36.0
 # a game this close is skipped rather than failing the whole batch.
 KICKOFF_MARGIN = timedelta(minutes=5)
 PERIOD = "full"
-PICK_MARKETS = ("h2h", "spreads", "totals")
+# NO MONEYLINE PICKS, since 2026-10-03. A moneyline pick is the spread pick's
+# opinion re-priced at long odds, so it adds variance and no information. Week 4
+# measured it: 44 picks, 34 of them underdogs, 9 wins where the model expected
+# 22 and the book's own prices 17 (ROI -60.9%), while spreads on the same
+# opinions went 29-34-1. G3 had already shown the model's win probability loses
+# to the vig-free moneyline (Brier 0.1834 vs 0.1765). The fair win % stays on
+# the game page as a projection, not a pick.
+PICK_MARKETS = ("spreads", "totals")
 
 
 @dataclass

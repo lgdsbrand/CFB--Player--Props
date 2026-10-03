@@ -44,6 +44,8 @@ export type GameOddsSummary = Partial<Record<OddsMarket, GameMarketSummary>>;
 
 /** One book's current price on one game market, from `v_game_odds_current`. */
 export interface BookOdds {
+  /** Full game, first half or first quarter. The same book prices each apart. */
+  period: ModelPeriod;
   sportsbookKey: string;
   sportsbookName: string;
   role: MarketRole;

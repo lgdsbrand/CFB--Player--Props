@@ -172,13 +172,19 @@ class GameOutcome:
 
 @dataclass(frozen=True)
 class GameBookMarket:
-    """One book's one game market (h2h, spreads or totals) on one event."""
+    """One book's one game market (h2h, spreads or totals) on one event.
+
+    `market` is always the BASE market; a first-half spread arrives from the
+    provider as `spreads_h1` and is stored as market "spreads", period "h1",
+    so every downstream reader can treat the three periods alike.
+    """
 
     sportsbook_key: str
     sportsbook_name: str
     market: str
     book_updated_at: datetime | None
     outcomes: tuple[GameOutcome, ...]
+    period: str = "full"
 
 
 @dataclass(frozen=True)

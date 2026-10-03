@@ -3,6 +3,7 @@ import {
   formatPoints,
   type BookOdds,
   type MarketRole,
+  type ModelPeriod,
 } from "@/lib/core/game-lines";
 
 /**
@@ -12,7 +13,18 @@ import {
  * Spreads print from each TEAM's side ("-7.0 -110 / +7.0 -110"), because the
  * stored home-perspective number is a storage convention, not something a
  * reader should have to flip in their head.
+ *
+ * ONE PANEL PER PERIOD. The first half and first quarter (the client named
+ * FanDuel and DraftKings) render as their own panels below the full game, and
+ * only when a book has priced them: most college games never get period lines,
+ * and an empty table under every game would read as a broken capture.
  */
+
+const PERIOD_TITLE: Record<ModelPeriod, string> = {
+  full: "Lines by book",
+  h1: "1st half lines",
+  q1: "1st quarter lines",
+};
 
 const ROLE_ORDER: MarketRole[] = ["sharp", "exchange", "retail", "other"];
 const ROLE_LABEL: Record<MarketRole, string> = {
@@ -65,21 +77,26 @@ export function BookOddsPanel({
   odds,
   home,
   away,
+  period = "full",
 }: {
   odds: BookOdds[];
   home: string;
   away: string;
+  period?: ModelPeriod;
 }) {
-  const rows = rowsByBook(odds);
+  const rows = rowsByBook(odds.filter((entry) => entry.period === period));
+  if (period !== "full" && rows.length === 0) return null;
 
   return (
     <section className="panel flex flex-col gap-3 p-4">
       <div className="flex flex-col gap-1">
-        <h2 className="section-header">📊 Lines by book</h2>
+        <h2 className="section-header">📊 {PERIOD_TITLE[period]}</h2>
         <p className="text-muted text-xs">
-          Current price at every book we capture, sharp first. &ldquo;Moved&rdquo;
-          is the change since the first price we saw this week — our first
-          capture, not the book&rsquo;s opening line.
+          {period === "full"
+            ? "Current price at every book we capture, sharp first. "
+            : "US books only, captured when first posted and again in the hour before kickoff. "}
+          &ldquo;Moved&rdquo; is the change since the first price we saw this
+          week — our first capture, not the book&rsquo;s opening line.
         </p>
       </div>
 

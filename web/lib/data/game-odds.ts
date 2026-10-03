@@ -139,21 +139,25 @@ export async function getGameProjections(
 }
 
 const BOOK_COLUMNS =
-  "sportsbook_key, sportsbook_name, market_role, market, line, home_price, " +
+  "period, sportsbook_key, sportsbook_name, market_role, market, line, home_price, " +
   "away_price, over_price, under_price, first_line, captured_at, first_captured_at";
 
-/** Every book's current full-game price on one game. */
+/**
+ * Every book's current price on one game, for every period captured: full
+ * game, first half and first quarter (capture_game_periods). About 85 full-game
+ * rows plus up to ~50 for the periods, well inside PostgREST's 1,000.
+ */
 export async function getGameBookOdds(gameId: number): Promise<BookOdds[]> {
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
     await supabase
       .from("v_game_odds_current")
       .select(BOOK_COLUMNS)
-      .eq("game_id", gameId)
-      .eq("period", "full"),
+      .eq("game_id", gameId),
     "v_game_odds_current",
   );
   return rows.map((row) => ({
+    period: row.period as ModelPeriod,
     sportsbookKey: row.sportsbook_key as string,
     sportsbookName: row.sportsbook_name as string,
     role: row.market_role as MarketRole,

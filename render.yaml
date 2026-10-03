@@ -242,7 +242,11 @@ services:
     rootDir: worker
     schedule: "0 * * * *"
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m worker.jobs.ingest_odds --event-limit 120 --close-window-minutes 60
+    # Then the game model's 1H/1Q lines (capture_game_periods), which need the
+    # paid key this service already holds and the same hourly open-and-close.
+    startCommand: >-
+      python -m worker.jobs.ingest_odds --event-limit 120 --close-window-minutes 60 &&
+      python -m worker.jobs.capture_game_periods
     envVars:
       - fromGroup: cfb-props-worker
 

@@ -232,11 +232,15 @@ export default async function GamePage({
         completed={game.completed}
       />
 
-      <BookOddsPanel
-        odds={bookOdds}
-        home={game.homeAbbreviation ?? game.homeSchool}
-        away={game.awayAbbreviation ?? game.awaySchool}
-      />
+      {(["full", "h1", "q1"] as const).map((period) => (
+        <BookOddsPanel
+          key={period}
+          period={period}
+          odds={bookOdds}
+          home={game.homeAbbreviation ?? game.homeSchool}
+          away={game.awayAbbreviation ?? game.awaySchool}
+        />
+      ))}
 
       <RecordsPanel
         season={game.season}

@@ -193,6 +193,15 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
              "turns off the PLAYER prop capture, and this runs on the free key.",
     ),
     JobExpectation(
+        name="capture_game_periods",
+        max_age_hours=3,
+        note="hourly, chained after the college props capture — first-half and "
+             "first-quarter game lines, open and close. Most runs ask about no "
+             "game, so staleness means the cron stopped. A name of its own so it "
+             "cannot stand in for the full-game capture. Not gated on "
+             "odds_adapter, like ingest_game_odds.",
+    ),
+    JobExpectation(
         name="build_team_strength",
         max_age_hours=36,
         note="daily 08:00 UTC, last step of the CFB results chain — the game "

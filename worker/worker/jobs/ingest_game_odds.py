@@ -30,7 +30,7 @@ import sys
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 
@@ -41,6 +41,8 @@ from worker.adapters.odds.theoddsapi import (
     ADAPTER_NAME,
     GAME_MARKETS,
     GAME_REGIONS,
+    PERIOD_MARKETS,
+    PERIOD_REGIONS,
     TheOddsApiAdapter,
 )
 from worker.config import ConfigError, get_settings
@@ -54,8 +56,10 @@ log = get_logger(__name__)
 JOB_NAME = "ingest_game_odds"
 
 # The bulk endpoint serves full-game markets only. 1H/1Q are per-event and
-# billed like player props; they arrive in the same table later (0074).
+# billed like player props; `run_periods` captures them into the same table
+# (0074 already allows the periods), on a schedule of their own.
 PERIOD = "full"
+PERIODS = ("h1", "q1")
 
 # Spreads must mirror (home -3.5 is away +3.5). A book sending anything else is
 # a malformed quote, and storing either half would put a spread on screen that
@@ -76,6 +80,7 @@ class GameOddsRow:
     over_price: int | None
     under_price: int | None
     book_updated_at: datetime | None
+    period: str = PERIOD
 
     def price_key(self) -> tuple:
         """What counts as 'the price moved'. Timestamps deliberately excluded."""
@@ -94,6 +99,9 @@ class GameOddsReport:
     events_matched: int = 0
     events_started: int = 0
     events_unmatched: list[str] = field(default_factory=list)
+    # Period capture only (see `run_periods`).
+    events_already_captured: int = 0
+    events_asked: int = 0
     books: set[str] = field(default_factory=set)
     rows_written: int = 0
     rows_unchanged: int = 0
@@ -105,6 +113,14 @@ class GameOddsReport:
             f"  matched        {self.events_matched}",
             f"  started (skip) {self.events_started}",
             f"  unmatched      {len(self.events_unmatched)}",
+            *(
+                [
+                    f"  asked (billed) {self.events_asked}",
+                    f"  held, not closing (free) {self.events_already_captured}",
+                ]
+                if self.events_asked or self.events_already_captured
+                else []
+            ),
             f"books            {len(self.books)}: {', '.join(sorted(self.books))}",
             f"rows written     {self.rows_written}",
             f"rows unchanged   {self.rows_unchanged}",
@@ -161,6 +177,7 @@ def orient(
             sportsbook_name=market.sportsbook_name,
             market=market.market,
             book_updated_at=market.book_updated_at,
+            period=market.period,
             **{
                 "line": None,
                 "home_price": None,
@@ -338,40 +355,148 @@ def run(
             log.info("Provider quota: %s", adapter.quota.summary())
             return report
 
-        book_ids = ensure_books(conn, [r for _, r in oriented])
-        stored = latest_prices(conn, sorted({g for g, _ in oriented}))
-        changed: list[tuple] = []
-        for game_id, row in oriented:
-            book_id = book_ids[row.sportsbook_key]
-            if stored.get((game_id, book_id, PERIOD, row.market)) == row.price_key():
-                report.rows_unchanged += 1
-                continue
-            changed.append((
-                game_id, book_id, PERIOD, row.market, row.line,
-                row.home_price, row.away_price, row.over_price, row.under_price,
-                row.book_updated_at, now, ADAPTER_NAME,
-            ))
-
-        # ONE executemany, which psycopg pipelines. Row-by-row execute was a
-        # round trip per quote: the first production capture (2026-09-23)
-        # sent ~3,870 of them, ran past three minutes and was killed having
-        # written nothing.
-        if changed:
-            with conn.cursor() as cur:
-                cur.executemany(
-                    """
-                    insert into game_odds (
-                      game_id, sportsbook_id, period, market, line,
-                      home_price, away_price, over_price, under_price,
-                      book_updated_at, captured_at, source_adapter
-                    ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    changed,
-                )
-        report.rows_written = len(changed)
-        conn.commit()
+        write_changed(conn, oriented, now, report)
 
     log.info("Provider quota: %s", adapter.quota.summary())
+    return report
+
+
+def write_changed(
+    conn: psycopg.Connection,
+    oriented: list[tuple[int, GameOddsRow]],
+    now: datetime,
+    report: GameOddsReport,
+) -> None:
+    """Write the quotes whose price moved since the book's last row, and commit."""
+    book_ids = ensure_books(conn, [r for _, r in oriented])
+    stored = latest_prices(conn, sorted({g for g, _ in oriented}))
+    changed: list[tuple] = []
+    for game_id, row in oriented:
+        book_id = book_ids[row.sportsbook_key]
+        if stored.get((game_id, book_id, row.period, row.market)) == row.price_key():
+            report.rows_unchanged += 1
+            continue
+        changed.append((
+            game_id, book_id, row.period, row.market, row.line,
+            row.home_price, row.away_price, row.over_price, row.under_price,
+            row.book_updated_at, now, ADAPTER_NAME,
+        ))
+
+    # ONE executemany, which psycopg pipelines. Row-by-row execute was a
+    # round trip per quote: the first production capture (2026-09-23)
+    # sent ~3,870 of them, ran past three minutes and was killed having
+    # written nothing.
+    if changed:
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                insert into game_odds (
+                  game_id, sportsbook_id, period, market, line,
+                  home_price, away_price, over_price, under_price,
+                  book_updated_at, captured_at, source_adapter
+                ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                changed,
+            )
+    report.rows_written = len(changed)
+    conn.commit()
+
+
+def games_with_period_odds(conn: psycopg.Connection, game_ids: list[int]) -> set[int]:
+    """Games that already hold at least one first-half or first-quarter price."""
+    if not game_ids:
+        return set()
+    with conn.cursor() as cur:
+        cur.execute(
+            "select distinct game_id from game_odds "
+            "where game_id = any(%s) and period = any(%s)",
+            (game_ids, list(PERIODS)),
+        )
+        return {int(r["game_id"]) for r in cur.fetchall()}
+
+
+def run_periods(
+    *,
+    season: int,
+    adapter: TheOddsApiAdapter,
+    sport: str = "cfb",
+    close_window_minutes: int = 60,
+    event_limit: int = 120,
+    dry_run: bool = False,
+    now: datetime | None = None,
+) -> GameOddsReport:
+    """First-half and first-quarter lines, OPEN-AND-CLOSE, one call per game.
+
+    The client asked for 1Q and 1H from FanDuel and DraftKings (likely Caesars)
+    beside the full game. They are per-event on this provider and billed per
+    market returned, so a game is asked about TWICE, the rule the props crons
+    follow (`ingest_odds --close-window-minutes`): by the first run that finds
+    periods posted for it, and by the run whose window holds its kickoff.
+    Every other hour it is skipped without a call; the event list is free and
+    an event with nothing posted bills nothing. At most 6 credits per call.
+    """
+    report = GameOddsReport()
+    now = now or datetime.now(UTC)
+    window = timedelta(minutes=close_window_minutes)
+
+    events = adapter.list_events()
+    report.events_seen = len(events)
+
+    with connect() as conn:
+        resolver = load_teams(conn, sport=sport)
+        games = load_games(conn, season, None, sport=sport)
+        if not games:
+            log.warning("No %s games stored for season %s.", sport, season)
+            return report
+
+        matched: list[tuple[object, dict]] = []
+        for event in events:
+            hit = match_event_to_game(event, games, resolver)
+            if hit is None:
+                report.events_unmatched.append(f"{event.away_team} @ {event.home_team}")
+                continue
+            report.events_matched += 1
+            matched.append((event, hit[0]))
+
+        held = games_with_period_odds(conn, [int(g["id"]) for _, g in matched])
+
+        oriented: list[tuple[int, GameOddsRow]] = []
+        for event, game in matched:
+            kickoff = event.commence_time or game.get("start_date")
+            if kickoff is not None and kickoff <= now:
+                report.events_started += 1
+                continue
+            closing = kickoff is not None and kickoff <= now + window
+            if int(game["id"]) in held and not closing:
+                report.events_already_captured += 1
+                continue
+            if report.events_asked >= event_limit:
+                log.warning(
+                    "Event limit %d reached; the rest wait for the next run.", event_limit
+                )
+                break
+            report.events_asked += 1
+            for event_odds in adapter.fetch_period_odds(event.event_id):
+                side_of = side_resolver(event_odds, game, resolver)
+                for market in event_odds.markets:
+                    if market.period not in PERIODS:
+                        continue
+                    row, reason = orient(market, side_of)
+                    if row is None:
+                        report.rejected[reason] += 1
+                        continue
+                    report.books.add(row.sportsbook_key)
+                    oriented.append((int(game["id"]), row))
+
+        if dry_run:
+            log.info("Dry run: %d quote(s) oriented, nothing written.", len(oriented))
+        elif oriented:
+            write_changed(conn, oriented, now, report)
+
+    log.info(
+        "Requested %s in region %s. Provider quota: %s",
+        ",".join(PERIOD_MARKETS), PERIOD_REGIONS, adapter.quota.summary(),
+    )
     return report
 
 

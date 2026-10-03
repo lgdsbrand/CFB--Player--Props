@@ -62,6 +62,18 @@ DEFAULT_ODDS_FORMAT = "american"
 GAME_REGIONS = "us,us_ex,eu"
 GAME_MARKETS = ("h2h", "spreads", "totals")
 
+# FIRST HALF AND FIRST QUARTER. Per-event only on this provider, and billed
+# like player props: markets returned x regions, per game. So they are asked of
+# `us` alone, where FanDuel, DraftKings and Caesars post them (the client named
+# those books); the sharp regions would multiply the cost for books that
+# rarely price college periods. Provider key -> (period, base market).
+PERIOD_MARKETS: dict[str, tuple[str, str]] = {
+    f"{market}_{period}": (period, market)
+    for period in ("h1", "q1")
+    for market in GAME_MARKETS
+}
+PERIOD_REGIONS = "us"
+
 
 def _parse_time(value: Any) -> datetime | None:
     if not value:
@@ -201,12 +213,13 @@ def _point(value: Any) -> float | None:
 
 
 def parse_game_odds(payload: list[dict[str, Any]]) -> list[GameEventOdds]:
-    """Turn a bulk `/odds` response into per-event, per-book game markets.
+    """Turn a bulk `/odds` response (or one event's, wrapped in a list) into
+    per-event, per-book game markets.
 
     Deliberately shallow: team strings stay the provider's, and pairing two
     outcomes into a spread or total is left to the ingest job, which knows the
-    game. A market this function does not recognise is dropped here, since the
-    bulk call only ever asks for GAME_MARKETS.
+    game. Period markets (`spreads_h1`, ...) come back as their base market
+    with `period` set. Anything else is dropped here.
     """
     events: list[GameEventOdds] = []
     for item in payload or []:
@@ -226,7 +239,11 @@ def parse_game_odds(payload: list[dict[str, Any]]) -> list[GameEventOdds]:
             book_name = str(bookmaker.get("title") or book_key)
             for market in bookmaker.get("markets") or []:
                 key = str(market.get("key") or "")
-                if key not in GAME_MARKETS:
+                if key in GAME_MARKETS:
+                    period, base = "full", key
+                elif key in PERIOD_MARKETS:
+                    period, base = PERIOD_MARKETS[key]
+                else:
                     continue
                 outcomes = tuple(
                     GameOutcome(
@@ -240,11 +257,12 @@ def parse_game_odds(payload: list[dict[str, Any]]) -> list[GameEventOdds]:
                     GameBookMarket(
                         sportsbook_key=book_key,
                         sportsbook_name=book_name,
-                        market=key,
+                        market=base,
                         book_updated_at=_parse_time(
                             market.get("last_update") or bookmaker.get("last_update")
                         ),
                         outcomes=outcomes,
+                        period=period,
                     )
                 )
         events.append(GameEventOdds(event=event, markets=tuple(markets)))
@@ -357,6 +375,28 @@ class TheOddsApiAdapter:
             oddsFormat=DEFAULT_ODDS_FORMAT,
         ) or []
         return parse_game_odds(payload)
+
+    def fetch_period_odds(
+        self,
+        event_id: str,
+        *,
+        regions: str = PERIOD_REGIONS,
+        markets: tuple[str, ...] = tuple(PERIOD_MARKETS),
+    ) -> list[GameEventOdds]:
+        """One event's first-half and first-quarter markets.
+
+        PER EVENT, billed markets returned x regions for THIS game, the same
+        shape as player props and unlike the bulk full-game call. An event with
+        nothing posted bills nothing. Returns a one-element list (or empty) so
+        it reads like `fetch_game_odds`.
+        """
+        payload = self._client.get(
+            f"/sports/{self.sport_key}/events/{event_id}/odds",
+            regions=regions,
+            markets=",".join(markets),
+            oddsFormat=DEFAULT_ODDS_FORMAT,
+        )
+        return parse_game_odds([payload]) if payload else []
 
     # -- historical --------------------------------------------------------
     def historical_events(self, iso_timestamp: str) -> dict[str, Any]:

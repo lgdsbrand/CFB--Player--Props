@@ -247,7 +247,7 @@ export default async function GamePage({
         earliestSeason={earliestSeason}
       />
 
-      <WeatherPanel conditions={conditions} />
+      <WeatherPanel conditions={conditions} sport={game.sport} />
 
       <MatchupGrid matchups={matchups} />
 

@@ -1389,16 +1389,22 @@ check(G, "12 active markets, 17 market/position pairs, every Q1 market scoped", 
                 and r["q1_pairs"] == 0 and r["q1_unscoped"] == 0),
       ["markets", "pairs", "q1_pairs", "q1_unscoped"])
 
-# A market that publishes no call must publish no NUMBER either. The view is
-# what enforces it (0068), so this asks the view rather than the table: a
+# A market that publishes no call must publish no CALL. The view is what
+# enforces it (0068), so this asks the view rather than the table: a
 # regenerated `v_board_rows` that dropped the CASE would pass every other check
 # here while quietly putting a first-quarter confidence back on the board.
+#
+# THE PROJECTION IS NOT THE CALL (0073, 2026-09-21). The client asked for the
+# projected mark on props no book has priced, so `projected_median/p10/p90`
+# pass through and only the five call columns stay withheld. This check kept
+# counting the median as a leak and held the audit red from 09-21 to 10-03 on
+# the intended behaviour -- 1,737 NFL first-quarter rows, zero call columns.
 check(G, "a market that publishes no call exposes no call on the board", """
     select count(*) as leaked from v_board_rows
      where not publishes_call
        and (side is not null or confidence is not null
             or display_confidence is not null or edge is not null
-            or projected_median is not null)
+            or model_prob_over is not null)
 """, lambda r: r["leaked"] == 0, ["leaked"])
 
 # The override mechanism has to be doing work. If every pair resolved to its
@@ -1662,17 +1668,23 @@ check(G, "no run is stranded in 'running'", """
 # 2025] the moment N4 landed NFL play-by-play, so no college backtest could ever
 # match it again. The check would have gone red for as long as the NFL model
 # went unbacktested, which is precisely when it has nothing to say.
-check(G, "a backtest covered every finished play-by-play season", """
-    with ingested as (
-      select array_agg(distinct p.season order by p.season)::smallint[] as seasons
-        from plays p
-        join games g on g.id = p.game_id and g.sport = 'cfb'
-       where p.season <> (select (value #>> '{}')::smallint
-                          from app_config where key = 'current_season'))
-    select (select seasons from ingested) as ingested,
-           (select max(created_at) from backtests b, ingested i
-             where b.seasons = i.seasons) as covered_at
-""", lambda r: r["covered_at"] is not None, ["ingested", "covered_at"])
+#
+# THE PROPS MODEL'S SEASONS, NOT EVERY SEASON OF PLAYS. On 2026-09-24 the game
+# model (CLAUDE.md §11, G2) loaded 2022 and 2023 play-by-play, which the props
+# model never trains on, and this went red demanding a props walk over seasons
+# outside its scope. The required set is now `app_config.backfill_seasons`,
+# the props model's declared training seasons, and a walk that covers them (or
+# more) satisfies it. Rolling `backfill_seasons` forward at season's end makes
+# the new season required here, which is exactly when the walk should re-run.
+check(G, "a backtest covered every season the props model trains on", """
+    with required as (
+      select array(select jsonb_array_elements_text(value)::smallint
+                     from app_config where key = 'backfill_seasons'
+                    order by 1)::smallint[] as seasons)
+    select (select seasons from required) as required,
+           (select max(created_at) from backtests b, required r
+             where b.seasons @> r.seasons) as covered_at
+""", lambda r: r["covered_at"] is not None, ["required", "covered_at"])
 
 check(G, "hit_rate_basis is one of the two supported bases", """
     select count(*) as bad from backtests
@@ -2099,12 +2111,22 @@ check(G, "the consensus spread is one a provider actually posted", """
 #
 # The two sports are also rarely on the same week: measured 2026-09-08, college
 # was on week 2 and the NFL on week 1.
-check(G, "every position tab has rows in each sport's latest slate week", """
+#
+# THE CURRENT WEEK, NOT THE FURTHEST. Taking the latest scheduled week meant
+# college week 15 from 2026-09-27 on: one game (a championship placeholder),
+# 70 players, no tight end, and a red audit about a tab no reader opens. The
+# board opens on the first week whose last kickoff is still ahead, so this
+# asks about that one, falling back to the latest week once a season is over.
+check(G, "every position tab has rows in each sport's current slate week", """
     select count(*) as sports, count(*) filter (where positions <> 4) as short
       from (
         select v.sport, count(distinct pl.position_group) as positions
           from (select distinct on (sport) sport, season, week
-                  from v_slate_weeks order by sport, season desc, week desc) v
+                  from v_slate_weeks
+                 order by sport, (last_kickoff >= now()) desc,
+                          case when last_kickoff >= now() then season end asc,
+                          case when last_kickoff >= now() then week end asc,
+                          season desc, week desc) v
           join games g on g.sport = v.sport
           join projections pr on pr.game_id = g.id
                              and pr.season = v.season and pr.week = v.week
@@ -2615,13 +2637,18 @@ check(G, "every rung is a line a book could post", """
 # anytime_td is deliberately excluded by `ladder_step is not null` rather than by
 # name — a binary market is a single probability, and a ladder of it would be the
 # same number repeated.
+#
+# Markets that publish no call are excluded: a rung is a probability per line,
+# which is the call by another name, so first-quarter rows carry none by design
+# (0073 states it and verified it on production). Counting them held the audit
+# red from 09-21 to 10-03 with 1,737 intended gaps.
 check(G, "every projection whose market has rungs has them stored", """
     select count(*) as should_have,
            count(*) filter (where pr.ladder is null) as missing,
            count(distinct pr.market_key) as markets
       from projections pr
       join markets m on m.key = pr.market_key
-     where m.ladder_step is not null
+     where m.ladder_step is not null and m.publishes_call
 """, lambda r: r["should_have"] > 0 and r["missing"] == 0)
 
 # And the other direction, which is the one a careless join would break: a market

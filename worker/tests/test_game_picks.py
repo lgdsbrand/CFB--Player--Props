@@ -122,3 +122,29 @@ def test_the_game_model_freezes_no_moneyline_picks():
 
     assert "h2h" not in PICK_MARKETS
     assert set(PICK_MARKETS) == {"spreads", "totals"}
+
+
+def test_the_grade_reports_the_pre_registered_totals_tier_separately():
+    """Totals at 64%+ are graded beside, and inside, all totals (2026-10-03)."""
+    from worker.core.game_grading import Graded
+    from worker.jobs.grade_game_picks import TOTALS_HIGH_CONFIDENCE, summarise
+
+    assert TOTALS_HIGH_CONFIDENCE == 0.64
+
+    def g(market, result):
+        profit = 100 / 110 if result == "win" else -1.0
+        return Graded(market, "over", result, profit, None, None)
+
+    text = summarise([
+        (g("totals", "win"), 1.0, 0.70),
+        (g("totals", "loss"), 1.0, 0.64),
+        (g("totals", "loss"), 1.0, 0.60),
+        (g("spreads", "win"), 1.0, 0.90),
+    ])
+    lines = {
+        line.split(" picks ")[0].strip(): line
+        for line in text.splitlines() if " picks " in line
+    }
+    assert "W-L-P 1-2-0" in lines["totals"]
+    assert "W-L-P 1-1-0" in lines["totals 64%+"]
+    assert "64%+" not in lines["spreads"]

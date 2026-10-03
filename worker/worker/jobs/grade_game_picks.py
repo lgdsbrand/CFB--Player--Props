@@ -34,6 +34,16 @@ log = get_logger(__name__)
 PERIOD = "full"
 CLOSE_WINDOW_HOURS = 6.0
 
+# PRE-REGISTERED 2026-10-03, before any pick was graded under it. The market
+# blend backtest (2023-2026 walk-forward, RatingsModel) found one signal: on
+# totals the Brier-optimal weight on the model was positive in all four seasons
+# (0.22, 0.44, 0.20, 0.30), and totals where the model gave its side at least
+# 64% (a raw edge of ~14 points over a -110 market) hit 57.0% on 705 picks,
+# +8.9% at -110, positive in every season. Live picks still freeze at the 5%
+# edge; this tier is graded beside them, unchanged, so the hypothesis is tested
+# on games it never saw. Do not move the cut to fit the live results.
+TOTALS_HIGH_CONFIDENCE = 0.64
+
 _SQL = """
 with graded as (
   select distinct on (p.game_id, p.market)
@@ -71,13 +81,20 @@ def _mean(xs: list[float]) -> float:
     return sum(xs) / len(xs) if xs else float("nan")
 
 
-def summarise(graded: list[tuple[Graded, float | None]]) -> str:
+def summarise(graded: list[tuple[Graded, float | None, float]]) -> str:
+    """One block per market, then the pre-registered high-confidence totals.
+
+    Each item is (graded pick, hours its close was captured before kickoff,
+    the model's probability for the side it took).
+    """
     by_market: dict[str, list[tuple[Graded, float | None]]] = defaultdict(list)
-    for g, hours in graded:
+    for g, hours, model_prob in graded:
         by_market[g.market].append((g, hours))
+        if g.market == "totals" and model_prob >= TOTALS_HIGH_CONFIDENCE:
+            by_market["totals 64%+"].append((g, hours))
 
     lines = []
-    for market in ("spreads", "totals", "h2h"):
+    for market in ("spreads", "totals", "totals 64%+", "h2h"):
         rows = by_market.get(market, [])
         if not rows:
             continue
@@ -91,7 +108,8 @@ def summarise(graded: list[tuple[Graded, float | None]]) -> str:
         fresh = sum(h is not None and h <= CLOSE_WINDOW_HOURS for _, h in rows)
         beat = sum(p > 0 for p in pts) if pts else 0
         lines.append(
-            f"{market:8s} picks {len(gs):4d}  W-L-P {w}-{lo}-{pu}  ROI {100 * roi:+.1f}%"
+            f"{market:11s} picks {len(gs):4d}  W-L-P {w}-{lo}-{pu}  ROI {100 * roi:+.1f}%"
+            + ("  (pre-registered tier, inside 'totals')" if market == "totals 64%+" else "")
         )
         if pts:
             se = (
@@ -133,7 +151,11 @@ def run(*, season: int, sport: str = "cfb", weeks: list[int] | None = None) -> s
             "line": None if r["line"] is None else float(r["line"]), "price": r["price"],
         }
         hours = None if r["close_hours_before"] is None else float(r["close_hours_before"])
-        graded.append((grade(pick, float(r["margin"]), float(r["total"]), close), hours))
+        graded.append((
+            grade(pick, float(r["margin"]), float(r["total"]), close),
+            hours,
+            float(r["model_prob"]),
+        ))
     return summarise(graded)
 
 

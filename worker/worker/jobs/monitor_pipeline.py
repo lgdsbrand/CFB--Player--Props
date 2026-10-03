@@ -170,14 +170,14 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
     ),
     JobExpectation(
         name="ingest_odds",
-        max_age_hours=18,
+        max_age_hours=3,
         sport_scoped=True,
         enabled_key="odds_adapter",
-        note="every 6h — books post late, often Thu/Fri (CLAUDE.md §7). Was 3h "
-             "until 2026-08-12; this is the only job spending metered credits "
-             "and the cadence is its budget. 18h tolerates three missed runs, "
-             "which matters more here than elsewhere: a silent stop means the "
-             "board keeps showing model leans and looks entirely healthy.",
+        note="hourly, open-and-close since 2026-10-03 — each game bought when "
+             "its props post and again in the hour before kickoff. A missed run "
+             "can cost a game its closing line for good, so 3h tolerates two "
+             "misses and no more: a silent stop means the board keeps showing "
+             "model leans and looks entirely healthy.",
     ),
     JobExpectation(
         name="ingest_game_lines",
@@ -260,12 +260,12 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
     ),
     JobExpectation(
         name="ingest_odds",
-        max_age_hours=18,
+        max_age_hours=3,
         sport="nfl",
         sport_scoped=True,
         enabled_key="odds_adapter",
-        note="every 6h at :20 (--sport nfl) — the NFL half of the metered odds "
-             "spend, and a silent stop looks like a quiet market",
+        note="hourly at :20 (--sport nfl), open-and-close — the NFL half of "
+             "the metered odds spend, and a silent stop looks like a quiet market",
     ),
     # NFL jobs with names of their own, separable without any sport filter.
     JobExpectation(

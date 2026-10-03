@@ -200,31 +200,32 @@ services:
   # ---------------------------------------------------------------------------
   # In-week refreshes
   # ---------------------------------------------------------------------------
-  # Every six hours. College books post props LATE — often Thursday or Friday
-  # for Saturday games (CLAUDE.md §7) — so this is a poll for a market that has
-  # not appeared yet, not a refresh of one that has. Exits 0 and does nothing
-  # while app_config.odds_adapter is "none", which is the current default.
+  # Hourly, OPEN-AND-CLOSE (`--close-window-minutes 60`). College books post
+  # props LATE — often Thursday or Friday for Saturday games (CLAUDE.md §7).
+  # Each game is bought TWICE: by the first run that finds its props posted
+  # (the opening line the board shows), and by the run whose next 60 minutes
+  # hold its kickoff (the closing line the grader reads). Every other run skips
+  # it without a call. Exits 0 and does nothing while app_config.odds_adapter
+  # is "none".
   #
-  # THIS IS THE ONLY JOB THAT SPENDS METERED CREDITS. Billing is per market
-  # returned, and a capture re-buys the WHOLE slate every time: ~9 markets on
-  # each event that carries props, with no discount for a line that has not
-  # moved since the last poll. So the cadence is the budget.
+  # THESE ARE THE JOBS THAT SPEND METERED CREDITS. Billing is per market
+  # returned per event, with no discount for a line that has not moved, so a
+  # run that re-buys the slate pays for the whole slate. The event list is
+  # free and an event with no props posted costs 0, so the hourly runs that
+  # find nothing new or closing bill nothing.
   #
-  # It was every three hours until 2026-08-12. That is 8 runs/day, and on the
-  # 20,000-credit plan the probe measured (docs/odds-coverage-probe.md) a full
-  # slate would have consumed the entire MONTHLY allowance in about a week —
-  # from a pool shared with the client's MLB, tennis and WNBA models. Six-hourly
-  # still catches a Thursday posting within a few hours of it appearing, which
-  # is the only latency that matters here.
+  # WHY IT CHANGED, 2026-10-03. Until then both sports re-bought every priced
+  # game every six hours. Measured over the first days of October: ~860
+  # credits/day college + ~560 NFL = ~1,420/day, about 44,000 a month against
+  # a 20,000 pool shared with the client's MLB, tennis and WNBA models. It
+  # emptied the pool on 12 Sep and would have again by ~12 Oct. Open-and-close
+  # is ~730/week for both sports. The cost: between the two captures the
+  # board's line can be a day or two old. (Every three hours until 2026-08-12,
+  # every six until 2026-10-03.)
   #
-  # DAILY RATHER THAN THURSDAY-TO-SATURDAY, deliberately, even though books post
-  # nothing on a Monday. Two reasons, and the second is the load-bearing one:
-  # events with no props posted cost 0 credits, so the off-day polls are very
-  # nearly free and restricting the days would save almost nothing; and
-  # `tests/test_monitor.py::_cron_period_hours` scores ANY day-of-week-restricted
-  # cron as a 168-hour period, which would force `max_age_hours` above 193 and
-  # leave the one job with a budget unmonitored for eight days. Free credits are
-  # not worth that blind spot.
+  # THE WINDOW MUST EQUAL THE CRON PERIOD (tests/test_ingest_odds.py pins it),
+  # so every kickoff falls in exactly one run's window: shorter skips closes,
+  # longer buys some twice.
   #
   # `--event-limit` IS A CIRCUIT BREAKER, NOT A BUDGET — leave it above a full
   # slate. The largest week measured is 99 games (2026 week 1; opening weekends
@@ -239,9 +240,9 @@ services:
     runtime: python
     plan: starter
     rootDir: worker
-    schedule: "0 */6 * * *"
+    schedule: "0 * * * *"
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m worker.jobs.ingest_odds --event-limit 120
+    startCommand: python -m worker.jobs.ingest_odds --event-limit 120 --close-window-minutes 60
     envVars:
       - fromGroup: cfb-props-worker
 
@@ -372,12 +373,14 @@ services:
     envVars:
       - fromGroup: cfb-props-worker
 
-  # Every 6 hours at :20. NFL line capture.
+  # Hourly at :20, OPEN-AND-CLOSE — the NFL twin of cfb-props-odds-refresh
+  # above, whose comment explains the mode and why it replaced six-hourly
+  # re-buys on 2026-10-03. :20 rather than :00 keeps the two sports' runs
+  # apart. Each NFL game is bought once when its props post and once in the
+  # hour before kickoff; a 16:25 ET kickoff is captured ~5 minutes before it.
   #
-  # MEASURED COST, 2026-09-08: one week-1 capture was 189 credits for 16 games
-  # and wrote 5,625 book rows. That is ~750/day at four captures, against a
-  # SHARED pool that stood at 7,643 of 20,000 — so this is the cron most likely
-  # to need narrowing, and `--event-limit` is the lever.
+  # MEASURED COST, 2026-10-01..03: 135-144 credits per full re-buy (15-16
+  # games x 9 markets), ~560/day at four a day. Open-and-close: ~290/week.
   #
   # NEARLY HALF OF THAT SPEND BUYS NOTHING RANKABLE. `anytime_td` was 2,077 of
   # 4,446 NFL picks and produced exactly ZERO edges, because a one-way Yes-only
@@ -390,9 +393,9 @@ services:
     runtime: python
     plan: starter
     rootDir: worker
-    schedule: "20 */6 * * *"
+    schedule: "20 * * * *"
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m worker.jobs.ingest_odds --sport nfl --event-limit 120
+    startCommand: python -m worker.jobs.ingest_odds --sport nfl --event-limit 120 --close-window-minutes 60
     envVars:
       - fromGroup: cfb-props-worker
 

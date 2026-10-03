@@ -774,3 +774,140 @@ class TestKickoffTiming:
 
         with pytest.raises(OddsQuotaError, match="Out of credits"):
             self._run(monkeypatch, now=KICK - timedelta(hours=1), adapter=Broke())
+
+
+class TestOpenAndClose:
+    """`close_window_minutes`: each game bought when its props post, then once
+    more in the hour before kickoff, and never in between.
+
+    Measured 2026-10-03, re-buying every priced game every six hours cost both
+    sports ~1,420 credits a day, more than twice the client's monthly pool.
+    """
+
+    def _run(self, monkeypatch, *, now, captured=(), dry_run=True, **kw):
+        import contextlib
+
+        adapter = _RecordingAdapter()
+        asked_captured: list[tuple] = []
+        refreshed: list[bool] = []
+
+        def load_captured(conn, game_ids, market_keys):
+            asked_captured.append((list(game_ids), list(market_keys)))
+            return set(captured)
+
+        class _CommitConn:
+            def commit(self):
+                pass
+
+        monkeypatch.setattr(ingest_odds, "get_settings", lambda: _settings_free())
+        monkeypatch.setattr(ingest_odds, "get_adapter", lambda name, **_: adapter)
+        monkeypatch.setattr(
+            ingest_odds, "connect", lambda: contextlib.nullcontext(_CommitConn())
+        )
+        monkeypatch.setattr(ingest_odds, "load_teams", lambda conn, sport: RESOLVER)
+        monkeypatch.setattr(
+            ingest_odds, "load_games",
+            lambda conn, season, week, sport: [_game(100, 2, 1, KICK)],
+        )
+        monkeypatch.setattr(ingest_odds, "load_captured_game_ids", load_captured)
+        monkeypatch.setattr(
+            ingest_odds, "refresh_no_vig_rows", lambda conn: refreshed.append(True)
+        )
+        report = ingest_odds.run(
+            season=2025, week=8, adapter_name="theoddsapi", dry_run=dry_run,
+            event_limit=None, now=now, **kw,
+        )
+        return adapter, report, asked_captured, refreshed
+
+    def test_a_game_with_no_line_yet_gets_its_opening_capture(self, monkeypatch):
+        adapter, report, _, _ = self._run(
+            monkeypatch, now=KICK - timedelta(days=2), close_window_minutes=60
+        )
+        assert len(adapter.asked) == 1
+        assert report.events_already_captured == 0
+
+    def test_a_captured_game_is_not_rebought_before_its_close(self, monkeypatch):
+        adapter, report, _, _ = self._run(
+            monkeypatch, now=KICK - timedelta(minutes=61), captured={100},
+            close_window_minutes=60,
+        )
+        assert adapter.asked == []
+        assert report.events_already_captured == 1
+
+    def test_a_captured_game_is_bought_again_for_its_close(self, monkeypatch):
+        adapter, report, _, _ = self._run(
+            monkeypatch, now=KICK - timedelta(minutes=60), captured={100},
+            close_window_minutes=60,
+        )
+        assert len(adapter.asked) == 1
+        assert report.events_already_captured == 0
+
+    def test_a_started_game_is_never_bought_for_a_close(self, monkeypatch):
+        adapter, report, _, _ = self._run(
+            monkeypatch, now=KICK, captured={100}, close_window_minutes=60
+        )
+        assert adapter.asked == []
+        assert report.events_started == 1
+
+    def test_the_lookup_is_scoped_to_the_markets_requested(self, monkeypatch):
+        """A game holding only first-quarter lines still needs its first
+        full-game capture, so the 'already captured' question names markets."""
+        from worker.adapters.odds.markets import OUR_KEY_TO_PROVIDER
+
+        _, _, asked_captured, _ = self._run(
+            monkeypatch, now=KICK - timedelta(days=2), close_window_minutes=60
+        )
+        assert asked_captured == [([100], sorted(OUR_KEY_TO_PROVIDER))]
+
+    def test_without_the_mode_a_captured_game_is_rebought(self, monkeypatch):
+        """The by-hand and backfill paths keep their old behaviour."""
+        adapter, _, asked_captured, _ = self._run(
+            monkeypatch, now=KICK - timedelta(days=2), captured={100}
+        )
+        assert len(adapter.asked) == 1
+        assert asked_captured == []
+
+    def test_an_hourly_run_that_wrote_nothing_skips_the_no_vig_rebuild(
+        self, monkeypatch
+    ):
+        _, report, _, refreshed = self._run(
+            monkeypatch, now=KICK - timedelta(minutes=61), captured={100},
+            close_window_minutes=60, dry_run=False,
+        )
+        assert report.rows_written == 0
+        assert refreshed == []
+
+    def test_a_full_rebuy_still_refreshes_the_no_vig_rows(self, monkeypatch):
+        _, _, _, refreshed = self._run(
+            monkeypatch, now=KICK - timedelta(days=2), dry_run=False
+        )
+        assert refreshed == [True]
+
+    def test_cli_refuses_a_non_positive_window(self, monkeypatch):
+        def settings_must_not_load():
+            raise AssertionError("settings were read before the window was checked")
+
+        monkeypatch.setattr(ingest_odds, "get_settings", settings_must_not_load)
+        assert ingest_odds.main(["--close-window-minutes", "0"]) == 2
+
+    def test_both_odds_crons_are_hourly_with_a_window_equal_to_the_period(self):
+        """Every kickoff must fall in exactly one run's window. A shorter window
+        loses closing lines for good; a longer one buys some games twice."""
+        import re
+        from pathlib import Path
+
+        text = (Path(__file__).resolve().parents[2] / "render.yaml").read_text(
+            encoding="utf-8"
+        )
+        blocks = [
+            b for b in text.split("- type: cron")
+            if "python -m worker.jobs.ingest_odds" in b
+        ]
+        assert len(blocks) == 2, "expected the college and the NFL odds crons"
+        for block in blocks:
+            schedule = re.search(r'schedule:\s*"([^"]+)"', block).group(1)
+            minute, hour, *rest = schedule.split()
+            assert minute.isdigit() and hour == "*" and rest == ["*", "*", "*"], (
+                schedule
+            )
+            assert "--close-window-minutes 60" in block

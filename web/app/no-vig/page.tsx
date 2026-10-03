@@ -401,8 +401,8 @@ function EmptyState({
           {/* The posting habit is college's (CLAUDE.md §7). The NFL page used to
               tell its readers to wait for a Saturday game. */}
           {sport === "cfb"
-            ? "College books post player props late, usually Thursday or Friday for a Saturday game, and the odds job picks them up every six hours."
-            : "The odds job picks new prices up every six hours."}{" "}
+            ? "College books post player props late, usually Thursday or Friday for a Saturday game. The odds job checks every hour and captures each game when its props first appear, then again in the hour before kickoff."
+            : "The odds job checks every hour and captures each game when its props first appear, then again in the hour before kickoff."}{" "}
           Anytime touchdown lines may already exist — they are one-sided, so
           they cannot be de-vigged and are not shown here.
         </p>

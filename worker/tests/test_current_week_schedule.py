@@ -181,8 +181,9 @@ def test_the_daily_run_lands_after_an_odds_capture() -> None:
 
     Projecting before the day's capture prices yesterday's lines and reports
     success, which is a subtler version of the bug being fixed. `ingest_odds`
-    runs at 00/06/12/18 UTC; the worst duration measured on production is 157s,
-    so the daily projection needs to sit clear of the top of one of those hours.
+    runs hourly since 2026-10-03 (00/06/12/18 UTC before); the worst duration
+    measured on production is 157s, so the daily projection needs to sit clear
+    of the top of the hour. The hours below are still ones `ingest_odds` runs.
     """
     captures = {0, 6, 12, 18}
 

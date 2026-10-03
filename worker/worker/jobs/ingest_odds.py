@@ -122,6 +122,10 @@ class IngestReport:
     # Matched events kicking off beyond `kickoff_within_minutes`, left for a
     # later run by design.
     events_outside_window: int = 0
+    # Open-and-close mode only: matched events that already hold a line and do
+    # not kick off within the close window, so asking again would re-buy a
+    # price we have. Most of every hourly run lands here, at no cost.
+    events_already_captured: int = 0
     # The provider refused for lack of credits. The run FAILS on it: from
     # 2026-09-12 18:20 UTC both odds crons wrote nothing for days while every
     # run reported success, and the board's lines froze with no alert.
@@ -164,6 +168,11 @@ class IngestReport:
             lines.append(
                 f"  {self.events_outside_window} matched event(s) kick off "
                 "outside the window — left for a later run"
+            )
+        if self.events_already_captured:
+            lines.append(
+                f"  {self.events_already_captured} matched event(s) already hold "
+                "a line and are not closing yet — not re-bought"
             )
         lines.append(self.render_resolution())
         return "\n".join(lines)
@@ -269,6 +278,29 @@ def load_games(
     with conn.cursor() as cur:
         cur.execute(sql, tuple(params))
         return cur.fetchall()
+
+
+def load_captured_game_ids(
+    conn: psycopg.Connection, game_ids: list[int], market_keys: list[str]
+) -> set[int]:
+    """The games that already hold a real line in any of these markets.
+
+    Scoped to the markets being requested, so a game holding only first-quarter
+    lines still gets its first full-game capture. Synthetic development rows do
+    not count: they are not a price anybody posted.
+    """
+    if not game_ids:
+        return set()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select distinct game_id from player_prop_lines
+             where game_id = any(%s) and market_key = any(%s)
+               and source_adapter <> %s
+            """,
+            (game_ids, market_keys, SYNTHETIC_ADAPTER),
+        )
+        return {int(r["game_id"]) for r in cur.fetchall()}
 
 
 def match_event_to_game(
@@ -519,6 +551,7 @@ def run(
     sport: str = "cfb",
     markets: list[str] | None = None,
     kickoff_within_minutes: int | None = None,
+    close_window_minutes: int | None = None,
     now: datetime | None = None,
 ) -> IngestReport:
     """Capture what the books have posted for one sport's matched games.
@@ -527,12 +560,26 @@ def run(
     additionally restricts the run to games starting that soon, which is how
     `capture_first_quarter` takes each game once, just before kickoff. `now` is
     for tests.
+
+    `close_window_minutes` turns on OPEN-AND-CLOSE mode, which is what the
+    full-game crons run (hourly, window = the cron period). Each game is bought
+    twice: the first run that finds props posted for it (the opening line the
+    board shows), and the run whose window holds its kickoff (the closing line
+    the grader reads). A game that already holds a line and is not closing is
+    skipped without a call. Measured 2026-10-03, buying every game every six
+    hours cost ~1,420 credits a day for both sports, more than twice the
+    client's whole 20,000-a-month pool; this mode is ~730 a week.
     """
     report = IngestReport()
     now = now or datetime.now(UTC)
     window = (
         timedelta(minutes=kickoff_within_minutes)
         if kickoff_within_minutes is not None
+        else None
+    )
+    close_window = (
+        timedelta(minutes=close_window_minutes)
+        if close_window_minutes is not None
         else None
     )
     # Resolved FIRST, before the key or the event list: a market this sport
@@ -630,6 +677,12 @@ def run(
             )
             return report
 
+        captured = (
+            load_captured_game_ids(conn, [g["id"] for g in games], market_keys)
+            if close_window is not None
+            else set()
+        )
+
         processed = 0
         for event in events:
             matched = match_event_to_game(event, games, resolver)
@@ -650,6 +703,14 @@ def run(
                 continue
             if window is not None and (kickoff is None or kickoff > now + window):
                 report.events_outside_window += 1
+                continue
+            # Open-and-close: a game we already hold is bought again only for
+            # its close. A missing kickoff cannot be placed in the window, so it
+            # is never treated as closing.
+            if game["id"] in captured and (
+                kickoff is None or kickoff > now + close_window
+            ):
+                report.events_already_captured += 1
                 continue
 
             if event_limit is not None and processed >= event_limit:
@@ -681,9 +742,10 @@ def run(
         if not dry_run:
             conn.commit()
             # A narrowed run that wrote nothing has nothing to publish, and the
-            # hourly first-quarter capture is exactly that most hours: skip the
-            # rebuild rather than pay for one every hour of the week.
-            if report.rows_written or markets is None:
+            # hourly captures (first-quarter, and open-and-close) are exactly
+            # that most hours: skip the rebuild rather than pay for one every
+            # hour of the week.
+            if report.rows_written or (markets is None and close_window is None):
                 refresh_no_vig_rows(conn)
 
     # Loud, because the alternative is a board that silently stops covering part
@@ -790,7 +852,22 @@ def main(argv: list[str] | None = None) -> int:
              "capture is `capture_first_quarter`. Checked against the sport "
              "before any call.",
     )
+    parser.add_argument(
+        "--close-window-minutes", type=int,
+        help="Open-and-close mode, what the crons run: buy each game when its "
+             "props first appear, then once more when it kicks off within this "
+             "many minutes, and skip it in between. Set it equal to the cron "
+             "period so every kickoff falls in exactly one run's window.",
+    )
     args = parser.parse_args(argv)
+
+    if args.close_window_minutes is not None and args.close_window_minutes <= 0:
+        configure_logging("INFO")
+        log.error(
+            "--close-window-minutes must be positive, got %s.",
+            args.close_window_minutes,
+        )
+        return 2
 
     # Checked BEFORE settings, the adapter or the database: a market the sport
     # cannot carry is refused for free, with nothing to connect to.
@@ -845,6 +922,10 @@ def main(argv: list[str] | None = None) -> int:
                 # Only when narrowed, so a by-hand first-quarter capture is
                 # distinguishable from a cron run in pipeline_runs.
                 **({"markets": markets} if markets is not None else {}),
+                **(
+                    {"close_window_minutes": args.close_window_minutes}
+                    if args.close_window_minutes is not None else {}
+                ),
             },
         ) as run_id:
             report = run(
@@ -856,6 +937,7 @@ def main(argv: list[str] | None = None) -> int:
                 prefer_free=args.free,
                 sport=args.sport,
                 markets=markets,
+                close_window_minutes=args.close_window_minutes,
             )
             log.info(
                 "Odds ingest (%s, %s%s):\n%s",

@@ -5,7 +5,6 @@ import {
   formatWindDirection,
   weatherView,
 } from "@/lib/core/weather-view";
-import type { Sport } from "@/lib/core/sport";
 import type { GameConditions } from "@/lib/core/types";
 
 /**
@@ -22,22 +21,20 @@ import type { GameConditions } from "@/lib/core/types";
  * renders one shrug for both — see `lib/core/weather-view.ts` and migration
  * 0042 for why the view is driven from `games` to make that possible.
  *
- * IT DESCRIBES, IT DOES NOT DISCOUNT. Weather is already a feature of the
- * projection, so the calls and their confidence have accounted for it. A reader
- * who sees "22 mph wind" and marks the passing line down again is counting the
- * same fact twice, which is why the footnote says so plainly rather than
- * leaving it to be inferred.
+ * CONTEXT, NOT AN ADJUSTMENT ALREADY MADE. This footnote used to say weather
+ * was an input to the projections and that the calls had accounted for it.
+ * Checked 2026-10-03: `features.py` joins the weather columns into the frame,
+ * but nothing in `core/models.py` or `core/projections.py` reads them, so no
+ * projection has ever moved with the weather. The footnote now says so, and a
+ * reader who discounts a passing line for a 25 mph wind is not double-counting.
  *
- * NFL WEATHER IS NOT COLLECTED. `ingest_weather` reads college games only, so
- * every NFL game sat in the "pending" state and told the reader a forecast was
- * on its way. Said plainly instead (2026-10-03).
+ * BOTH SPORTS. NFL games had no venue until migration 0079, so every NFL game
+ * sat in "pending" and promised a forecast that never came.
  */
 export function WeatherPanel({
   conditions,
-  sport,
 }: {
   conditions: GameConditions | null;
-  sport: Sport;
 }) {
   const view = weatherView(conditions);
 
@@ -61,11 +58,6 @@ export function WeatherPanel({
         <p className="text-muted text-xs">
           {conditions?.venueName ?? "This venue"} is indoors, so conditions are
           not a factor.
-        </p>
-      ) : view.state === "pending" && sport === "nfl" ? (
-        <p className="text-muted max-w-prose text-xs">
-          Weather is not collected for NFL games yet, so the NFL projections do
-          not use it.
         </p>
       ) : view.state === "pending" ? (
         <p className="text-muted max-w-prose text-xs">
@@ -146,9 +138,8 @@ function Reading({
         {view.state === "forecast"
           ? "Forecast for the kickoff hour."
           : "Measured at the game."}{" "}
-        Weather is already an input to the projections, so the calls and their
-        confidence have accounted for it — this panel is the detail behind that,
-        not a further adjustment to make yourself.
+        Shown for context. The projections do not adjust for weather yet, so
+        the calls have not accounted for it.
       </p>
     </>
   );

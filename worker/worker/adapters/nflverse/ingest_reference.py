@@ -52,9 +52,11 @@ from worker.adapters.nflverse.mapping import (
     SPORT,
     PositionMapper,
     canonical_team,
+    float_or_none,
     int_or_none,
     text_or_none,
 )
+from worker.adapters.nflverse.stadiums import Stadium, resolve_stadium
 from worker.db import execute, fetch_id_map, upsert
 from worker.logging_setup import get_logger
 
@@ -257,6 +259,44 @@ def kickoff_utc(gameday: str | None, gametime: str | None) -> datetime | None:
     return naive.replace(tzinfo=SCHEDULE_TZ).astimezone(ZoneInfo("UTC"))
 
 
+def venue_row(stadium: Stadium) -> dict:
+    return {
+        "nflverse_stadium_id": stadium.stadium_id,
+        "name": stadium.name,
+        "city": stadium.city,
+        "state": stadium.state,
+        "country_code": stadium.country_code,
+        "latitude": stadium.latitude,
+        "longitude": stadium.longitude,
+        "is_dome": stadium.is_dome,
+    }
+
+
+def observed_weather(row: dict, stadium: Stadium | None, game_id: int) -> dict | None:
+    """A played game's kickoff temperature and wind, as nflverse recorded them.
+
+    Only for a game that has a score and at least one reading: nflverse leaves
+    both blank under a fixed or closed roof, and an empty observation would
+    outrank the forecast in `v_game_conditions` while saying nothing.
+    """
+    if int_or_none(row.get("home_score")) is None:
+        return None
+    temp = float_or_none(row.get("temp"))
+    wind = float_or_none(row.get("wind"))
+    if temp is None and wind is None:
+        return None
+    roof = (text_or_none(row.get("roof")) or "").lower()
+    return {
+        "game_id": game_id,
+        "source": "nflverse",
+        "is_forecast": False,
+        "temperature_f": temp,
+        "wind_speed_mph": wind,
+        "is_indoor": roof == "closed" or bool(stadium and stadium.is_dome),
+        "observed_at": kickoff_utc(row.get("gameday"), row.get("gametime")),
+    }
+
+
 def ingest_games(
     client: NflverseClient, season: int, counts: NflReferenceCounts
 ) -> None:
@@ -265,8 +305,32 @@ def ingest_games(
 
     team_ids = fetch_id_map("teams", "nfl_abbr", filters={"sport": SPORT})
 
+    # VENUES FIRST, so every game can point at one. nflverse names the stadium
+    # but carries no coordinates; `stadiums.py` supplies them, and a stadium it
+    # does not know leaves the game without a venue (and so without weather)
+    # rather than guessing a location. Migration 0079.
+    rows = schedule.to_dicts()
+    stadiums = [
+        resolve_stadium(text_or_none(r.get("stadium_id")), text_or_none(r.get("stadium")))
+        for r in rows
+    ]
+    known = {s.stadium_id: s for s in stadiums if s is not None}
+    if known:
+        counts.add(
+            "venues",
+            upsert(
+                "venues",
+                [venue_row(s) for s in known.values()],
+                conflict_columns=["nflverse_stadium_id"],
+            ),
+        )
+    for stadium in stadiums:
+        if stadium is None:
+            counts.skip("game: stadium not in stadiums.py")
+    venue_ids = fetch_id_map("venues", "nflverse_stadium_id")
+
     payload = []
-    for row in schedule.to_dicts():
+    for row, stadium in zip(rows, stadiums, strict=True):
         home = canonical_team(row.get("home_team"))
         away = canonical_team(row.get("away_team"))
         if home is None or away is None:
@@ -299,6 +363,7 @@ def ingest_games(
                 ).lower() == "neutral",
                 "home_team_id": home_id,
                 "away_team_id": away_id,
+                "venue_id": venue_ids.get(stadium.stadium_id) if stadium else None,
                 "home_points": home_score,
                 "away_points": away_score,
                 # A game is complete when it has a score, which is how the
@@ -316,6 +381,19 @@ def ingest_games(
         "games %d: %d rows (%d complete)",
         season, n, sum(1 for p in payload if p["completed"]),
     )
+
+    game_ids = fetch_id_map("games", "nflverse_id", filters={"sport": SPORT})
+    weather = []
+    for row, stadium in zip(rows, stadiums, strict=True):
+        game_id = game_ids.get(text_or_none(row.get("game_id")))
+        reading = observed_weather(row, stadium, game_id) if game_id else None
+        if reading is not None:
+            weather.append(reading)
+    if weather:
+        counts.add(
+            "game_weather",
+            upsert("game_weather", weather, conflict_columns=["game_id", "source"]),
+        )
 
 
 # -----------------------------------------------------------------------------

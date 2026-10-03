@@ -741,7 +741,7 @@ export default async function PlayerDetail({
             </section>
           ) : null}
 
-          <WeatherPanel conditions={conditions} sport={activeRow.sport} />
+          <WeatherPanel conditions={conditions} />
 
           <section className="panel flex flex-col gap-3 p-4">
             <h2 className="section-header flex items-center gap-2">

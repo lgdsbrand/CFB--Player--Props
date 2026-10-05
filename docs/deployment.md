@@ -276,8 +276,9 @@ Worth stating plainly so nobody discovers it in production.
   plan's coverage is unconfirmed. Until then the board shows model leans with no
   line beside them, which is the designed behaviour (CLAUDE.md §7), not a
   degraded one.
-- **The AI reads are off.** `ai_adapter` is `none` and the job exits cleanly in
-  that state. It needs the billed key above.
+- **The AI reads wait for a Groq key.** `ai_adapter` is `groq` (2026-10-05) and
+  the job records that it is waiting for `GROQ_API_KEY` until that key is added
+  to the `cfb-props-ai-reads` service. Nothing else is needed.
 - **The model does not beat blindly betting UNDER.** It has now been graded
   against real closing lines (2025 weeks 7 and 8, 1,856 bets). Overs landed just
   43.2% of those lines — college props close shaded toward the over — and the

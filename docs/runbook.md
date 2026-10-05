@@ -630,6 +630,30 @@ By hand, a single run can still be narrowed with `ingest_odds --sport nfl
 --free --markets q1_pass_yards,q1_rush_yards,q1_rec_yards`. The three keys are
 NFL-only (`markets_for` refuses them for college, before any call).
 
+#### `capture_game_periods` — hourly at :00, after the college props capture
+
+```bash
+python -m worker.jobs.capture_game_periods             # what the cron runs
+python -m worker.jobs.capture_game_periods --dry-run   # resolve, write nothing
+```
+
+College **first-half and first-quarter game lines** (spread, total, moneyline
+per period) from the US books, for the game page's "1st half lines" and "1st
+quarter lines" panels. Chained with `&&` after `ingest_odds` inside
+`cfb-props-odds-refresh`, so it has no Render service or key of its own.
+
+- **Open and close:** a game is bought when its period lines first appear and
+  again in the hour before kickoff, and skipped in between.
+- **Cost:** per-event, billed per market returned, about 5 credits per game per
+  capture, on the **paid** key (`ODDS_API_KEY`). The free key is spent on the
+  full-game slate and the NFL first-quarter props.
+- **Lines only, no picks.** The game model's 1H/1Q fair line is shown beside
+  them; nothing is priced against them.
+- **Its own job name,** so its hourly runs cannot stand in for the full-game
+  capture in the monitor's staleness check.
+
+**Monitored:** warning, `max_age_hours=3`.
+
 #### The first-quarter board — what it shows and what it deliberately does not
 
 `/props?sport=nfl&scope=q1`. A **MARKETS** pill group switches between FULL GAME
@@ -733,7 +757,11 @@ means a bad row would sit in front of readers for a week, so writing nothing is
 strictly better than writing a fragment.
 
 **Monitored:** warning, `max_age_hours=200`, gated on `app_config.ai_adapter`
-not being `"none"`.
+not being `"none"`. **Provider chosen but key missing** (the state from
+2026-10-05: `ai_adapter = "groq"`, no `GROQ_API_KEY` on this service yet): the
+run records `awaiting_key` in its metadata and exits 0, and the monitor lists
+the job as "waiting for GROQ_API_KEY to be added" instead of alerting. Add the
+key on `cfb-props-ai-reads` → Environment, then Trigger Run.
 
 ---
 

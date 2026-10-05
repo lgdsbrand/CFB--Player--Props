@@ -58,10 +58,26 @@ writes nothing and exits 0, and `monitor_pipeline` does not expect it.
 Switching it on also switches on the alerting for it. See
 [odds.md](odds.md#turning-it-on).
 
-#### `ai_adapter` — currently `"none"`
+#### `ai_adapter` — currently `"groq"`, waiting for its key
 
 Which provider writes the weekly cached reads. Known values: `"none"`,
-`"gemini"`, `"grok"`.
+`"gemini"`, `"grok"`, `"groq"`.
+
+**Switched to `"groq"` on 2026-10-05** (`20261005100000`), AHEAD of the key.
+The client's own site runs on Groq, so his Groq key is the one he has. **Adding
+`GROQ_API_KEY` to the `cfb-props-ai-reads` service is the only step left.**
+Until then `generate_ai_reads` records a run with `awaiting_key` set and exits
+0, and `monitor_pipeline` lists the job as "waiting for GROQ_API_KEY to be
+added" on every check rather than alerting on it as stale. The next Wednesday
+run after the key is added generates the reads (or press Trigger Run).
+
+Groq is NOT Grok: Groq is the inference host at api.groq.com, adapter
+`worker/adapters/ai/groq.py`. The model defaults to `openai/gpt-oss-120b`
+because Groq shut down `llama-3.3-70b-versatile` on 2026-08-16; set
+`GROQ_MODEL` to change it without a code deploy. gpt-oss is a reasoning model,
+so the adapter sends it low reasoning effort, hides the reasoning text, and
+reserves extra completion tokens for it. A read cut off at the token ceiling is
+refused rather than stored.
 
 **Switched to `"gemini"` and back on 2026-08-03** (`20260803140000`, then
 `20260803150000`). The client reported enabling billing; the key disagreed. Its
@@ -248,6 +264,8 @@ Full reasoning per variable is in [.env.example](../.env.example). Copy it to
 | `ODDS_API_KEY` | optional | worker — paid, 20k/month, shared pool |
 | `ODDS_API_KEY_FREE` | optional | worker — free tier, for `probe_odds --free` |
 | `ODDS_PREFER_FREE` | defaults off | worker — makes `ingest_odds` bill the free key, the deploy-time form of `--free`. For an empty paid pool; see [odds.md](odds.md#opening-weekend-with-an-empty-paid-pool). A non-boolean value is a hard error, not a silent false |
+| `GROQ_API_KEY` | optional | worker — the configured AI provider; goes on `cfb-props-ai-reads` |
+| `GROQ_MODEL` | optional | worker — Groq model id; blank means `openai/gpt-oss-120b` |
 | `GEMINI_API_KEY` | optional | worker |
 | `GROK_API_KEY` | optional | worker |
 | `ALERT_WEBHOOK_URL` | optional | worker — only when `alert_adapter` is `"webhook"` |
@@ -263,8 +281,10 @@ provider. If the service role key or the database URL ever reaches the browser
 bundle, rotate it.
 
 **A missing optional key is not the same as an adapter being off.** Leaving
-`GEMINI_API_KEY` blank while `ai_adapter` is `"gemini"` fails loudly, which is
-correct. The way to turn a seam off is the `app_config` row, not an absent key.
+the chosen AI provider's key blank does not switch the reads off: the job
+records that it is waiting for that key and the monitor says so on every check
+(changed 2026-10-05 from failing the run, so that adding the key is the only
+step left). The way to turn a seam off is the `app_config` row, not an absent key.
 
 `Settings.__repr__` in `worker/worker/config.py` redacts every secret field,
 because the default dataclass repr would happily print an API key into a log

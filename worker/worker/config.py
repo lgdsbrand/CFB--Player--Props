@@ -35,6 +35,7 @@ _SECRET_FIELDS = frozenset(
         "odds_api_key_free",
         "gemini_api_key",
         "grok_api_key",
+        "groq_api_key",
         # The whole URL is the secret. A Slack incoming-webhook URL carries its
         # credential in the path, so this is a key that happens to look like an
         # address — treat it as one.
@@ -230,6 +231,10 @@ class Settings:
     # and the app degrades to its existing empty read slot.
     gemini_api_key: str | None = None
     grok_api_key: str | None = None
+    groq_api_key: str | None = None
+    # Not a secret: which Groq model to call. Unset means the adapter's default.
+    # A setting because Groq retires models on short notice (see groq.py).
+    groq_model: str | None = None
 
     # Pipeline alerting (CLAUDE.md §8 Phase 5). Optional: the default alert
     # adapter writes to the run log and needs no configuration, so the monitor
@@ -305,6 +310,8 @@ def get_settings() -> Settings:
         odds_prefer_free=_flag("ODDS_PREFER_FREE"),
         gemini_api_key=_optional("GEMINI_API_KEY"),
         grok_api_key=_optional("GROK_API_KEY"),
+        groq_api_key=_optional("GROQ_API_KEY"),
+        groq_model=_optional("GROQ_MODEL"),
         alert_webhook_url=_optional("ALERT_WEBHOOK_URL"),
         environment=_optional("ENVIRONMENT", "development") or "development",
         log_level=_optional("LOG_LEVEL", "INFO") or "INFO",

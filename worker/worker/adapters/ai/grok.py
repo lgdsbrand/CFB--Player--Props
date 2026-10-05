@@ -67,12 +67,23 @@ class GrokAdapter:
         return _parse(response, fallback_model=self.model)
 
 
-def _parse(response: dict[str, Any], *, fallback_model: str) -> ReadResult:
-    """Pull text and usage out of an OpenAI-shaped response."""
+def _parse(
+    response: dict[str, Any], *, fallback_model: str, provider: str = "Grok"
+) -> ReadResult:
+    """Pull text and usage out of an OpenAI-shaped response.
+
+    Shared with the Groq adapter, which speaks the same response shape;
+    `provider` only names who answered in the error messages.
+
+    A TRUNCATED READ IS REFUSED, not stored. `finish_reason == "length"` means
+    the model hit the token ceiling mid-sentence, and a half sentence cached as
+    a player's read sits on his page for a week. The Gemini adapter refuses the
+    same case for the same reason.
+    """
     choices = response.get("choices") or []
     if not choices:
         raise AiAdapterError(
-            f"Grok returned 200 with no choices. Keys present: {sorted(response)}"
+            f"{provider} returned 200 with no choices. Keys present: {sorted(response)}"
         )
 
     choice = choices[0]
@@ -82,10 +93,15 @@ def _parse(response: dict[str, Any], *, fallback_model: str) -> ReadResult:
     if not text:
         if finish == "content_filter":
             raise AiSafetyRefusal(
-                "Grok declined to answer (finish_reason=content_filter)"
+                f"{provider} declined to answer (finish_reason=content_filter)"
             )
         raise AiAdapterError(
-            f"Grok returned an empty read (finish_reason={finish!r})."
+            f"{provider} returned an empty read (finish_reason={finish!r})."
+        )
+    if finish == "length":
+        raise AiAdapterError(
+            f"{provider} stopped at the token ceiling mid-read "
+            f"(finish_reason='length'); refusing to store a truncated read."
         )
 
     usage = response.get("usage") or {}

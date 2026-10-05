@@ -458,3 +458,50 @@ class TestSportGating:
         )
         assert checked == []
         assert report.skipped == ["nfl_ingest_stats (nfl out of season)"]
+
+
+class TestAwaitingKey:
+    """A provider switched on whose key has not been added is WAITING: listed
+    on every check, neither alerted as stale nor counted as healthy."""
+
+    def _run(self, monkeypatch, latest):
+        from worker.core.schedule import Slate
+        from worker.jobs import monitor_pipeline
+
+        monkeypatch.setattr(
+            monitor_pipeline,
+            "MONITORED_JOBS",
+            (
+                monitor_pipeline.JobExpectation(
+                    name="generate_ai_reads", max_age_hours=200,
+                    enabled_key="ai_adapter",
+                ),
+            ),
+        )
+        monkeypatch.setattr(monitor_pipeline, "get_config_value", lambda key: "groq")
+        queries: list[str] = []
+
+        def fake_fetch_one(sql, *a, **k):
+            queries.append(sql)
+            if "awaiting_key" in sql:
+                return latest
+            return {"last_success": None, "age_hours": None}
+
+        monkeypatch.setattr(monitor_pipeline, "fetch_one", fake_fetch_one)
+        report = MonitorReport()
+        monitor_pipeline.check_staleness(
+            report, {"cfb": Slate(season=2026, week=6, in_season=True, complete=False)}
+        )
+        return report
+
+    def test_a_waiting_job_is_listed_not_alerted(self, monkeypatch) -> None:
+        report = self._run(monkeypatch, {"awaiting_key": "GROQ_API_KEY"})
+        assert report.skipped == [
+            "generate_ai_reads (waiting for GROQ_API_KEY to be added)"
+        ]
+        assert not report.alerts
+
+    def test_once_the_key_is_in_the_job_is_checked_normally(self, monkeypatch) -> None:
+        report = self._run(monkeypatch, {"awaiting_key": None})
+        assert report.skipped == []
+        assert any("generate_ai_reads" in a.title for a in report.alerts)

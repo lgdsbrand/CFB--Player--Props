@@ -53,6 +53,13 @@ envVarGroups:
         sync: false
       - key: ODDS_API_KEY_FREE
         sync: false
+      # The AI provider is Groq (app_config.ai_adapter). Put GROQ_API_KEY on
+      # the cfb-props-ai-reads service; until it is there the job records
+      # "waiting for GROQ_API_KEY" and exits 0. GROQ_MODEL is optional.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: GROK_API_KEY

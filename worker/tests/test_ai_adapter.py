@@ -20,11 +20,14 @@ from worker.adapters.ai import (
     AiSafetyRefusal,
     GeminiAdapter,
     GrokAdapter,
+    GroqAdapter,
     NullAiAdapter,
     get_adapter,
 )
 from worker.adapters.ai.gemini import _parse as parse_gemini
 from worker.adapters.ai.grok import _parse as parse_grok
+from worker.adapters.ai.groq import DEFAULT_MODEL as GROQ_DEFAULT_MODEL
+from worker.adapters.ai.groq import REASONING_HEADROOM
 from worker.adapters.ai.http import AiHttpClient, redact
 
 
@@ -120,6 +123,46 @@ class TestGrokParsing:
         with pytest.raises(AiAdapterError, match="no choices"):
             parse_grok({}, fallback_model="m")
 
+    def test_a_read_cut_off_at_the_ceiling_is_refused(self):
+        """Text present but finish_reason 'length': half a sentence, which
+        would sit on a player's page for a week. Same rule as Gemini."""
+        with pytest.raises(AiAdapterError, match="truncated"):
+            parse_grok({"choices": [{"message": {"content": "Smith faces a"},
+                                     "finish_reason": "length"}]},
+                       fallback_model="m")
+
+
+class TestGroq:
+    """Groq (api.groq.com), not Grok (xAI): the client's own provider."""
+
+    def test_the_default_model_is_one_groq_still_serves(self):
+        """llama-3.3-70b-versatile was shut down 2026-08-16; Groq named
+        gpt-oss-120b as its replacement."""
+        assert GroqAdapter("k").model == GROQ_DEFAULT_MODEL == "openai/gpt-oss-120b"
+
+    def test_a_model_override_wins(self):
+        assert GroqAdapter("k", model="qwen/qwen3.8-27b").model == "qwen/qwen3.8-27b"
+        assert GroqAdapter("k", model=None).model == GROQ_DEFAULT_MODEL
+
+    def test_a_reasoning_model_gets_headroom_and_hides_its_reasoning(self):
+        body = GroqAdapter("k").payload("p", max_output_tokens=400)
+        assert body["max_completion_tokens"] == 400 + REASONING_HEADROOM
+        assert body["reasoning_effort"] == "low"
+        assert body["include_reasoning"] is False
+
+    def test_a_plain_model_is_not_sent_reasoning_parameters(self):
+        """Groq rejects reasoning parameters on models that do not take them,
+        so an override must not inherit them."""
+        body = GroqAdapter("k", model="some/plain-model").payload(
+            "p", max_output_tokens=400
+        )
+        assert body["max_completion_tokens"] == 400
+        assert "reasoning_effort" not in body and "include_reasoning" not in body
+
+    def test_errors_name_groq_not_grok(self):
+        with pytest.raises(AiAdapterError, match="^Groq returned"):
+            parse_grok({}, fallback_model="m", provider="Groq")
+
 
 class TestNullAdapter:
     """Switched off is a DECISION, not a failure."""
@@ -137,6 +180,7 @@ class TestRegistry:
     def test_known_adapters_build(self):
         assert isinstance(get_adapter("gemini", api_key="k"), GeminiAdapter)
         assert isinstance(get_adapter("grok", api_key="k"), GrokAdapter)
+        assert isinstance(get_adapter("groq", api_key="k"), GroqAdapter)
 
     def test_an_unknown_name_raises_rather_than_silently_disabling_reads(self):
         """A typo must not present as 'reads are switched off'. This job runs
@@ -149,6 +193,30 @@ class TestRegistry:
             GeminiAdapter("")
         with pytest.raises(AiAdapterError, match="GROK_API_KEY"):
             GrokAdapter("")
+        with pytest.raises(AiAdapterError, match="GROQ_API_KEY"):
+            GroqAdapter("")
+
+
+class TestAwaitingKey:
+    """Provider chosen, key not added yet: the job waits instead of failing."""
+
+    def _settings(self, **keys):
+        from types import SimpleNamespace
+        base = {"gemini_api_key": None, "grok_api_key": None, "groq_api_key": None}
+        return SimpleNamespace(**{**base, **keys})
+
+    def test_names_the_missing_key(self):
+        from worker.jobs.generate_ai_reads import missing_key
+        assert missing_key("groq", self._settings()) == "GROQ_API_KEY"
+        assert missing_key("gemini", self._settings()) == "GEMINI_API_KEY"
+
+    def test_nothing_is_missing_once_the_key_is_set(self):
+        from worker.jobs.generate_ai_reads import missing_key
+        assert missing_key("groq", self._settings(groq_api_key="k")) is None
+
+    def test_the_null_adapter_needs_no_key(self):
+        from worker.jobs.generate_ai_reads import missing_key
+        assert missing_key("none", self._settings()) is None
 
 
 class TestKeyHygiene:

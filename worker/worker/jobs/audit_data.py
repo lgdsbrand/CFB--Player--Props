@@ -27,6 +27,7 @@ import uuid
 
 import psycopg
 
+from worker.adapters.ai import KNOWN_ADAPTERS as KNOWN_AI_ADAPTERS
 from worker.core import probability
 from worker.db import connect, fetch_all, fetch_one
 from worker.logging_setup import configure_logging, get_logger
@@ -2267,7 +2268,7 @@ check(G, "every cached read carries the digest its refresh depends on", """
 
 check(G, "ai_adapter names a provider we ship", """
     select value #>> '{}' as adapter from app_config where key = 'ai_adapter'
-""", lambda r: r["adapter"] in ("none", "gemini", "grok"))
+""", lambda r: r["adapter"] in KNOWN_AI_ADAPTERS)  # the registry, so the two cannot drift
 
 # =============================================================================
 # P5 monitoring

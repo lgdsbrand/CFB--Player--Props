@@ -49,6 +49,7 @@ from worker.adapters.ai import (
 )
 from worker.adapters.ai.gemini import ADAPTER_NAME as GEMINI_ADAPTER_NAME
 from worker.adapters.ai.grok import ADAPTER_NAME as GROK_ADAPTER_NAME
+from worker.adapters.ai.groq import ADAPTER_NAME as GROQ_ADAPTER_NAME
 from worker.adapters.ai.null import ADAPTER_NAME as NULL_ADAPTER_NAME
 from worker.config import ConfigError, get_settings
 from worker.core.ai_prompt import (
@@ -141,6 +142,22 @@ def _resolve_adapter_name(explicit: str | None) -> str:
     return str(configured) if configured else NULL_ADAPTER_NAME
 
 
+#: The environment variable each keyed provider reads.
+KEY_ENV = {
+    GEMINI_ADAPTER_NAME: "GEMINI_API_KEY",
+    GROK_ADAPTER_NAME: "GROK_API_KEY",
+    GROQ_ADAPTER_NAME: "GROQ_API_KEY",
+}
+
+
+def missing_key(name: str, settings) -> str | None:
+    """The env var the chosen provider needs and does not have, else None."""
+    env = KEY_ENV.get(name)
+    if env is None:
+        return None
+    return None if getattr(settings, env.lower()) else env
+
+
 def _adapter_kwargs(name: str, settings) -> dict:
     """Pick the key for the chosen provider, and say so plainly if it is unset."""
     if name == GEMINI_ADAPTER_NAME:
@@ -157,6 +174,13 @@ def _adapter_kwargs(name: str, settings) -> dict:
                 "Add it to .env — never to app_config, which is world-readable."
             )
         return {"api_key": settings.grok_api_key}
+    if name == GROQ_ADAPTER_NAME:
+        if not settings.groq_api_key:
+            raise ConfigError(
+                "app_config.ai_adapter is 'groq' but GROQ_API_KEY is unset. "
+                "Add it to .env — never to app_config, which is world-readable."
+            )
+        return {"api_key": settings.groq_api_key, "model": settings.groq_model}
     return {}
 
 
@@ -501,7 +525,7 @@ def main(argv: list[str] | None = None) -> int:
         log.info(
             "app_config.ai_adapter is %r — no reads will be generated and the "
             "player page shows its empty read slot. Set it to %r to generate.",
-            NULL_ADAPTER_NAME, GEMINI_ADAPTER_NAME,
+            NULL_ADAPTER_NAME, GROQ_ADAPTER_NAME,
         )
         return 0
 
@@ -510,6 +534,30 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         log.error("%s", exc)
         return 2
+
+    # PROVIDER CHOSEN, KEY NOT ADDED YET: WAITING, NOT BROKEN. The provider is
+    # set in app_config ahead of the key so that adding the key is the only
+    # step left (2026-10-05). Until it arrives this records a run that says so
+    # and exits 0: a weekly failure email about a key nobody has added yet
+    # would teach the reader to ignore the job's failures. It does not go
+    # silent — `monitor_pipeline` reads `awaiting_key` off this run and lists
+    # the job as waiting on every check, instead of calling it stale.
+    awaiting = None if args.dry_run else missing_key(adapter_name, settings)
+    if awaiting:
+        with pipeline_run(
+            JOB_NAME,
+            metadata={
+                "season": season, "week": week,
+                "adapter": adapter_name, "awaiting_key": awaiting,
+            },
+        ):
+            log.warning(
+                "app_config.ai_adapter is %r but %s is not set on this service. "
+                "No reads generated. Add %s to the Render service that runs "
+                "this job and the next run generates them.",
+                adapter_name, awaiting, awaiting,
+            )
+        return 0
 
     try:
         with pipeline_run(

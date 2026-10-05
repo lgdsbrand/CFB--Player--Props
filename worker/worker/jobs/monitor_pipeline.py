@@ -514,6 +514,26 @@ def check_staleness(
                     f"{expectation.label} ({expectation.enabled_key} is 'none')"
                 )
                 continue
+            # Switched on, but its key has not been added yet. The job records
+            # that on its latest run (`generate_ai_reads`, 2026-10-05) rather
+            # than failing weekly; saying so here on every check keeps it from
+            # reading as either healthy or stale.
+            latest = fetch_one(
+                """
+                select metadata ->> 'awaiting_key' as awaiting_key
+                  from pipeline_runs
+                 where job_name = %s
+                 order by started_at desc
+                 limit 1
+                """,
+                (expectation.name,),
+            )
+            awaiting = (latest or {}).get("awaiting_key")
+            if awaiting:
+                report.skipped.append(
+                    f"{expectation.label} (waiting for {awaiting} to be added)"
+                )
+                continue
 
         report.checks_run += 1
         # `finished_at where succeeded` — NOT started_at, and not the latest run

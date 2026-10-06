@@ -1,16 +1,17 @@
 /**
  * Analyze Games — turning one game's rows into what the page renders.
  *
- * SPORT-AGNOSTIC CORE (CLAUDE.md §3). A game in, board rows and ratings in,
- * ordered groups out. Nothing here knows what a conference is, what CFBD is, or
- * how a rating was fitted.
+ * SPORT-AGNOSTIC CORE (CLAUDE.md §3). A game and its ratings in, the
+ * favourite and the position matchups out. Nothing here knows what a
+ * conference is, what CFBD is, or how a rating was fitted.
  *
- * WHAT THIS VIEW IS NOT. It does not predict the game. CLAUDE.md §10 puts
- * full game-outcome and spread prediction out of scope, and that was reaffirmed
- * with the client when this view was agreed. The spread and total shown here are
- * the BOOK'S numbers, ingested from CFBD; the only model output on the page is
- * the per-player probabilities the board already produces. If a "model spread"
- * ever appears in this file, something has gone wrong.
+ * The per-team props grouping that lived here went with the page's props
+ * tables (2026-10-06); a game's props are on the board now.
+ *
+ * WHAT THIS VIEW IS NOT. It does not predict the game. The spread and total
+ * here are the BOOK'S numbers, ingested from CFBD. The game model (CLAUDE.md
+ * §11) has its own module and its own labelled panel, and is never mixed into
+ * this one.
  */
 
 // Relative, with the extension: these carry VALUES, and Node's test runner does
@@ -38,18 +39,6 @@ export type ViewRating = {
   rankVsPosition: number | null;
   adjRushYardsAllowedPg: number | null;
   adjRecYardsAllowedPg: number | null;
-};
-
-/** The minimum a prop row needs to be grouped and ordered here. */
-export type ViewProp = {
-  projectionId: number;
-  playerId: number;
-  playerName: string;
-  positionGroup: PositionGroup | null;
-  teamId: number;
-  marketKey: string;
-  displayConfidence: number | null;
-  edge: number | null;
 };
 
 // -----------------------------------------------------------------------------
@@ -242,170 +231,4 @@ export function softestMatchup(matchups: PositionMatchup[]): {
     }
   }
   return best;
-}
-
-// -----------------------------------------------------------------------------
-// The props
-// -----------------------------------------------------------------------------
-
-export type PlayerProps<T extends ViewProp> = {
-  playerId: number;
-  playerName: string;
-  positionGroup: PositionGroup | null;
-  /** Every market for this player: priced first, then the unpriced ones. */
-  props: T[];
-  /** The player's strongest call, for ordering within a position. */
-  topConfidence: number | null;
-  /** How many of `props` have no line yet — most of them, early in a week. */
-  unpricedCount: number;
-};
-
-export type TeamProps<T extends ViewProp> = {
-  teamId: number;
-  abbreviation: string | null;
-  school: string;
-  isHome: boolean;
-  players: PlayerProps<T>[];
-  /** Rows across every player — what the table renders. */
-  propCount: number;
-};
-
-/** Depth-chart order, so a table reads like a roster rather than a ranking. */
-const POSITION_ORDER = new Map<string, number>(
-  MATCHUP_POSITIONS.map((position, index) => [position, index]),
-);
-
-/**
- * Group one game's rows by team, then by player.
- *
- * AWAY TEAM FIRST, matching the "AWAY @ HOME" label used everywhere else in the
- * app. The alternative — home first, because home is the anchor of the spread —
- * would put the two orderings on the same screen in disagreement.
- *
- * WITHIN A TEAM: position in depth-chart order, then the player's strongest
- * call. A player's markets stay together, which is the point of grouping at all:
- * a quarterback's five markets read as one opinion about him, not as five
- * unrelated rows scattered through a confidence ranking. A player with no known
- * position sorts last rather than being dropped — a prop that exists should be
- * visible even when the roster join found nothing.
- *
- * WITHIN A PLAYER: PRICED MARKETS FIRST. Through most of a live week the
- * majority of a game's rows have no line — college books post props on Thursday
- * or Friday (CLAUDE.md §7) — so market order alone puts four unpriced rows above
- * the one call the reader came for. Ordering by whether there is a call, then by
- * how strong it is, means the top of every player's block is the part with
- * something in it, and the leans stay below rather than being hidden.
- *
- * `marketOrder` breaks the remaining ties with the catalogue's own display
- * order. Without it the fallback is the market key, which is deterministic but
- * arbitrary — REC before REC YDS before RUSH YDS is alphabetical, not sensible.
- *
- * A team with no rows still gets a group. Both teams are in the game, and an
- * empty group saying so is the honest rendering of "we project nobody here" —
- * a missing group reads as a bug.
- */
-export function groupPropsByTeam<T extends ViewProp>(
-  game: ViewGame,
-  rows: T[],
-  { marketOrder }: { marketOrder?: Map<string, number> } = {},
-): TeamProps<T>[] {
-  const byPlayer = new Map<number, PlayerProps<T>>();
-  const teamOfPlayer = new Map<number, number>();
-
-  for (const row of rows) {
-    teamOfPlayer.set(row.playerId, row.teamId);
-    const existing = byPlayer.get(row.playerId);
-    if (existing) {
-      existing.props.push(row);
-      existing.topConfidence = maxOrNull(
-        existing.topConfidence,
-        row.displayConfidence,
-      );
-      continue;
-    }
-    byPlayer.set(row.playerId, {
-      playerId: row.playerId,
-      playerName: row.playerName,
-      positionGroup: row.positionGroup,
-      props: [row],
-      topConfidence: row.displayConfidence,
-      unpricedCount: 0,
-    });
-  }
-
-  const marketRank = (key: string) =>
-    marketOrder?.get(key) ?? Number.MAX_SAFE_INTEGER;
-
-  for (const player of byPlayer.values()) {
-    player.props.sort((a, b) => compareProps(a, b, marketRank));
-    player.unpricedCount = player.props.filter(
-      (prop) => prop.displayConfidence === null,
-    ).length;
-  }
-
-  const build = (teamId: number, isHome: boolean): TeamProps<T> => {
-    const players = [...byPlayer.values()]
-      .filter((player) => teamOfPlayer.get(player.playerId) === teamId)
-      .sort(comparePlayers);
-    return {
-      teamId,
-      abbreviation: isHome ? game.homeAbbreviation : game.awayAbbreviation,
-      school: isHome ? game.homeSchool : game.awaySchool,
-      isHome,
-      players,
-      propCount: players.reduce((total, player) => total + player.props.length, 0),
-    };
-  };
-
-  return [build(game.awayTeamId, false), build(game.homeTeamId, true)];
-}
-
-function compareProps<T extends ViewProp>(
-  a: T,
-  b: T,
-  marketRank: (key: string) => number,
-): number {
-  const aPriced = a.displayConfidence !== null;
-  const bPriced = b.displayConfidence !== null;
-  if (aPriced !== bPriced) return aPriced ? -1 : 1;
-
-  if (aPriced && bPriced && a.displayConfidence !== b.displayConfidence) {
-    return (b.displayConfidence ?? 0) - (a.displayConfidence ?? 0);
-  }
-
-  const rankDelta = marketRank(a.marketKey) - marketRank(b.marketKey);
-  if (rankDelta !== 0) return rankDelta;
-  return a.marketKey.localeCompare(b.marketKey);
-}
-
-function comparePlayers<T extends ViewProp>(
-  a: PlayerProps<T>,
-  b: PlayerProps<T>,
-): number {
-  const positionDelta = positionRank(a.positionGroup) - positionRank(b.positionGroup);
-  if (positionDelta !== 0) return positionDelta;
-
-  // A player with no call at all sorts after one that has one, rather than
-  // being treated as 0% — the board makes the same distinction, because "no
-  // line yet" and "we think it is unlikely" are different claims (CLAUDE.md §7).
-  const aConfidence = a.topConfidence;
-  const bConfidence = b.topConfidence;
-  if (aConfidence !== bConfidence) {
-    if (aConfidence === null) return 1;
-    if (bConfidence === null) return -1;
-    return bConfidence - aConfidence;
-  }
-
-  return a.playerName.localeCompare(b.playerName);
-}
-
-function positionRank(position: PositionGroup | null): number {
-  if (position === null) return POSITION_ORDER.size;
-  return POSITION_ORDER.get(position) ?? POSITION_ORDER.size;
-}
-
-function maxOrNull(a: number | null, b: number | null): number | null {
-  if (a === null) return b;
-  if (b === null) return a;
-  return Math.max(a, b);
 }

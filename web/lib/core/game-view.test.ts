@@ -16,11 +16,9 @@ import { test } from "node:test";
 import {
   favourite,
   gameMatchups,
-  groupPropsByTeam,
   MATCHUP_POSITIONS,
   softestMatchup,
   type ViewGame,
-  type ViewProp,
   type ViewRating,
 } from "./game-view.ts";
 
@@ -55,20 +53,6 @@ function rating(
     rankVsPosition: rank,
     adjRushYardsAllowedPg: rush,
     adjRecYardsAllowedPg: rec,
-  };
-}
-
-function prop(overrides: Partial<ViewProp> = {}): ViewProp {
-  return {
-    projectionId: 1,
-    playerId: 1,
-    playerName: "A Player",
-    positionGroup: "QB",
-    teamId: HOME,
-    marketKey: "rush_yards",
-    displayConfidence: 0.6,
-    edge: 0.05,
-    ...overrides,
   };
 }
 
@@ -194,160 +178,4 @@ test("the field size is counted per position, not shared across the grid", () =>
 
 test("a game with nothing rated has no softest matchup", () => {
   assert.equal(softestMatchup(gameMatchups(game(), [])), null);
-});
-
-// -----------------------------------------------------------------------------
-// The props
-// -----------------------------------------------------------------------------
-
-test("both teams get a group, in away-then-home order, even when empty", () => {
-  const groups = groupPropsByTeam(game(), []);
-  assert.equal(groups.length, 2);
-  assert.equal(groups[0].teamId, AWAY);
-  assert.equal(groups[0].isHome, false);
-  assert.equal(groups[1].teamId, HOME);
-  assert.equal(groups[1].propCount, 0);
-});
-
-test("a player's markets stay together instead of scattering by confidence", () => {
-  const groups = groupPropsByTeam(game(), [
-    prop({ projectionId: 1, playerId: 1, playerName: "QB One", displayConfidence: 0.7 }),
-    prop({
-      projectionId: 2,
-      playerId: 2,
-      playerName: "RB Two",
-      positionGroup: "RB",
-      displayConfidence: 0.9,
-    }),
-    prop({ projectionId: 3, playerId: 1, playerName: "QB One", displayConfidence: 0.52 }),
-  ]);
-
-  const home = groups[1];
-  assert.equal(home.players.length, 2);
-  assert.equal(home.players[0].playerId, 1, "QB sorts before RB by depth chart");
-  assert.equal(home.players[0].props.length, 2);
-  assert.equal(
-    home.players[0].topConfidence,
-    0.7,
-    "the player's strongest call, not the last row seen",
-  );
-  assert.equal(home.propCount, 3);
-});
-
-test("within a position, the stronger call leads", () => {
-  const groups = groupPropsByTeam(game(), [
-    prop({ projectionId: 1, playerId: 1, playerName: "Weaker", positionGroup: "WR", displayConfidence: 0.55 }),
-    prop({ projectionId: 2, playerId: 2, playerName: "Stronger", positionGroup: "WR", displayConfidence: 0.81 }),
-  ]);
-  assert.deepEqual(
-    groups[1].players.map((p) => p.playerName),
-    ["Stronger", "Weaker"],
-  );
-});
-
-test("a player with no call sorts after one that has a call, not as 0%", () => {
-  const groups = groupPropsByTeam(game(), [
-    prop({ projectionId: 1, playerId: 1, playerName: "No line", positionGroup: "WR", displayConfidence: null }),
-    prop({ projectionId: 2, playerId: 2, playerName: "Weak call", positionGroup: "WR", displayConfidence: 0.51 }),
-  ]);
-  assert.deepEqual(
-    groups[1].players.map((p) => p.playerName),
-    ["Weak call", "No line"],
-  );
-});
-
-test("players are split by team, not merged", () => {
-  const groups = groupPropsByTeam(game(), [
-    prop({ projectionId: 1, playerId: 1, teamId: HOME, playerName: "Home guy" }),
-    prop({ projectionId: 2, playerId: 2, teamId: AWAY, playerName: "Away guy" }),
-  ]);
-  assert.deepEqual(groups[0].players.map((p) => p.playerName), ["Away guy"]);
-  assert.deepEqual(groups[1].players.map((p) => p.playerName), ["Home guy"]);
-});
-
-test("a player with no known position is kept and sorted last", () => {
-  // `positionGroup` is nullable on the board row: it comes from a left join to
-  // player_team_seasons, and a player with no roster row for that season has
-  // none. A prop that exists must stay visible rather than being dropped for
-  // want of a label.
-  const groups = groupPropsByTeam(game(), [
-    prop({ projectionId: 1, playerId: 1, playerName: "Unrostered", positionGroup: null, displayConfidence: 0.99 }),
-    prop({ projectionId: 2, playerId: 2, playerName: "Back", positionGroup: "RB", displayConfidence: 0.5 }),
-  ]);
-  assert.deepEqual(
-    groups[1].players.map((p) => p.playerName),
-    ["Back", "Unrostered"],
-  );
-});
-
-test("a player's PRICED markets lead, and the leans follow", () => {
-  // The common case through most of a live week: college books post props on
-  // Thursday or Friday, so four of a quarterback's five markets have no line.
-  // Market order alone would bury the one call the reader came for.
-  const groups = groupPropsByTeam(game(), [
-    prop({ projectionId: 1, playerId: 1, marketKey: "pass_attempts", displayConfidence: null }),
-    prop({ projectionId: 2, playerId: 1, marketKey: "pass_yards", displayConfidence: 0.63 }),
-    prop({ projectionId: 3, playerId: 1, marketKey: "completions", displayConfidence: null }),
-    prop({ projectionId: 4, playerId: 1, marketKey: "pass_tds", displayConfidence: 0.71 }),
-  ]);
-
-  const player = groups[1].players[0];
-  assert.deepEqual(
-    player.props.map((p) => p.marketKey),
-    ["pass_tds", "pass_yards", "completions", "pass_attempts"],
-    "priced first by confidence, then the unpriced by market key",
-  );
-  assert.equal(player.unpricedCount, 2);
-});
-
-test("the market catalogue's order breaks ties among the unpriced", () => {
-  const marketOrder = new Map([
-    ["pass_yards", 1],
-    ["pass_attempts", 2],
-    ["completions", 3],
-  ]);
-  const groups = groupPropsByTeam(
-    game(),
-    [
-      prop({ projectionId: 1, playerId: 1, marketKey: "completions", displayConfidence: null }),
-      prop({ projectionId: 2, playerId: 1, marketKey: "pass_yards", displayConfidence: null }),
-      prop({ projectionId: 3, playerId: 1, marketKey: "pass_attempts", displayConfidence: null }),
-    ],
-    { marketOrder },
-  );
-
-  assert.deepEqual(
-    groups[1].players[0].props.map((p) => p.marketKey),
-    ["pass_yards", "pass_attempts", "completions"],
-    "without this the fallback is alphabetical, which is deterministic but arbitrary",
-  );
-});
-
-test("a market missing from the catalogue sorts last rather than first", () => {
-  // `?? MAX_SAFE_INTEGER` and not `?? 0`: a market the catalogue has not been
-  // told about should not jump to the top of every player's block.
-  const groups = groupPropsByTeam(
-    game(),
-    [
-      prop({ projectionId: 1, playerId: 1, marketKey: "unknown_market", displayConfidence: null }),
-      prop({ projectionId: 2, playerId: 1, marketKey: "pass_yards", displayConfidence: null }),
-    ],
-    { marketOrder: new Map([["pass_yards", 1]]) },
-  );
-
-  assert.deepEqual(
-    groups[1].players[0].props.map((p) => p.marketKey),
-    ["pass_yards", "unknown_market"],
-  );
-});
-
-test("ordering is stable when confidence ties", () => {
-  const groups = groupPropsByTeam(game(), [
-    prop({ projectionId: 1, playerId: 2, playerName: "Beta", positionGroup: "WR", displayConfidence: 0.6 }),
-    prop({ projectionId: 2, playerId: 1, playerName: "Alpha", positionGroup: "WR", displayConfidence: 0.6 }),
-  ]);
-  assert.deepEqual(
-    groups[1].players.map((p) => p.playerName),
-    ["Alpha", "Beta"],
-  );
 });

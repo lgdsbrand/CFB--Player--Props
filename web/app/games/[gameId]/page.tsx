@@ -5,7 +5,6 @@ import { TeamChip } from "@/components/board/team-chip";
 import { BookOddsPanel } from "@/components/games/book-odds-panel";
 import { MatchupGrid } from "@/components/games/matchup-grid";
 import { ModelLinePanel } from "@/components/games/model-line-panel";
-import { PropsTable } from "@/components/games/props-table";
 import { RecordsPanel } from "@/components/games/records-panel";
 import { WeatherPanel } from "@/components/games/weather-panel";
 import { NotConfigured } from "@/components/not-configured";
@@ -19,10 +18,7 @@ import {
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount, formatKickoff, formatVenue } from "@/lib/core/format";
-import { favourite, gameMatchups, groupPropsByTeam } from "@/lib/core/game-view";
-import { getBoardRows } from "@/lib/data/board";
-import { getMarkets } from "@/lib/data/catalogue";
-import { getAppConfig } from "@/lib/data/config";
+import { favourite, gameMatchups } from "@/lib/core/game-view";
 import { getDefenseRatings } from "@/lib/data/defense";
 import {
   getEarliestSeason,
@@ -35,20 +31,18 @@ import { getGame } from "@/lib/data/games";
 import { getGameConditions } from "@/lib/data/weather";
 
 /**
- * One game: the line, the position matchups, and every prop on both teams.
+ * One game: the line, the books' prices, the records, the conditions and the
+ * position matchups. The PROPS ARE NOT HERE.
  *
- * NO NEW DATABASE OBJECT BEHIND THIS PAGE. `v_board_rows` already carries the
- * spread, the total, both poll ranks and the venue on every row, because the
- * board card needed them — so a game view is a regrouping of rows that already
- * exist rather than a new read path. The index needed `v_slate_games` only
- * because counting rows per game is an aggregate.
+ * THEY USED TO BE, as one table per team, and the client asked for them off
+ * the page (2026-10-06): the board already lists a game's props with every
+ * filter, sort and card the tables lacked, so the tables were a second, weaker
+ * copy of it at the bottom of a page about the game. The page now leads with a
+ * button to that game on the board instead, and dropping the tables also
+ * dropped this page's largest read (up to 1,000 board rows).
  *
- * THE PROPS ARE UNFILTERED, unlike the board. The board defaults to the
- * displayed conferences because it is a list someone scans; this page is
- * already scoped to one game the reader chose, and hiding half of it because
- * the visiting team is Group of Five would be answering a question nobody
- * asked. The INDEX applies the conference scope, so the reader never arrives
- * here from a link that leads nowhere.
+ * The header still counts the game's props and calls, from `v_slate_games`,
+ * so a reader knows what is behind the button before pressing it.
  */
 
 export default async function GamePage({
@@ -77,10 +71,7 @@ export default async function GamePage({
   const boardParams = parseBoardParams(raw, { edgesOnlyDefault: false });
 
   const [
-    config,
-    markets,
     ratings,
-    page,
     conditions,
     bookOdds,
     seasonGames,
@@ -88,34 +79,7 @@ export default async function GamePage({
     earliestSeason,
     projections,
   ] = await Promise.all([
-    getAppConfig(),
-    // Only for the display order of a player's markets. Cached seed data, so
-    // this costs a map lookup rather than a round trip on most requests.
-    getMarkets(game.sport),
     getDefenseRatings(game.season, game.week, game.sport),
-    // Every row for this game across both teams: ~140 on the largest game so
-    // far, comfortably inside PostgREST's cap. `total` is checked below rather
-    // than assumed, because a truncated read is indistinguishable from a short
-    // one and the failure would be a team quietly missing players.
-    getBoardRows({
-      season: game.season,
-      week: game.week,
-      sport: game.sport,
-      gameId,
-      displayedConferencesOnly: false,
-      limit: 1000,
-      sort: "confidence",
-      // THIS TABLE IS A LIST OF CALLS — line, projection, side, confidence,
-      // edge. A first-quarter row publishes none of those (migration 0068), so
-      // it would sit here as a line beside four dashes, sorted by a confidence
-      // it does not have. The board offers the first-quarter list behind its
-      // own control; this page has no such control and should not half-show it.
-      //
-      // Filtered in the QUERY and not after it: this read is capped at 1,000
-      // rows and `truncated` is checked against the total, so dropping rows in
-      // the page would silently shrink a slate the cap had already cut.
-      publishesCallOnly: true,
-    }),
     // Joins the existing wave rather than forming its own. A wave costs one
     // round trip whatever its width, so this read is effectively free here and
     // would cost a full one as a fifth wait.
@@ -127,11 +91,7 @@ export default async function GamePage({
     getGameProjections([gameId]),
   ]);
 
-  const truncated = page.total > page.rows.length;
   const matchups = gameMatchups(game, ratings);
-  const teams = groupPropsByTeam(game, page.rows, {
-    marketOrder: new Map(markets.map((market) => [market.key, market.sortOrder])),
-  });
   const line = favourite(game);
   const venue = formatVenue({
     name: game.venueName,
@@ -139,10 +99,17 @@ export default async function GamePage({
     state: game.venueState,
   });
 
-  const colorsFor = (teamId: number) =>
-    teamId === game.homeTeamId
-      ? { color: game.homeColor, altColor: game.homeAltColor }
-      : { color: game.awayColor, altColor: game.awayAltColor };
+  const boardLink = boardHref(boardParams, {
+    season: game.season,
+    week: game.week,
+    // FROM THE GAME, NOT FROM `boardParams`. The index card links here as a
+    // bare `/games/<id>`, so `?sport=` is usually absent and
+    // `parseBoardParams` has already defaulted it to college — which would
+    // send a reader looking at an NFL game to the college board.
+    sport: game.sport,
+    game: gameId,
+    conference: undefined,
+  });
 
   return (
     <Shell sport={game.sport}>
@@ -206,6 +173,18 @@ export default async function GamePage({
 
         {venue ? <p className="text-dim text-xs">{venue}</p> : null}
 
+        {/* A game with no props gets no button. A link that opens an empty
+            board reads as a broken board, not as "nothing here yet". */}
+        {game.projections > 0 ? (
+          <Link href={boardLink} className="cta w-fit px-3 py-2">
+            See this game&rsquo;s props on the board →
+          </Link>
+        ) : (
+          <p className="text-muted text-xs">
+            No props for this game yet.
+          </p>
+        )}
+
         {/* Stated on the page, not just in a comment: whose numbers these
             are. The game model (CLAUDE.md §11) did not beat closing lines in
             its backtest, so its numbers sit in their own labelled panel below
@@ -255,41 +234,6 @@ export default async function GamePage({
 
       <MatchupGrid matchups={matchups} />
 
-      {truncated ? (
-        <p className="border-negative/40 bg-negative/5 text-muted rounded-xl border px-3 py-2 text-xs">
-          <span className="text-negative font-bold uppercase tracking-label">
-            Partial game
-          </span>{" "}
-          — this game has {formatCount(page.total)} rows and only{" "}
-          {formatCount(page.rows.length)} were read, so some players are missing.
-        </p>
-      ) : null}
-
-      {teams.map((team) => (
-        <PropsTable
-          key={team.teamId}
-          team={team}
-          colors={colorsFor(team.teamId)}
-          edgeThreshold={config.edgeThreshold}
-        />
-      ))}
-
-      <Link
-        href={boardHref(boardParams, {
-          season: game.season,
-          week: game.week,
-          // FROM THE GAME, NOT FROM `boardParams`. The index card links here as
-          // a bare `/games/<id>`, so `?sport=` is usually absent and
-          // `parseBoardParams` has already defaulted it to college — which
-          // would send a reader looking at an NFL game to the college board.
-          sport: game.sport,
-          game: gameId,
-          conference: undefined,
-        })}
-        className="cta w-fit px-3 py-2"
-      >
-        Open this game on the board →
-      </Link>
     </Shell>
   );
 }

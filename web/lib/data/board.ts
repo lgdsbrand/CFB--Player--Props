@@ -61,8 +61,10 @@ export type BoardFilters = {
    */
   marketKeys?: string[];
   positionGroup?: PositionGroup;
-  gameId?: number;
-  /** Restrict to these games — how the day filter is expressed. */
+  /**
+   * Restrict to these games: the board's game picker, the day strip, or both
+   * at once (the page intersects them before they get here).
+   */
   gameIds?: number[];
   /** Case-insensitive substring on the player's name. */
   search?: string;
@@ -203,7 +205,6 @@ function buildBoardQuery(
   if (filters.positionGroup) {
     query = query.eq("position_group", filters.positionGroup);
   }
-  if (filters.gameId) query = query.eq("game_id", filters.gameId);
   // One day of the slate, expressed as the games played on it. Resolved to ids
   // by `slateDays` rather than to a timestamp range, because the day boundary
   // is an Eastern calendar day and a late kickoff crosses midnight UTC — see

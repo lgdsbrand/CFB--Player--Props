@@ -107,7 +107,7 @@ export default async function GamePage({
     // `parseBoardParams` has already defaulted it to college — which would
     // send a reader looking at an NFL game to the college board.
     sport: game.sport,
-    game: gameId,
+    games: [gameId],
     conference: undefined,
   });
 

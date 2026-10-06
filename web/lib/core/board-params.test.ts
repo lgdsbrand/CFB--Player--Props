@@ -46,7 +46,9 @@ const FULLY_FILTERED: BoardParams = {
   week: 8,
   position: "WR",
   market: "receptions",
-  game: 401,
+  // Two, not one: a list that only ever round-trips a single id would pass
+  // while the comma-joining was broken.
+  games: [401, 455],
   day: "2025-10-18",
   conference: "SEC",
   search: "John",
@@ -86,7 +88,7 @@ test("reset clears every filter a reader can see", () => {
 
   assert.equal(params.position, undefined);
   assert.equal(params.market, undefined);
-  assert.equal(params.game, undefined);
+  assert.equal(params.games, undefined);
   assert.equal(params.conference, undefined);
   assert.equal(params.search, undefined);
   assert.equal(params.minConfidence, undefined);
@@ -489,4 +491,52 @@ test("choosing Both takes side out of the URL", () => {
 
 test("a board link is recognised by its side alone", () => {
   assert.equal(boardParamsPresent({ side: "over" }), true);
+});
+
+// -----------------------------------------------------------------------------
+// Several games at once (client, 2026-10-06)
+// -----------------------------------------------------------------------------
+
+test("a single-game link from before the change still parses", () => {
+  // The game page's button, the weekly targets and any link already shared.
+  assert.deepEqual(parseBoardParams({ game: "6877" }).games, [6877]);
+});
+
+test("games are read comma-separated, repeated, or both", () => {
+  assert.deepEqual(parseBoardParams({ game: "6880,6877" }).games, [6877, 6880]);
+  // What the board's GET form submits before its script has loaded.
+  assert.deepEqual(parseBoardParams({ game: ["6880", "6877"] }).games, [6877, 6880]);
+  assert.deepEqual(parseBoardParams({ game: ["6880,6877", "6900"] }).games, [
+    6877, 6880, 6900,
+  ]);
+});
+
+test("a picked game is listed once, and unreadable ids are dropped", () => {
+  assert.deepEqual(parseBoardParams({ game: "6877,6877,abc,-4,,0" }).games, [6877]);
+  // Nothing readable is NO filter, not a filter matching no game.
+  assert.equal(parseBoardParams({ game: "abc" }).games, undefined);
+  assert.equal(parseBoardParams({ game: "" }).games, undefined);
+});
+
+test("the URL writes picked games as one readable comma list", () => {
+  const href = boardHref(parseBoardParams({ season: "2026", week: "6" }), {
+    games: [6880, 6877],
+  });
+  // Sorted, so one selection is one address whatever order it was ticked in.
+  assert.ok(href.includes("game=6877,6880"), href);
+  assert.ok(!href.includes("%2C"), href);
+});
+
+test("choosing All games takes the parameter out of the URL", () => {
+  const picked = parseBoardParams({ season: "2026", week: "6", game: "6877,6880" });
+  assert.ok(!boardHref(picked, { games: undefined }).includes("game="));
+  assert.ok(!boardHref(picked, { games: [] }).includes("game="));
+});
+
+test("a search containing a comma survives the readable-comma rewrite", () => {
+  const href = boardHref(parseBoardParams({}), { search: "Smith, Jr." });
+  const back = parseBoardParams(
+    Object.fromEntries(new URLSearchParams(href.split("?")[1] ?? "")),
+  );
+  assert.equal(back.search, "Smith, Jr.");
 });

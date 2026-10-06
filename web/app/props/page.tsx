@@ -178,7 +178,7 @@ export default async function Home({
         week: active.week,
         marketKey: resolved.market,
         positionGroup: resolved.position,
-        gameId: resolved.game,
+        gameIds: resolved.games,
         conferenceName: resolved.conference,
         rankedOnly: resolved.rankedOnly,
         // Every first-quarter row has a NULL side (migration 0068), so a side
@@ -232,9 +232,19 @@ export default async function Home({
   const days = slateDays(live);
   const activeDay = findSlateDay(days, resolved.day);
   const dayParams = { ...resolved, day: activeDay?.key };
-  // The day strip is a filter, so a preset does not carry one.
+  // The day strip is a filter, so a preset does not carry one. A day and a
+  // set of picked games together mean the picked games ON that day: an
+  // intersection, which may be empty, and an empty list is a real filter
+  // meaning "no games" (see `BoardFilters.gameIds`), not "no filter".
   const boardFilters: BoardFilters =
-    activeDay && !preset ? { ...filters, gameIds: activeDay.gameIds } : filters;
+    activeDay && !preset
+      ? {
+          ...filters,
+          gameIds: filters.gameIds
+            ? activeDay.gameIds.filter((id) => filters.gameIds!.includes(id))
+            : activeDay.gameIds,
+        }
+      : filters;
 
   // THE TWO LAYOUTS PAGE DIFFERENT THINGS, and that is why the fetch branches
   // rather than one path feeding both. A card is one player holding every

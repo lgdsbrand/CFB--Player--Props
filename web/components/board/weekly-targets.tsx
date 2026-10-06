@@ -173,7 +173,7 @@ function TargetLine({
     <li>
       <Link
         href={boardHref(params, {
-          game: row.gameId,
+          games: [row.gameId],
           position: entry.position,
           page: 1,
         })}

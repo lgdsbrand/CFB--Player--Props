@@ -133,7 +133,20 @@ export type BoardParams = {
   week?: number;
   position?: PositionGroup;
   market?: string;
-  game?: number;
+  /**
+   * Restrict to these games. Undefined is every game.
+   *
+   * A LIST SINCE 2026-10-06 — the client asked to pick several games at once.
+   * The URL key is still `game`, written as one comma-separated value
+   * (`game=6877,6880`), so a single-game link from before the change, from the
+   * game page or from the weekly targets parses unchanged. Repeated keys
+   * (`game=1&game=2`) are read too: that is what the board's GET form submits
+   * before its script has loaded.
+   *
+   * Renamed from `game` so every call site had to be looked at rather than
+   * quietly passing a number where a list is now expected.
+   */
+  games?: number[];
   /**
    * One day of the slate week, `YYYY-MM-DD` in `SLATE_TIME_ZONE`.
    *
@@ -310,6 +323,21 @@ function int(raw: string | string[] | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+/**
+ * Every positive integer in a parameter that may be repeated, comma-separated,
+ * or both. Sorted and de-duplicated, so the same selection is always the same
+ * URL. Anything unreadable is dropped rather than failing the whole list.
+ */
+function intList(raw: string | string[] | undefined): number[] | undefined {
+  const values = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
+  const ids = values
+    .flatMap((value) => value.split(","))
+    .map((value) => Number.parseInt(value.trim(), 10))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  const unique = [...new Set(ids)].sort((a, b) => a - b);
+  return unique.length > 0 ? unique : undefined;
+}
+
 function float(raw: string | string[] | undefined): number | undefined {
   const value = first(raw);
   if (value === undefined) return undefined;
@@ -343,7 +371,7 @@ export function parseBoardParams(
     position:
       position && POSITION_GROUPS.includes(position) ? position : undefined,
     market: first(raw.market),
-    game: int(raw.game),
+    games: intList(raw.game),
     day: first(raw.day),
     conference: first(raw.conference),
     rankedOnly: first(raw.top25) === "1",
@@ -461,7 +489,11 @@ export function boardHref(
   set("week", next.week);
   set("position", next.position);
   set("market", next.market);
-  set("game", next.game);
+  // Sorted here as well as in the parser, so one selection is one address
+  // whichever order it was ticked in.
+  if (next.games && next.games.length > 0) {
+    set("game", [...next.games].sort((x, y) => x - y).join(","));
+  }
   set("day", next.day);
   set("conference", next.conference);
   set("q", next.search);
@@ -482,7 +514,10 @@ export function boardHref(
   set("preset", next.preset);
   if (next.page > 1) set("page", next.page);
 
-  const query = search.toString();
+  // Commas left readable: `game=6877,6880`, not `game=6877%2C6880`. A comma is
+  // legal in a query string and decodes to itself, so this changes how a
+  // shared link looks and nothing about how it parses.
+  const query = search.toString().replace(/%2C/gi, ",");
   return query ? `${basePath}?${query}` : basePath;
 }
 

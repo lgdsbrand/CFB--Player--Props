@@ -84,8 +84,9 @@ export type BoardFilters = {
 
   /**
    * Restrict to the conferences marked for display. Defaults to true: the
-   * board is scoped to the five conferences in CLAUDE.md §7, while ingest
-   * deliberately covers all FBS. Pass false to see everything ingested.
+   * board is scoped to the displayed conferences (every current FBS
+   * conference since migration 0081), while ingest also holds FCS opponents.
+   * Pass false to see everything ingested.
    */
   displayedConferencesOnly?: boolean;
   conferenceName?: string;

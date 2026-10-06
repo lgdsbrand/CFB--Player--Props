@@ -111,6 +111,14 @@ runtime `sport` dimension; the two-layer discipline it describes is unchanged.)*
 - **Displayed conferences:** SEC, Big Ten, Big 12, ACC, American. (The Pac-12 is
   largely dissolved post-realignment; handle whatever teams remain gracefully rather
   than assuming a fixed six.)
+
+  > **Amended 2026-10-06 — all FBS is displayed.** The client reported a midweek
+  > game missing from the board: Southern Miss @ Troy (Sun Belt) had props in the
+  > database and was hidden only by the display filter. The Tuesday–Thursday slate
+  > is almost all Group of Five. At his request, migration 0081 also displays Sun
+  > Belt, Conference USA, Mid-American, Mountain West, Pac-12 and FBS Independents.
+  > It is still a display filter only, set per row in `conferences.is_displayed`;
+  > CFBD's historical FBS conferences and FCS and below stay off.
 - **Pull:** player game stats, play-by-play, team game results, rosters, betting
   lines where available, and venue/weather. Use CFBD's weather where present;
   Open-Meteo is an acceptable fallback for outdoor venues.

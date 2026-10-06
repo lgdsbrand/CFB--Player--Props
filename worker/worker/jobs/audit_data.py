@@ -758,12 +758,14 @@ check(G, "every NFL defense has ratings at the final cutoff", """
      where r.season=2025 and r.position_group='RB'
 """, lambda r: r["teams"] == 32, ["teams"])
 
-# PER SPORT. Five is the college list (CLAUDE.md §4); the NFL's two are the
-# whole league rather than a filter across it, so an unscoped count of 7 is two
-# different decisions added together.
+# PER SPORT. Eleven is the college list: the five in CLAUDE.md §4 plus the five
+# Group of Five conferences and FBS Independents the client added on 2026-10-06
+# (migration 0081). The NFL's two are the whole league rather than a filter
+# across it, so an unscoped count of 13 is two different decisions added
+# together.
 check(G, "displayed conferences still flagged", """
     select count(*) as n from conferences where is_displayed and sport = 'cfb'
-""", lambda r: r["n"] == 5)
+""", lambda r: r["n"] == 11)
 
 check(G, "both NFL conferences are displayed", """
     select count(*) as n from conferences where is_displayed and sport = 'nfl'

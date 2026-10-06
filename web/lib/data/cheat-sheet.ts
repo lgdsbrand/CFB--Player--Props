@@ -65,6 +65,13 @@ export type CheatSheetFilters = {
   windowSize: number;
   sport?: Sport;
   positionGroup?: PositionGroup;
+  /**
+   * Only streaks on this side of the line — the Over / Under switch. It is
+   * the STREAK's side (`hit_side`), the one the entry prints, not the model's.
+   * Yes/no markets only ever list on the over side here, so Under already
+   * leaves out anytime TD without a second predicate.
+   */
+  side?: BetSide;
   /** The floor to read at. Defaults to the lowest tier the page shows. */
   minHitRate?: number;
   /** Hide entries whose game has kicked off. See `lib/core/kickoff.ts`. */
@@ -106,6 +113,7 @@ export async function getCheatSheet(
   if (filters.positionGroup) {
     query = query.eq("position_group", filters.positionGroup);
   }
+  if (filters.side) query = query.eq("hit_side", filters.side);
 
   // Mirrors `compareRows` in the core. The two must agree: this decides which
   // rows survive the limit, and that one decides the order they are shown in.

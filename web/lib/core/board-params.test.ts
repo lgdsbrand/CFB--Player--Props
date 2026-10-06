@@ -53,6 +53,10 @@ const FULLY_FILTERED: BoardParams = {
   sort: "confidence",
   edgesOnly: true,
   rankedOnly: true,
+  // Under, not over: either is non-default, but under is the side whose
+  // query differs (it also drops the yes/no markets), so it is the one worth
+  // carrying through every round trip.
+  side: "under",
   minConfidence: 0.65,
   minOpponentRank: 110,
   hitRateWindow: 10,
@@ -91,6 +95,9 @@ test("reset clears every filter a reader can see", () => {
   // configured default to return to — leaving it on would mean a reset board
   // still hid 90% of the slate while every visible control read "off".
   assert.equal(params.rankedOnly, false);
+  // SIDE IS A FILTER: a reset board left on Under would hide every over and
+  // every unpriced prop while the switch's pills were the only clue.
+  assert.equal(params.side, undefined);
   assert.equal(params.sort, "edge");
   assert.equal(params.hitRateWindow, DEFAULT_HIT_RATE_WINDOW);
   // RESET RETURNS THE LAYOUT TO "not chosen", not to a named one. The default
@@ -458,4 +465,28 @@ test("gamesHref and scopedHref agree", () => {
       scopedHref("/games", { sport, season: 2026, week: 4 }),
     );
   }
+});
+
+// -----------------------------------------------------------------------------
+// Side (Over / Under / Both)
+// -----------------------------------------------------------------------------
+
+test("side parses over and under, and anything else is both", () => {
+  assert.equal(parseBoardParams({ side: "over" }).side, "over");
+  assert.equal(parseBoardParams({ side: "under" }).side, "under");
+  // Both is the ABSENCE of the filter. A literal `side=both`, a typo or a
+  // hand-edited value must not reach the query as a side matching no row.
+  assert.equal(parseBoardParams({ side: "both" }).side, undefined);
+  assert.equal(parseBoardParams({ side: "OVER" }).side, undefined);
+  assert.equal(parseBoardParams({}).side, undefined);
+});
+
+test("choosing Both takes side out of the URL", () => {
+  const over = parseBoardParams({ season: "2026", week: "6", side: "over" });
+  const href = boardHref(over, { side: undefined });
+  assert.ok(!href.includes("side="), href);
+});
+
+test("a board link is recognised by its side alone", () => {
+  assert.equal(boardParamsPresent({ side: "over" }), true);
 });

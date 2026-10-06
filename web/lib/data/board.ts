@@ -60,21 +60,6 @@ export type BoardFilters = {
    * the same as omitting this, which means no restriction at all.
    */
   marketKeys?: string[];
-  /**
-   * Only markets this product actually states something about.
-   *
-   * THE SAME QUESTION AS A SCOPE, ASKED WITHOUT THE CATALOGUE. `marketKeys`
-   * needs the market list in hand, which a page fetching the catalogue in the
-   * same wave as its rows does not have yet. `v_board_rows.publishes_call`
-   * (migration 0068) answers it inside the query, so a caller whose table IS a
-   * list of calls — the game page's props table — can say so in one predicate
-   * and without a second round trip.
-   *
-   * Not the same predicate as the board's scope, deliberately: the board splits
-   * on what a market IS (a segment of another one), this splits on what it
-   * CLAIMS. They coincide today and are free to stop.
-   */
-  publishesCallOnly?: boolean;
   positionGroup?: PositionGroup;
   gameId?: number;
   /** Restrict to these games — how the day filter is expressed. */
@@ -92,6 +77,13 @@ export type BoardFilters = {
   conferenceName?: string;
   /** Only players whose own team carries an AP Top 25 rank that week. */
   rankedOnly?: boolean;
+  /**
+   * Only calls on this side of the line — the Over / Under switch. See
+   * `BoardParams.side` for why a row with no line drops out and why Under
+   * leaves out the yes/no markets. Applied by `applySide`, which the card
+   * read shares.
+   */
+  side?: BetSide;
 
   /** Only rows whose edge clears the threshold — the EDGES ONLY toggle. */
   edgesOnly?: boolean;
@@ -207,7 +199,6 @@ function buildBoardQuery(
   // selected market is always one the scope already admits, so the pair can
   // only ever narrow, never contradict.
   if (filters.marketKeys) query = query.in("market_key", filters.marketKeys);
-  if (filters.publishesCallOnly) query = query.eq("publishes_call", true);
   if (filters.marketKey) query = query.eq("market_key", filters.marketKey);
   if (filters.positionGroup) {
     query = query.eq("position_group", filters.positionGroup);
@@ -251,6 +242,8 @@ function buildBoardQuery(
     query = query.not("team_poll_rank", "is", null);
   }
 
+  query = applySide(query, filters.side);
+
   if (filters.edgesOnly) {
     // A null edge means "no edge computable", not "below threshold" — gte on a
     // null column already excludes those rows, which is the behaviour we want.
@@ -272,6 +265,23 @@ function buildBoardQuery(
 }
 
 type BoardQuery = ReturnType<typeof buildBoardQuery>;
+
+/**
+ * The Over / Under switch as predicates, shared by the row read and the card
+ * read so the two cannot disagree about which sub-cards a side admits.
+ *
+ * `eq` on `side` already drops rows with no call: a NULL side matches
+ * neither value. Under also drops the yes/no markets — an anytime-TD "under"
+ * is the model declining the market, not a bet a book offers.
+ */
+function applySide<Q extends { eq: (column: string, value: unknown) => Q }>(
+  query: Q,
+  side: BetSide | undefined,
+): Q {
+  if (!side) return query;
+  const sided = query.eq("side", side);
+  return side === "under" ? sided.eq("is_binary", false) : sided;
+}
 
 /**
  * Apply the sort switch (CLAUDE.md §7).
@@ -497,7 +507,7 @@ export async function getRowsForCards(
   keys: CardKey[],
   filters: Pick<
     BoardFilters,
-    "season" | "week" | "marketKey" | "marketKeys" | "positionGroup"
+    "season" | "week" | "marketKey" | "marketKeys" | "positionGroup" | "side"
   >,
 ): Promise<BoardRow[]> {
   if (keys.length === 0) return [];
@@ -522,6 +532,10 @@ export async function getRowsForCards(
   if (filters.positionGroup) {
     query = query.eq("position_group", filters.positionGroup);
   }
+  // SIDE DECIDES SUB-CARDS, like market and unlike edge or confidence. A
+  // reader who chose Over and opened a card showing that player's unders
+  // would read the switch as broken, not as "his other markets".
+  query = applySide(query, filters.side);
 
   const rows = unwrap<DbRow[]>(
     await query.order("market_key"),

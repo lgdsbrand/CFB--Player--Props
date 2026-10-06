@@ -20,7 +20,7 @@ import {
 } from "@/lib/core/cheat-sheet";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount } from "@/lib/core/format";
-import { POSITION_GROUPS, type PositionGroup } from "@/lib/core/types";
+import { POSITION_GROUPS, type BetSide, type PositionGroup } from "@/lib/core/types";
 import { kickoffCutoff } from "@/lib/core/kickoff";
 import {
   DEFAULT_SPORT,
@@ -101,6 +101,7 @@ export default async function CheatSheets({
     week: active.week,
     windowSize,
     positionGroup: params.position,
+    side: params.side,
     kickoffCutoff: cutoff,
   });
 
@@ -119,16 +120,20 @@ export default async function CheatSheets({
   // alone, so choosing a window or a position on the NFL sheet opened the
   // college one (found 2026-09-11 beside a reported week-strip bug).
   const scope = { sport, season: active.season, week: active.week };
+  // `null` clears a filter; `undefined` keeps whatever the URL carries.
   const href = (changes: {
     window?: number;
     position?: PositionGroup | null;
+    side?: BetSide | null;
   }) => {
     const nextWindow = changes.window ?? windowSize;
     const nextPosition =
       changes.position === undefined ? params.position : changes.position;
+    const nextSide = changes.side === undefined ? params.side : changes.side;
     return scopedHref("/cheat-sheets", scope, {
       window: nextWindow !== DEFAULT_CHEAT_WINDOW ? nextWindow : undefined,
       position: nextPosition,
+      side: nextSide,
     });
   };
   // Every mention of "the board" on this page, pointed at the same slate.
@@ -168,6 +173,27 @@ export default async function CheatSheets({
               label={position}
             />
           ))}
+        </div>
+
+        {/* The STREAK's side — the side each entry prints — not the model's.
+            Anytime TD only ever lists as "scored", so Under has none. */}
+        <div className="flex items-center gap-2">
+          <span className="label-caption">Side</span>
+          <Pill
+            href={href({ side: null })}
+            active={params.side === undefined}
+            label="Both"
+          />
+          <Pill
+            href={href({ side: "over" })}
+            active={params.side === "over"}
+            label="Over"
+          />
+          <Pill
+            href={href({ side: "under" })}
+            active={params.side === "under"}
+            label="Under"
+          />
         </div>
       </div>
 
@@ -218,7 +244,8 @@ export default async function CheatSheets({
           week={active.week}
           windowSize={windowSize}
           position={params.position}
-          clearedHref={href({ position: null })}
+          side={params.side}
+          clearedHref={href({ position: null, side: null })}
           boardLink={boardLink}
           sport={sport}
         />
@@ -289,6 +316,7 @@ function EmptySheet({
   week,
   windowSize,
   position,
+  side,
   clearedHref,
   boardLink,
   sport,
@@ -298,6 +326,7 @@ function EmptySheet({
   week: number;
   windowSize: number;
   position: PositionGroup | undefined;
+  side: BetSide | undefined;
   clearedHref: string;
   /** The board for THIS sheet's league and week — never a bare `BOARD_PATH`. */
   boardLink: string;
@@ -370,13 +399,14 @@ function EmptySheet({
     <div className="panel p-6">
       <h2 className="section-header mb-2">Nothing clears the bar</h2>
       <p className="text-muted max-w-prose text-sm">
-        No prop{position ? ` at ${position}` : ""} on this slate has hit 80% or
+        No {side ? `${side} ` : ""}prop{position ? ` at ${position}` : ""} on
+        this slate has hit 80% or
         better over its last {windowSize} games with at least{" "}
         {minDecidedFor(windowSize)} decided. That is an ordinary week, not a
         fault.{" "}
-        {position ? (
+        {position || side ? (
           <Link href={clearedHref} className="text-accent-cyan hover:underline">
-            Try every position
+            {side ? "Clear the filters" : "Try every position"}
           </Link>
         ) : (
           <>Try the other window.</>

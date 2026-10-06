@@ -181,6 +181,9 @@ export default async function Home({
         gameId: resolved.game,
         conferenceName: resolved.conference,
         rankedOnly: resolved.rankedOnly,
+        // Every first-quarter row has a NULL side (migration 0068), so a side
+        // would empty that board. The control is not offered there either.
+        side: showsCalls ? resolved.side : undefined,
         search: resolved.search,
         // BOTH OF THESE WOULD EMPTY THE FIRST-QUARTER BOARD, and silently.
         // `edge` and `display_confidence` are NULL for a market that publishes

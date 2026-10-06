@@ -16,7 +16,7 @@ import type { BoardSort } from "@/lib/data/board";
 // Relative, not aliased: `POSITION_GROUPS` is a VALUE, so it survives type
 // stripping and the test runner has to resolve it for real. Type-only imports
 // above can keep the alias because they are erased before Node sees them.
-import { POSITION_GROUPS, type PositionGroup } from "./types.ts";
+import { POSITION_GROUPS, type BetSide, type PositionGroup } from "./types.ts";
 import { DEFAULT_SPORT, resolveSport, type Sport } from "./sport.ts";
 import {
   FIRST_QUARTER_SCOPE,
@@ -153,6 +153,19 @@ export type BoardParams = {
    * with the opponent-rank control instead.
    */
   rankedOnly: boolean;
+  /**
+   * Only calls on this side of the line. Undefined is "both".
+   *
+   * The client's ask (2026-10-06): an Over / Under / Both switch. It filters
+   * the CALL's side, so a prop no book has priced yet — most of a college
+   * week before Thursday (CLAUDE.md §7) — has no side and drops out when one
+   * is chosen. The board says so beside the control.
+   *
+   * UNDER LEAVES OUT THE YES/NO MARKETS. An anytime-TD "under" is "he will not
+   * score", which books do not offer as a bet; on the board it is the model
+   * declining the market, not a play. Over keeps them: "scores" is the bet.
+   */
+  side?: BetSide;
   search?: string;
   sort: BoardSort;
   edgesOnly: boolean;
@@ -207,7 +220,7 @@ const BOARD_PARAM_KEYS = [
   "sport",
   "scope",
   "season", "week", "position", "market", "game", "day", "conference", "q",
-  "sort", "edges", "top25", "conf", "rank", "window", "venue", "view",
+  "sort", "edges", "top25", "side", "conf", "rank", "window", "venue", "view",
   "preset", "page",
 ] as const;
 
@@ -320,6 +333,7 @@ export function parseBoardParams(
   const edgesOnly = first(raw.edges);
   const view = first(raw.view);
   const preset = first(raw.preset);
+  const side = first(raw.side);
 
   return {
     sport: resolveSport(raw.sport),
@@ -333,6 +347,7 @@ export function parseBoardParams(
     day: first(raw.day),
     conference: first(raw.conference),
     rankedOnly: first(raw.top25) === "1",
+    side: side === "over" || side === "under" ? side : undefined,
     search: first(raw.q),
     sort:
       sort === "confidence" || sort === "opponent_rank" || sort === "edge"
@@ -453,6 +468,7 @@ export function boardHref(
   if (next.sort !== "edge") set("sort", next.sort);
   if (next.edgesOnly) set("edges", "1");
   if (next.rankedOnly) set("top25", "1");
+  set("side", next.side);
   set("conf", next.minConfidence);
   set("rank", next.minOpponentRank);
   if (next.hitRateWindow !== DEFAULT_HIT_RATE_WINDOW) {

@@ -211,6 +211,34 @@ export function BoardControls({
           </span>
         )}
 
+        {/*
+          OVER / UNDER / BOTH (client, 2026-10-06). Only where markets publish
+          a call: a first-quarter row has no side, so the switch would empty
+          that board. "Both" is the absence of the filter, not a third value.
+        */}
+        {showsCalls ? (
+          <PillGroup label="Side">
+            <PillLink
+              href={boardHref(params, { side: undefined })}
+              active={params.side === undefined}
+            >
+              Both
+            </PillLink>
+            <PillLink
+              href={boardHref(params, { side: "over" })}
+              active={params.side === "over"}
+            >
+              Over
+            </PillLink>
+            <PillLink
+              href={boardHref(params, { side: "under" })}
+              active={params.side === "under"}
+            >
+              Under
+            </PillLink>
+          </PillGroup>
+        ) : null}
+
         <PillGroup label="Hit rate">
           {hitRateWindows.map((window) => (
             <PillLink
@@ -319,6 +347,18 @@ export function BoardControls({
           {resultCount === 1 ? "" : "s"}
         </span>
       </div>
+
+      {/* Said where the reader is looking when the count drops. Early in a
+          college week most props have no book line, so "Over" can shrink the
+          board by two thirds without anything being wrong. */}
+      {showsCalls && params.side ? (
+        <p className="text-dim text-[0.6875rem]">
+          {params.side === "over" ? "Over" : "Under"} shows calls on props a book
+          has priced. A prop with no line yet has no side, so it is hidden until
+          one is posted
+          {params.side === "under" ? "; anytime TD has no under" : ""}.
+        </p>
+      ) : null}
 
       <FilterFields
         params={params}

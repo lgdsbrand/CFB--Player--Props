@@ -46,7 +46,9 @@
  * (CLAUDE.md §6); nothing here is evidence of value, and the page says so.
  */
 
-import type { BetSide, PositionGroup } from "@/lib/core/types";
+import type { BetSide, Market, PositionGroup } from "@/lib/core/types";
+// Relative, with the extension: a VALUE import the test runner must resolve.
+import { marketsInScope } from "./market-scope.ts";
 
 /** One graded prop, at one hit-rate window. */
 export type CheatSheetRow = {
@@ -146,6 +148,66 @@ export const CHEAT_TIERS: readonly CheatTier[] = [
     blurb: "Four in five or better, but not a clean sweep.",
   },
 ] as const;
+
+export type CheatTierKey = CheatTier["key"];
+
+/**
+ * The tier selector's URL values (client, 2026-10-06): All / 80% / 100%.
+ *
+ * ALL IS THE ABSENCE OF THE PARAMETER, and the two values pick ONE of the
+ * exclusive sections: `100` is Perfect, `80` is "80% and up" — four in five
+ * or better but not a sweep. That is the reading the user chose, so each
+ * button shows something different. "80%" meaning "80 and above" would make
+ * it identical to All, because nothing below 80% ever reaches the sheet.
+ */
+export const CHEAT_TIER_PARAM: Record<CheatTierKey, string> = {
+  perfect: "100",
+  strong: "80",
+};
+
+/** `tier=100` / `tier=80` to a tier; anything else is All. */
+export function resolveCheatTier(raw: string | undefined): CheatTierKey | undefined {
+  if (raw === CHEAT_TIER_PARAM.perfect) return "perfect";
+  if (raw === CHEAT_TIER_PARAM.strong) return "strong";
+  return undefined;
+}
+
+/**
+ * The hit-rate band a tier covers, for the QUERY.
+ *
+ * Applied in the database, not by dropping a section after the fact: the read
+ * is capped, and on a week with hundreds of perfect anytime-TD streaks the
+ * 80% list would otherwise be whatever the cap left over. `below` is the next
+ * tier's floor, exclusive, which is what keeps the band and `cheatSections`
+ * in agreement about where a row belongs.
+ */
+export function tierBand(key: CheatTierKey): { min: number; below?: number } {
+  const index = CHEAT_TIERS.findIndex((tier) => tier.key === key);
+  return {
+    min: CHEAT_TIERS[index].min,
+    below: index > 0 ? CHEAT_TIERS[index - 1].min : undefined,
+  };
+}
+
+/**
+ * The markets the sheet's dropdown offers.
+ *
+ * Full-game markets that publish a call: the sheet grades a player against
+ * the line showing on the board, and a first-quarter market is neither on the
+ * full board nor graded here. Narrowed to a position the way the board's
+ * market pills are, so the dropdown cannot offer pass yards with WR chosen.
+ * In catalogue order, which is the order the board uses.
+ */
+export function cheatSheetMarkets(
+  markets: Market[],
+  position: PositionGroup | undefined,
+): Market[] {
+  return marketsInScope(markets, "full").filter(
+    (market) =>
+      market.publishesCall &&
+      (position === undefined || market.positions.includes(position)),
+  );
+}
 
 /**
  * Whether a row belongs on the sheet at all.

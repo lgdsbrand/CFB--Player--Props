@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { SheetRow } from "@/components/cheat-sheet/sheet-row";
+import { NavSelect } from "@/components/nav-select";
 import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
 import { WeekStrip } from "@/components/week-strip";
@@ -11,12 +12,17 @@ import {
   type RawParams,
 } from "@/lib/core/board-params";
 import {
+  CHEAT_TIER_PARAM,
   CHEAT_WINDOWS,
   DEFAULT_CHEAT_WINDOW,
   cheatSections,
+  cheatSheetMarkets,
   emptyReason,
   minDecidedFor,
+  resolveCheatTier,
+  tierBand,
   type CheatSection,
+  type CheatTierKey,
 } from "@/lib/core/cheat-sheet";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount } from "@/lib/core/format";
@@ -28,6 +34,7 @@ import {
   SPORT_LABEL,
   type Sport,
 } from "@/lib/core/sport";
+import { getMarkets } from "@/lib/data/catalogue";
 import { getCheatSheet, getCheatSheetContext } from "@/lib/data/cheat-sheet";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
 
@@ -35,7 +42,9 @@ import { findWeek, getSlateWeeks } from "@/lib/data/slate";
  * Cheat Sheets — props whose recent games have already cleared today's line.
  *
  * The client asked for "a 80% & 100% hit rate list of all props that have hit
- * for those percentages". Two lists, exactly that.
+ * for those percentages". Two lists, exactly that. On 2026-10-06 he asked for
+ * a selector between them (All / 80% / 100%) and a market dropdown; both are
+ * database predicates, because the read is capped.
  *
  * WHAT IT IS AND IS NOT, stated on the page as well as here. A hit rate is a
  * fact about games ALREADY PLAYED, graded against the line the book is showing
@@ -69,8 +78,23 @@ export default async function CheatSheets({
   // same thing here and are validated the same way; a parallel parser is how
   // two surfaces come to disagree about what `position=WR` selects.
   const params = parseBoardParams(raw, { edgesOnlyDefault: false });
-  const weeks = await getSlateWeeks(sport);
+  // Both cached reads, so one wave rather than two round trips.
+  const [weeks, markets] = await Promise.all([
+    getSlateWeeks(sport),
+    getMarkets(sport),
+  ]);
   const active = findWeek(weeks, params.season, params.week);
+  const tier = resolveCheatTier(
+    Array.isArray(raw.tier) ? raw.tier[0] : raw.tier,
+  );
+  const band = tier ? tierBand(tier) : undefined;
+  // A market the dropdown would not offer -- the other sport's, a first-quarter
+  // one, or one the chosen position does not have -- degrades to every market
+  // rather than to an empty sheet, the same rule the board follows.
+  const marketOptions = cheatSheetMarkets(markets, params.position);
+  const market = marketOptions.some((m) => m.key === params.market)
+    ? params.market
+    : undefined;
 
   if (!active) {
     return (
@@ -102,10 +126,17 @@ export default async function CheatSheets({
     windowSize,
     positionGroup: params.position,
     side: params.side,
+    marketKey: market,
+    minHitRate: band?.min,
+    belowHitRate: band?.below,
     kickoffCutoff: cutoff,
   });
 
-  const sections = cheatSections(page.rows);
+  // With a tier chosen the read already holds only that band, so the other
+  // section would be empty; it is left out rather than shown as "0".
+  const sections = cheatSections(page.rows).filter(
+    (section) => tier === undefined || section.tier.key === tier,
+  );
   const empty = page.rows.length === 0;
 
   // Only when there is nothing to show. Each of these counts is another full
@@ -125,17 +156,38 @@ export default async function CheatSheets({
     window?: number;
     position?: PositionGroup | null;
     side?: BetSide | null;
+    tier?: CheatTierKey | null;
+    market?: string | null;
   }) => {
     const nextWindow = changes.window ?? windowSize;
     const nextPosition =
       changes.position === undefined ? params.position : changes.position;
     const nextSide = changes.side === undefined ? params.side : changes.side;
+    const nextTier = changes.tier === undefined ? tier : changes.tier;
+    // Switching position drops a market that position does not have, as the
+    // board does; otherwise the pill would open an empty sheet.
+    const keptMarket = changes.market === undefined ? market : changes.market;
+    const nextMarket =
+      keptMarket &&
+      cheatSheetMarkets(markets, nextPosition ?? undefined).some(
+        (m) => m.key === keptMarket,
+      )
+        ? keptMarket
+        : undefined;
     return scopedHref("/cheat-sheets", scope, {
       window: nextWindow !== DEFAULT_CHEAT_WINDOW ? nextWindow : undefined,
       position: nextPosition,
       side: nextSide,
+      tier: nextTier ? CHEAT_TIER_PARAM[nextTier] : undefined,
+      market: nextMarket,
     });
   };
+  const allMarketsHref = href({ market: null });
+  const filtered =
+    params.position !== undefined ||
+    params.side !== undefined ||
+    tier !== undefined ||
+    market !== undefined;
   // Every mention of "the board" on this page, pointed at the same slate.
   const boardLink = scopedHref(BOARD_PATH, scope);
 
@@ -146,6 +198,23 @@ export default async function CheatSheets({
       <WeekStrip weeks={weeks} active={active} basePath="/cheat-sheets" sport={sport} />
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        {/* "80%" is the 80-99% list on its own and "100%" the perfect one --
+            see `CHEAT_TIER_PARAM`. All is both, as the page always showed. */}
+        <div className="flex items-center gap-2">
+          <span className="label-caption">Hit rate</span>
+          <Pill href={href({ tier: null })} active={tier === undefined} label="All" />
+          <Pill
+            href={href({ tier: "strong" })}
+            active={tier === "strong"}
+            label="80%"
+          />
+          <Pill
+            href={href({ tier: "perfect" })}
+            active={tier === "perfect"}
+            label="100%"
+          />
+        </div>
+
         <div className="flex items-center gap-2">
           <span className="label-caption">Window</span>
           {CHEAT_WINDOWS.map((size) => (
@@ -195,6 +264,24 @@ export default async function CheatSheets({
             label="Under"
           />
         </div>
+
+        <NavSelect
+          label="Market"
+          name="market"
+          value={market ?? ""}
+          action="/cheat-sheets"
+          hidden={[
+            ...new URLSearchParams(allMarketsHref.split("?")[1] ?? "").entries(),
+          ].map(([name, value]) => ({ name, value }))}
+          options={[
+            { value: "", label: "All markets", href: allMarketsHref },
+            ...marketOptions.map((option) => ({
+              value: option.key,
+              label: option.displayName,
+              href: href({ market: option.key }),
+            })),
+          ]}
+        />
       </div>
 
       {/*
@@ -245,7 +332,17 @@ export default async function CheatSheets({
           windowSize={windowSize}
           position={params.position}
           side={params.side}
-          clearedHref={href({ position: null, side: null })}
+          tier={tier}
+          marketLabel={
+            marketOptions.find((m) => m.key === market)?.displayName ?? null
+          }
+          filtered={filtered}
+          clearedHref={href({
+            position: null,
+            side: null,
+            tier: null,
+            market: null,
+          })}
           boardLink={boardLink}
           sport={sport}
         />
@@ -317,6 +414,9 @@ function EmptySheet({
   windowSize,
   position,
   side,
+  tier,
+  marketLabel,
+  filtered,
   clearedHref,
   boardLink,
   sport,
@@ -327,6 +427,11 @@ function EmptySheet({
   windowSize: number;
   position: PositionGroup | undefined;
   side: BetSide | undefined;
+  tier: CheatTierKey | undefined;
+  /** The chosen market's name, or null for every market. */
+  marketLabel: string | null;
+  /** Whether any of the reader's own filters is narrowing the sheet. */
+  filtered: boolean;
   clearedHref: string;
   /** The board for THIS sheet's league and week — never a bare `BOARD_PATH`. */
   boardLink: string;
@@ -399,14 +504,20 @@ function EmptySheet({
     <div className="panel p-6">
       <h2 className="section-header mb-2">Nothing clears the bar</h2>
       <p className="text-muted max-w-prose text-sm">
-        No {side ? `${side} ` : ""}prop{position ? ` at ${position}` : ""} on
-        this slate has hit 80% or
-        better over its last {windowSize} games with at least{" "}
+        No {side ? `${side} ` : ""}
+        {marketLabel ? `${marketLabel} ` : ""}prop
+        {position ? ` at ${position}` : ""} on this slate has hit{" "}
+        {tier === "perfect"
+          ? "100%"
+          : tier === "strong"
+            ? "80% or better without a clean sweep"
+            : "80% or better"}{" "}
+        over its last {windowSize} games with at least{" "}
         {minDecidedFor(windowSize)} decided. That is an ordinary week, not a
         fault.{" "}
-        {position || side ? (
+        {filtered ? (
           <Link href={clearedHref} className="text-accent-cyan hover:underline">
-            {side ? "Clear the filters" : "Try every position"}
+            Clear the filters
           </Link>
         ) : (
           <>Try the other window.</>

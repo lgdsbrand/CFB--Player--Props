@@ -18,15 +18,20 @@ import { test } from "node:test";
 import {
   agreement,
   cheatSections,
+  CHEAT_TIER_PARAM,
   CHEAT_TIERS,
+  cheatSheetMarkets,
   compareRows,
   emptyReason,
   formatRecord,
   minDecidedFor,
   qualifies,
+  resolveCheatTier,
   sideLabel,
+  tierBand,
   type CheatSheetRow,
 } from "./cheat-sheet.ts";
+import type { Market } from "./types.ts";
 
 function row(overrides: Partial<CheatSheetRow> = {}): CheatSheetRow {
   return {
@@ -225,4 +230,79 @@ test("an empty sheet distinguishes its four causes", () => {
 
 test("the tier floors are the two the client asked for", () => {
   assert.deepEqual(CHEAT_TIERS.map((tier) => tier.min), [1, 0.8]);
+});
+
+// -----------------------------------------------------------------------------
+// Tier selector and market dropdown (client, 2026-10-06)
+// -----------------------------------------------------------------------------
+
+test("tier=100 and tier=80 pick a section; anything else is All", () => {
+  assert.equal(resolveCheatTier(CHEAT_TIER_PARAM.perfect), "perfect");
+  assert.equal(resolveCheatTier(CHEAT_TIER_PARAM.strong), "strong");
+  assert.equal(resolveCheatTier(undefined), undefined);
+  assert.equal(resolveCheatTier("all"), undefined);
+  assert.equal(resolveCheatTier("90"), undefined);
+});
+
+test("each tier's band holds exactly the rows cheatSections puts under it", () => {
+  const rates = [0.8, 0.85, 0.9, 1];
+  const rows = rates.map((hitRate, index) =>
+    row({ projectionId: index + 1, hitRate }),
+  );
+  for (const section of cheatSections(rows)) {
+    const band = tierBand(section.tier.key);
+    const inBand = rows.filter(
+      (r) => r.hitRate >= band.min && (band.below === undefined || r.hitRate < band.below),
+    );
+    assert.deepEqual(
+      inBand.map((r) => r.projectionId).sort(),
+      section.rows.map((r) => r.projectionId).sort(),
+      section.tier.key,
+    );
+  }
+});
+
+test("the 80% button excludes perfect streaks, so it never equals All", () => {
+  assert.deepEqual(tierBand("strong"), { min: 0.8, below: 1 });
+  assert.deepEqual(tierBand("perfect"), { min: 1, below: undefined });
+});
+
+function market(key: string, overrides: Partial<Market> = {}): Market {
+  return {
+    key,
+    displayName: key,
+    shortLabel: null,
+    emoji: null,
+    statColumn: key,
+    isBinary: false,
+    defaultLine: null,
+    unit: null,
+    sortOrder: 0,
+    ladderStep: null,
+    positions: ["QB", "RB", "WR", "TE"],
+    parentMarketKey: null,
+    publishesCall: true,
+    ...overrides,
+  };
+}
+
+test("the dropdown offers full-game markets with a call, narrowed by position", () => {
+  const catalogue = [
+    market("pass_yards", { positions: ["QB"] }),
+    market("rec_yards", { positions: ["RB", "WR", "TE"] }),
+    // A first-quarter market: not on the full board, not graded on the sheet.
+    market("q1_rec_yards", {
+      parentMarketKey: "rec_yards",
+      positions: ["RB", "WR", "TE"],
+      publishesCall: false,
+    }),
+  ];
+  assert.deepEqual(
+    cheatSheetMarkets(catalogue, undefined).map((m) => m.key),
+    ["pass_yards", "rec_yards"],
+  );
+  assert.deepEqual(
+    cheatSheetMarkets(catalogue, "WR").map((m) => m.key),
+    ["rec_yards"],
+  );
 });

@@ -72,8 +72,15 @@ export type CheatSheetFilters = {
    * leaves out anytime TD without a second predicate.
    */
   side?: BetSide;
+  /** One market — the sheet's market dropdown. */
+  marketKey?: string;
   /** The floor to read at. Defaults to the lowest tier the page shows. */
   minHitRate?: number;
+  /**
+   * An exclusive ceiling, so one tier can be read on its own — see `tierBand`.
+   * In the query rather than after it, because the read is capped.
+   */
+  belowHitRate?: number;
   /** Hide entries whose game has kicked off. See `lib/core/kickoff.ts`. */
   kickoffCutoff?: Date;
 };
@@ -114,6 +121,10 @@ export async function getCheatSheet(
     query = query.eq("position_group", filters.positionGroup);
   }
   if (filters.side) query = query.eq("hit_side", filters.side);
+  if (filters.marketKey) query = query.eq("market_key", filters.marketKey);
+  if (filters.belowHitRate !== undefined) {
+    query = query.lt("hit_rate", filters.belowHitRate);
+  }
 
   // Mirrors `compareRows` in the core. The two must agree: this decides which
   // rows survive the limit, and that one decides the order they are shown in.

@@ -223,7 +223,8 @@ export async function getGameBookOdds(gameId: number): Promise<BookOdds[]> {
 // 2026-09-23.
 
 const GAME_COLUMNS =
-  "id, season, week, start_date, home_team_id, away_team_id, home_points, away_points";
+  "id, season, week, start_date, home_team_id, away_team_id, home_points, " +
+  "away_points, conference_game, neutral_site";
 
 async function withLines(games: DbRow[]): Promise<GradedGame[]> {
   const played = games.filter(
@@ -255,8 +256,55 @@ async function withLines(games: DbRow[]): Promise<GradedGame[]> {
       awayPoints: g.away_points as number,
       homeSpread: line ? num(line.spread) : null,
       total: line ? num(line.over_under) : null,
+      conferenceGame: (g.conference_game as boolean | null) ?? null,
+      neutralSite: g.neutral_site === true,
     };
   });
+}
+
+/**
+ * The poll order the board uses (`poll_priority`, migration 0032 and its
+ * fallback): AP, then Coaches, then the CFP committee. Mirrored here rather
+ * than called, because this read picks a rank per game in the page.
+ */
+const POLL_PRIORITY = ["AP Top 25", "Coaches Poll", "Playoff Committee Rankings"];
+
+/**
+ * Attach each side's poll rank entering that game's week. The week-N poll is
+ * the one published before week N (migration 0032), so the rank is what was
+ * known at kickoff. One read for every team and week in the list.
+ */
+async function withPollRanks(games: GradedGame[]): Promise<GradedGame[]> {
+  if (games.length === 0) return games;
+  const teams = [...new Set(games.flatMap((g) => [g.homeTeamId, g.awayTeamId]))];
+  const weeks = [...new Set(games.map((g) => g.week))];
+  const supabase = createServerSupabaseClient();
+  const rows = unwrap<DbRow[]>(
+    await supabase
+      .from("team_poll_rankings")
+      .select("team_id, week, poll, rank")
+      .eq("season", games[0].season)
+      .in("team_id", teams)
+      .in("week", weeks),
+    "team_poll_rankings (season results)",
+  );
+  const best = new Map<string, { rank: number; priority: number }>();
+  for (const row of rows) {
+    const index = POLL_PRIORITY.indexOf(row.poll as string);
+    const priority = index === -1 ? POLL_PRIORITY.length : index;
+    const key = `${row.team_id}:${row.week}`;
+    const held = best.get(key);
+    if (!held || priority < held.priority) {
+      best.set(key, { rank: row.rank as number, priority });
+    }
+  }
+  const rankOf = (teamId: number, week: number) =>
+    best.get(`${teamId}:${week}`)?.rank ?? null;
+  return games.map((g) => ({
+    ...g,
+    homeRank: rankOf(g.homeTeamId, g.week),
+    awayRank: rankOf(g.awayTeamId, g.week),
+  }));
 }
 
 /**
@@ -279,7 +327,9 @@ export async function getSeasonResults(
     .or(`home_team_id.in.(${ids}),away_team_id.in.(${ids})`)
     .order("start_date");
   if (before) query = query.lt("start_date", before);
-  return withLines(unwrap<DbRow[]>(await query, "games (season results)"));
+  return withPollRanks(
+    await withLines(unwrap<DbRow[]>(await query, "games (season results)")),
+  );
 }
 
 /** Every completed meeting between two teams we hold, newest first. */

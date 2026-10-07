@@ -157,6 +157,20 @@ export interface GradedGame {
   /** Home perspective, negative = home favoured. Null: no line on record. */
   homeSpread: number | null;
   total: number | null;
+  /**
+   * The splits the game page's records add (client, 2026-10-06). Optional
+   * because head-to-head reads do not need them; a game without them simply
+   * counts toward no split.
+   */
+  conferenceGame?: boolean | null;
+  neutralSite?: boolean;
+  /**
+   * Each side's poll rank ENTERING that game's week (the week-N poll is the
+   * one published before week N; migration 0032), so "against ranked teams"
+   * means ranked when they played, not ranked now.
+   */
+  homeRank?: number | null;
+  awayRank?: number | null;
 }
 
 export type AtsResult = "W" | "L" | "P";
@@ -192,6 +206,12 @@ export function totalResult(game: GradedGame): TotalResult | null {
 
 export interface TeamRecord {
   straightUp: { w: number; l: number };
+  conference: { w: number; l: number };
+  home: { w: number; l: number };
+  away: { w: number; l: number };
+  neutral: { w: number; l: number };
+  /** Against an opponent ranked in the poll entering that game's week. */
+  vsRanked: { w: number; l: number };
   ats: { w: number; l: number; p: number };
   totals: { o: number; u: number; p: number };
   /** Games played with no line on record, so ungraded against it. */
@@ -202,6 +222,11 @@ export interface TeamRecord {
 export function teamRecord(games: GradedGame[], teamId: number): TeamRecord {
   const record: TeamRecord = {
     straightUp: { w: 0, l: 0 },
+    conference: { w: 0, l: 0 },
+    home: { w: 0, l: 0 },
+    away: { w: 0, l: 0 },
+    neutral: { w: 0, l: 0 },
+    vsRanked: { w: 0, l: 0 },
     ats: { w: 0, l: 0, p: 0 },
     totals: { o: 0, u: 0, p: 0 },
     noLine: 0,
@@ -213,8 +238,16 @@ export function teamRecord(games: GradedGame[], teamId: number): TeamRecord {
       ? game.homePoints - game.awayPoints
       : game.awayPoints - game.homePoints;
     // College football has no ties since 1996; a level score is bad data.
-    if (margin > 0) record.straightUp.w += 1;
-    else if (margin < 0) record.straightUp.l += 1;
+    const tally = (bucket: { w: number; l: number }) => {
+      if (margin > 0) bucket.w += 1;
+      else if (margin < 0) bucket.l += 1;
+    };
+    tally(record.straightUp);
+    if (game.conferenceGame) tally(record.conference);
+    if (game.neutralSite) tally(record.neutral);
+    else if (game.neutralSite === false) tally(home ? record.home : record.away);
+    const opponentRank = home ? game.awayRank : game.homeRank;
+    if (opponentRank !== null && opponentRank !== undefined) tally(record.vsRanked);
 
     const ats = atsResult(game, teamId);
     if (ats === null) record.noLine += 1;

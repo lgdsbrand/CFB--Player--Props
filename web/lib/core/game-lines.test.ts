@@ -146,6 +146,23 @@ test("a team record counts games without a line separately", () => {
   assert.equal(formatRecord(3, 1, 1), "3-1-1");
 });
 
+test("record splits: conference, venue and against teams ranked at the time", () => {
+  // Team 10. Defaults from `game()`: 10 hosts 20 and wins.
+  const games = [
+    game({ gameId: 1, conferenceGame: true, neutralSite: false, awayRank: 12 }), // conf home W vs #12
+    game({ gameId: 2, homeTeamId: 30, awayTeamId: 10, homePoints: 35, awayPoints: 14, conferenceGame: false, neutralSite: false, homeRank: null }), // away L
+    game({ gameId: 3, neutralSite: true, homeRank: 5, awayRank: 8 }), // neutral W; 10's OWN rank must not count
+    game({ gameId: 4 }), // no split fields at all: counts toward none of them
+  ];
+  const record = teamRecord(games, 10);
+  assert.deepEqual(record.straightUp, { w: 3, l: 1 });
+  assert.deepEqual(record.conference, { w: 1, l: 0 });
+  assert.deepEqual(record.home, { w: 1, l: 0 });
+  assert.deepEqual(record.away, { w: 0, l: 1 });
+  assert.deepEqual(record.neutral, { w: 1, l: 0 });
+  assert.deepEqual(record.vsRanked, { w: 2, l: 0 });
+});
+
 test("the model's fair spread names the favourite and keeps one decimal", () => {
   assert.equal(modelSpreadLabel(9.34, "UGA", "CLEM"), "UGA -9.3");
   assert.equal(modelSpreadLabel(-3, "UGA", "CLEM"), "CLEM -3.0");

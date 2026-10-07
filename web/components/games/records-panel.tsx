@@ -45,6 +45,8 @@ export function RecordsPanel({
           games before this one. Graded against CollegeFootballData&rsquo;s
           consensus line (median of ESPN Bet, DraftKings, Bovada) — the last
           number it recorded, which is usually but not always the close.
+          &ldquo;Vs ranked&rdquo; counts opponents ranked in the poll published
+          before that game, not today&rsquo;s.
         </p>
       </div>
 
@@ -75,6 +77,25 @@ export function RecordsPanel({
                   ) : null}
                 </div>
               )}
+              {played > 0 ? (
+                // The splits the client asked for (2026-10-06). A split with
+                // no games is left out rather than printed as 0-0.
+                <div className="flex flex-wrap gap-x-5 gap-y-1">
+                  {(
+                    [
+                      ["Conf", record.conference],
+                      ["Home", record.home],
+                      ["Away", record.away],
+                      ["Neutral", record.neutral],
+                      ["Vs ranked", record.vsRanked],
+                    ] as const
+                  )
+                    .filter(([, wl]) => wl.w + wl.l > 0)
+                    .map(([label, wl]) => (
+                      <Stat key={label} label={label} value={formatRecord(wl.w, wl.l)} />
+                    ))}
+                </div>
+              ) : null}
             </div>
           );
         })}

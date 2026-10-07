@@ -221,6 +221,13 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
         note="Sunday 09:00 UTC, chained — polls publish Sunday, one call/season",
     ),
     JobExpectation(
+        name="ingest_coaches",
+        max_age_hours=200,
+        note="Sunday 09:00 UTC, LAST in the weekly chain — head coaches and "
+             "their records for the game page (migration 0084, ~139 CFBD "
+             "calls). A warning: a stale run leaves last week's coach records.",
+    ),
+    JobExpectation(
         name="ingest_weather",
         max_age_hours=48,
         note="daily 11:00 UTC — Open-Meteo forecasts, unauthenticated and free. "

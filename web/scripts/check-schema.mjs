@@ -189,6 +189,22 @@ const EXPECTED = {
     "first_line", "captured_at", "first_captured_at",
   ],
   v_game_line_consensus: ["game_id", "spread", "over_under"],
+  // The game page's coach panel (migration 0084).
+  team_coaches: ["team_id", "season", "coach_id", "hire_date"],
+  coaches: ["id", "first_name", "last_name"],
+  coach_seasons: [
+    "coach_id", "season", "school", "team_id", "wins", "losses", "conf_wins",
+    "conf_losses", "home_wins", "home_losses", "away_wins", "away_losses",
+    "neutral_wins", "neutral_losses", "post_wins", "post_losses",
+  ],
+  // "Vs ranked" on the game page's records (migration 0032).
+  team_poll_rankings: ["team_id", "season", "week", "poll", "rank"],
+  // The game page's team comparison (migration 0077).
+  team_strength_ratings: [
+    "team_id", "season", "as_of_week", "games_included", "off_points_pg",
+    "off_ppa", "off_success", "off_plays_pg", "def_points_pg", "def_ppa",
+    "def_success",
+  ],
   game_projections: [
     "game_id", "model_version", "evidence_phase", "p_home_win", "made_at",
     "margin_mean", "margin_p10", "margin_p90", "total_mean", "total_p10",
@@ -240,7 +256,7 @@ const EXPECTED = {
   // Conference membership is season-scoped because realignment moves teams
   // between the seasons this project covers, so the weekly-targets directory
   // reads it here and never from `teams`.
-  team_seasons: ["team_id", "season", "conference_id"],
+  team_seasons: ["team_id", "season", "conference_id", "classification"],
   teams: ["id", "school", "abbreviation", "color", "alt_color"],
 };
 

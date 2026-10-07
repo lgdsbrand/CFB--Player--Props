@@ -135,6 +135,10 @@ services:
   # backfill and was `[2024, 2025]` sixteen days before the 2026 kickoff. The
   # chain would run to completion, report success, and refresh last season.
   # See 20260813140000_in_season_scope.sql for how that was found.
+  #
+  # `ingest_coaches` LAST (migration 0084, ~139 CFBD calls): nothing reads it
+  # but the game page, so a coach-data failure must not stop the splits and
+  # usage shares above it from being built.
   - type: cron
     name: cfb-props-ingest-week
     runtime: python
@@ -148,7 +152,8 @@ services:
       python -m worker.jobs.ingest_ratings --current &&
       python -m worker.jobs.ingest_rankings --live --current &&
       python -m worker.jobs.build_splits --current &&
-      python -m worker.jobs.build_usage_shares --current --sport cfb
+      python -m worker.jobs.build_usage_shares --current --sport cfb &&
+      python -m worker.jobs.ingest_coaches --current
     envVars:
       - fromGroup: cfb-props-worker
 

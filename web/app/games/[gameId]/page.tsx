@@ -3,10 +3,12 @@ import { notFound } from "next/navigation";
 
 import { TeamChip } from "@/components/board/team-chip";
 import { BookOddsPanel } from "@/components/games/book-odds-panel";
+import { CoachPanel } from "@/components/games/coach-panel";
 import { MatchupGrid } from "@/components/games/matchup-grid";
 import { ModelLinePanel } from "@/components/games/model-line-panel";
 import { RecordsPanel } from "@/components/games/records-panel";
 import { SharpRetailPanel } from "@/components/games/sharp-retail-panel";
+import { TeamComparisonPanel } from "@/components/games/team-comparison-panel";
 import { WeatherPanel } from "@/components/games/weather-panel";
 import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
@@ -19,7 +21,11 @@ import {
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount, formatKickoff, formatVenue } from "@/lib/core/format";
+import { currentCoach, summarizeCoach } from "@/lib/core/coach";
 import { favourite, gameMatchups } from "@/lib/core/game-view";
+import { rankStrength } from "@/lib/core/team-strength";
+import { getCoaches } from "@/lib/data/coaches";
+import { getTeamStrength } from "@/lib/data/team-strength";
 import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
 import {
@@ -83,6 +89,8 @@ export default async function GamePage({
     projections,
     summaries,
     config,
+    strengthRows,
+    coaches,
   ] = await Promise.all([
     getDefenseRatings(game.season, game.week, game.sport),
     // Joins the existing wave rather than forming its own. A wave costs one
@@ -97,7 +105,16 @@ export default async function GamePage({
     getGameOddsSummaries([gameId]),
     // Cached; only for the edge threshold the model panel highlights at.
     getAppConfig(),
+    // Entering this game's week, so nothing after kickoff (migration 0077).
+    getTeamStrength(game.season, game.week, game.sport),
+    getCoaches(game.season, [game.homeTeamId, game.awayTeamId]),
   ]);
+
+  const strength = rankStrength(strengthRows, [game.homeTeamId, game.awayTeamId]);
+  const coachFor = (teamId: number) => {
+    const coach = currentCoach(coaches.byTeam.get(teamId) ?? []);
+    return coach ? summarizeCoach(coach, coaches.seasons, teamId, game.season) : null;
+  };
 
   const matchups = gameMatchups(game, ratings);
   const line = favourite(game);
@@ -243,6 +260,23 @@ export default async function GamePage({
         seasonGames={seasonGames}
         meetings={meetings}
         earliestSeason={earliestSeason}
+      />
+
+      {strengthRows.length > 0 ? (
+        <TeamComparisonPanel
+          away={game.awayAbbreviation ?? game.awaySchool}
+          home={game.homeAbbreviation ?? game.homeSchool}
+          awayStrength={strength.get(game.awayTeamId)}
+          homeStrength={strength.get(game.homeTeamId)}
+          week={game.week}
+          league={game.sport === "nfl" ? "NFL teams" : "FBS teams"}
+        />
+      ) : null}
+
+      <CoachPanel
+        season={game.season}
+        away={{ school: game.awaySchool, coach: coachFor(game.awayTeamId) }}
+        home={{ school: game.homeSchool, coach: coachFor(game.homeTeamId) }}
       />
 
       <WeatherPanel conditions={conditions} />

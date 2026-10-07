@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 
+import { SlipDock } from "@/components/slip/slip-dock";
+
 /**
  * Inter, measured — not chosen.
  *
@@ -43,7 +45,10 @@ export default function RootLayout({
       lang="en"
       className={`${inter.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {children}
+        <SlipDock />
+      </body>
     </html>
   );
 }

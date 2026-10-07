@@ -2,7 +2,9 @@ import Link from "next/link";
 
 import { formatAmericanOdds, formatEdge } from "@/lib/core/format";
 import { EV_HIGHLIGHT, fairAmerican, splitWagers, wagerLabel, type EvWager } from "@/lib/core/ev";
+import { legFromWager } from "@/lib/core/slip";
 import type { GameSummary } from "@/lib/core/types";
+import { AddToSlip } from "@/components/slip/add-to-slip";
 
 /** Per list; the rest are counted, and each game's page lists them all. */
 const PER_LIST = 10;
@@ -29,7 +31,7 @@ export function EvNow({ wagers, games }: { wagers: EvWager[]; games: GameSummary
           Pinnacle&rsquo;s fair price (margin removed, power method) at the same
           line, on the games below, from the latest odds capture. Exchange
           prices are before their fees. Each game&rsquo;s page lists the smaller
-          ones too.
+          ones too. Click a price to add it to your bet slip.
         </p>
       </div>
       <div className="grid gap-3 lg:grid-cols-2">
@@ -89,7 +91,11 @@ function List({
                   <span className="text-muted">{w.bookName}</span>
                 </span>
                 <span className="flex items-baseline gap-2 sm:ml-auto">
-                  <span className="text-ink font-bold">{formatAmericanOdds(w.price)}</span>
+                  <span className="text-ink font-bold">
+                    <AddToSlip leg={legFromWager(w, home, away, game.startDate)} asPrice>
+                      {formatAmericanOdds(w.price)}
+                    </AddToSlip>
+                  </span>
                   <span className="text-dim">{`fair ${formatAmericanOdds(fairAmerican(w.fairProb))}`}</span>
                   <span className="text-target ml-auto w-12 text-right font-extrabold sm:ml-0">
                     {formatEdge(w.ev)}

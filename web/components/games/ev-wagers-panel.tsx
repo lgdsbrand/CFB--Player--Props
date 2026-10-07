@@ -1,5 +1,7 @@
 import { formatAmericanOdds, formatEdge } from "@/lib/core/format";
 import { EV_HIGHLIGHT, fairAmerican, splitWagers, wagerLabel, type EvWager } from "@/lib/core/ev";
+import { legFromWager } from "@/lib/core/slip";
+import { AddToSlip } from "@/components/slip/add-to-slip";
 
 /**
  * "+EV wagers" for one game (client, 2026-10-06, after the Bettor Odds card):
@@ -26,10 +28,12 @@ export function EvWagersPanel({
   wagers,
   home,
   away,
+  startDate,
 }: {
   wagers: EvWager[];
   home: string;
   away: string;
+  startDate: string | null;
 }) {
   const shown = wagers.filter((w) => w.ev >= SHOWN_FROM);
   const { books, exchanges } = splitWagers(shown);
@@ -47,7 +51,8 @@ export function EvWagersPanel({
           EV is the expected return per $1 staked if that fair price is right.{" "}
           {Math.round(EV_HIGHLIGHT * 100)}% or more is highlighted. Exchange
           prices are before their fees.
-          {asOf ? ` Prices as of ${AS_OF.format(new Date(asOf))} ET.` : ""}
+          {asOf ? ` Prices as of ${AS_OF.format(new Date(asOf))} ET.` : ""} Click
+          a price to add it to your bet slip.
         </p>
       </div>
 
@@ -63,6 +68,7 @@ export function EvWagersPanel({
             wagers={books.slice(0, PER_LIST)}
             home={home}
             away={away}
+            startDate={startDate}
           />
           <WagerList
             title="Exchanges · before fees"
@@ -70,6 +76,7 @@ export function EvWagersPanel({
             wagers={exchanges.slice(0, PER_LIST)}
             home={home}
             away={away}
+            startDate={startDate}
           />
         </div>
       )}
@@ -83,12 +90,14 @@ function WagerList({
   wagers,
   home,
   away,
+  startDate,
 }: {
   title: string;
   empty: string;
   wagers: EvWager[];
   home: string;
   away: string;
+  startDate: string | null;
 }) {
   return (
     <div className="bg-panel-inset flex flex-col gap-2 rounded-xl p-3">
@@ -113,7 +122,11 @@ function WagerList({
                   {wagerLabel(w, home, away)}
                 </td>
                 <td className="text-muted py-1 pr-2">{w.bookName}</td>
-                <td className="text-ink py-1 text-right font-bold">{formatAmericanOdds(w.price)}</td>
+                <td className="text-ink py-1 text-right font-bold">
+                  <AddToSlip leg={legFromWager(w, home, away, startDate)} asPrice>
+                    {formatAmericanOdds(w.price)}
+                  </AddToSlip>
+                </td>
                 <td className="text-muted py-1 text-right">{formatAmericanOdds(fairAmerican(w.fairProb))}</td>
                 <td
                   className={

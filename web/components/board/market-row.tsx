@@ -1,6 +1,8 @@
 import { LastFive } from "@/components/board/last-five";
 import type { FormSummary } from "@/lib/core/form";
 import { ProjectionBar } from "@/components/board/projection-bar";
+import { AddToSlip } from "@/components/slip/add-to-slip";
+import { propLegFromRow } from "@/lib/core/slip";
 import { callFor } from "@/lib/core/board-view";
 import {
   formatUsageShare,
@@ -75,6 +77,7 @@ export function MarketRow({
   // anytime-TD inversion below is too easy to get independently wrong twice.
   const call = callFor(row, market);
   const statesNothing = call.kind === "reference";
+  const leg = propLegFromRow(row);
 
   return (
     <div className="panel-inset flex flex-col gap-2.5 p-3">
@@ -142,16 +145,19 @@ export function MarketRow({
           )}
         </span>
 
-        {row.edge !== null && !statesNothing ? (
-          <span
-            className={
-              "font-mono text-[0.6875rem] font-bold tabular-nums " +
-              (isEdge ? "text-target" : "text-muted")
-            }
-          >
-            {formatEdge(row.edge)} edge
-          </span>
-        ) : null}
+        <span className="flex items-center gap-2">
+          {row.edge !== null && !statesNothing ? (
+            <span
+              className={
+                "font-mono text-[0.6875rem] font-bold tabular-nums " +
+                (isEdge ? "text-target" : "text-muted")
+              }
+            >
+              {formatEdge(row.edge)} edge
+            </span>
+          ) : null}
+          {leg ? <AddToSlip leg={leg} /> : null}
+        </span>
       </div>
 
       <LastFive

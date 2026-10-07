@@ -1,3 +1,4 @@
+import { AddToSlip } from "@/components/slip/add-to-slip";
 import { formatAmericanOdds } from "@/lib/core/format";
 import {
   formatPoints,
@@ -5,6 +6,7 @@ import {
   type MarketRole,
   type ModelPeriod,
 } from "@/lib/core/game-lines";
+import type { GameLeg } from "@/lib/core/slip";
 
 /**
  * Every captured book's price on one game, sharp and exchanges first
@@ -78,14 +80,34 @@ export function BookOddsPanel({
   home,
   away,
   period = "full",
+  slip,
 }: {
   odds: BookOdds[];
   home: string;
   away: string;
   period?: ModelPeriod;
+  /** The game, while its prices can still go on the bet slip; null after kickoff. */
+  slip: { gameId: number; startDate: string | null } | null;
 }) {
   const rows = rowsByBook(odds.filter((entry) => entry.period === period));
   if (period !== "full" && rows.length === 0) return null;
+
+  // A price is its own "add to slip" button: that side, at THIS book's line.
+  const price = (
+    value: number | null,
+    market: GameLeg["market"],
+    side: GameLeg["side"],
+    line: number | null,
+    text: string,
+  ) => {
+    if (!slip || value === null) return text;
+    const leg: GameLeg = { kind: "game", period, market, side, line, home, away, ...slip };
+    return (
+      <AddToSlip leg={leg} asPrice>
+        {text}
+      </AddToSlip>
+    );
+  };
 
   return (
     <section className="panel flex flex-col gap-3 p-4">
@@ -97,6 +119,7 @@ export function BookOddsPanel({
             : "US books only, captured when first posted and again in the hour before kickoff. "}
           &ldquo;Moved&rdquo; is the change since the first price we saw this
           week — our first capture, not the book&rsquo;s opening line.
+          {slip ? " Click a price to add it to your bet slip." : ""}
         </p>
       </div>
 
@@ -152,12 +175,18 @@ export function BookOddsPanel({
                     <Td>
                       {spreadLine === null
                         ? null
-                        : `${signed(-spreadLine)} ${formatAmericanOdds(row.spread?.awayPrice ?? null)}`}
+                        : price(
+                            row.spread?.awayPrice ?? null, "spreads", "away", spreadLine,
+                            `${signed(-spreadLine)} ${formatAmericanOdds(row.spread?.awayPrice ?? null)}`,
+                          )}
                     </Td>
                     <Td>
                       {spreadLine === null
                         ? null
-                        : `${signed(spreadLine)} ${formatAmericanOdds(row.spread?.homePrice ?? null)}`}
+                        : price(
+                            row.spread?.homePrice ?? null, "spreads", "home", spreadLine,
+                            `${signed(spreadLine)} ${formatAmericanOdds(row.spread?.homePrice ?? null)}`,
+                          )}
                     </Td>
                     <Td dim>
                       {moved === null || moved === 0
@@ -165,12 +194,25 @@ export function BookOddsPanel({
                         : `${home} ${moved > 0 ? "+" : "-"}${formatPoints(moved)}`}
                     </Td>
                     <Td>
-                      {row.total?.line === null || row.total?.line === undefined
-                        ? null
-                        : `${formatPoints(row.total.line)}  ${formatAmericanOdds(row.total.overPrice)} / ${formatAmericanOdds(row.total.underPrice)}`}
+                      {row.total?.line === null || row.total?.line === undefined ? null : (
+                        <>
+                          {`${formatPoints(row.total.line)}  `}
+                          {price(row.total.overPrice, "totals", "over", row.total.line, formatAmericanOdds(row.total.overPrice))}
+                          {" / "}
+                          {price(row.total.underPrice, "totals", "under", row.total.line, formatAmericanOdds(row.total.underPrice))}
+                        </>
+                      )}
                     </Td>
-                    <Td>{row.moneyline ? formatAmericanOdds(row.moneyline.awayPrice) : null}</Td>
-                    <Td>{row.moneyline ? formatAmericanOdds(row.moneyline.homePrice) : null}</Td>
+                    <Td>
+                      {row.moneyline
+                        ? price(row.moneyline.awayPrice, "h2h", "away", null, formatAmericanOdds(row.moneyline.awayPrice))
+                        : null}
+                    </Td>
+                    <Td>
+                      {row.moneyline
+                        ? price(row.moneyline.homePrice, "h2h", "home", null, formatAmericanOdds(row.moneyline.homePrice))
+                        : null}
+                    </Td>
                   </tr>
                 );
               })}

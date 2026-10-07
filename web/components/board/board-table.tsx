@@ -4,6 +4,7 @@ import { EvidencePill } from "@/components/board/evidence-pill";
 import { LastFive } from "@/components/board/last-five";
 import { ProjectionBar } from "@/components/board/projection-bar";
 import { TableRow } from "@/components/board/table-row";
+import { AddToSlip } from "@/components/slip/add-to-slip";
 import { TeamChip } from "@/components/board/team-chip";
 import {
   callFor,
@@ -40,6 +41,7 @@ import {
   type GradedGame,
 } from "@/lib/core/hit-rate";
 import { playerHref } from "@/lib/core/player-params";
+import { propLegFromRow } from "@/lib/core/slip";
 import type { BoardRow, Market, PlayerGameLogRow } from "@/lib/core/types";
 import {
   blitzStyle,
@@ -741,15 +743,19 @@ function OddsCell({ row }: { row: BoardRow }) {
   if (!row.hasBookLine || !row.sportsbookName) {
     return <span className="text-dim text-[0.6875rem]">No line yet</span>;
   }
+  const leg = propLegFromRow(row);
   return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-muted truncate text-[0.625rem] font-semibold">
-        {row.sportsbookName}
-      </span>
-      <span className="text-dim font-mono text-[0.6875rem] tabular-nums">
-        {formatAmericanOdds(row.overPrice)} /{" "}
-        {formatAmericanOdds(row.underPrice)}
-      </span>
+    <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-muted truncate text-[0.625rem] font-semibold">
+          {row.sportsbookName}
+        </span>
+        <span className="text-dim font-mono text-[0.6875rem] tabular-nums">
+          {formatAmericanOdds(row.overPrice)} /{" "}
+          {formatAmericanOdds(row.underPrice)}
+        </span>
+      </div>
+      {leg ? <AddToSlip leg={leg} /> : null}
     </div>
   );
 }

@@ -278,6 +278,7 @@ export default async function GamePage({
           wagers={evWagers}
           home={game.homeAbbreviation ?? game.homeSchool}
           away={game.awayAbbreviation ?? game.awaySchool}
+          startDate={game.startDate}
         />
       ) : null}
 
@@ -288,6 +289,7 @@ export default async function GamePage({
           odds={bookOdds}
           home={game.homeAbbreviation ?? game.homeSchool}
           away={game.awayAbbreviation ?? game.awaySchool}
+          slip={notStarted ? { gameId, startDate: game.startDate } : null}
         />
       ))}
 

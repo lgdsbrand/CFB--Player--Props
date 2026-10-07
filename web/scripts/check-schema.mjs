@@ -195,6 +195,15 @@ const EXPECTED = {
     "home_line_scores", "away_line_scores", "possession", "situation",
     "last_play", "updated_at",
   ],
+  // The bet slip's current offers, read from the browser (migration 0089).
+  prop_offers: [
+    "game_id", "player_id", "market_key", "sportsbook_id", "line", "side", "price",
+    "link", "event_link", "captured_at",
+  ],
+  game_offers: [
+    "game_id", "period", "market", "sportsbook_id", "side", "line", "price",
+    "link", "event_link", "captured_at",
+  ],
   // +EV wagers on the game page and the slate (migration 0087).
   game_ev_wagers: [
     "game_id", "period", "market", "sportsbook_id", "side", "line", "price",

@@ -74,6 +74,13 @@ PERIOD_MARKETS: dict[str, tuple[str, str]] = {
 }
 PERIOD_REGIONS = "us"
 
+# BET LINKS (migration 0089). Asked of every live capture: they cost no extra
+# credits (probed 2026-10-07). Each outcome then carries the book's link to
+# that bet, or None, and each bookmaker a link to the game's page. Sids come
+# with them; the links already embed what a bet slip needs, so only the links
+# are kept.
+LINK_PARAMS = {"includeLinks": "true", "includeSids": "true"}
+
 
 def _parse_time(value: Any) -> datetime | None:
     if not value:
@@ -127,6 +134,7 @@ def parse_event_odds(
     for bookmaker in payload.get("bookmakers") or []:
         book_key = str(bookmaker.get("key") or "")
         book_name = str(bookmaker.get("title") or book_key)
+        event_link = bookmaker.get("link") or None
         diagnostics.bookmakers.add(book_key)
 
         for market in bookmaker.get("markets") or []:
@@ -158,12 +166,13 @@ def parse_event_odds(
                 bucket = grouped.setdefault((mapped, str(player)), {})
                 slot = bucket.setdefault(
                     (book_key, line),
-                    {"book": book_key, "name": book_name, "over": None, "under": None},
+                    {"book": book_key, "name": book_name, "over": None,
+                     "under": None, "over_link": None, "under_link": None,
+                     "event_link": event_link},
                 )
-                if label in OVER_LABELS:
-                    slot["over"] = int(price)
-                else:
-                    slot["under"] = int(price)
+                side = "over" if label in OVER_LABELS else "under"
+                slot[side] = int(price)
+                slot[f"{side}_link"] = outcome.get("link") or None
 
     quotes: list[PropQuote] = []
     for (market_key, player), by_book_line in grouped.items():
@@ -174,6 +183,9 @@ def parse_event_odds(
                 line=line,
                 over_price=slot["over"],
                 under_price=slot["under"],
+                over_link=slot["over_link"],
+                under_link=slot["under_link"],
+                event_link=slot["event_link"],
             )
             for (_book, line), slot in sorted(by_book_line.items())
         ]
@@ -237,6 +249,7 @@ def parse_game_odds(payload: list[dict[str, Any]]) -> list[GameEventOdds]:
             if not book_key:
                 continue
             book_name = str(bookmaker.get("title") or book_key)
+            event_link = bookmaker.get("link") or None
             for market in bookmaker.get("markets") or []:
                 key = str(market.get("key") or "")
                 if key in GAME_MARKETS:
@@ -250,6 +263,7 @@ def parse_game_odds(payload: list[dict[str, Any]]) -> list[GameEventOdds]:
                         name=str(o.get("name") or "").strip(),
                         price=_american(o.get("price")),
                         point=_point(o.get("point")),
+                        link=o.get("link") or None,
                     )
                     for o in market.get("outcomes") or []
                 )
@@ -263,6 +277,7 @@ def parse_game_odds(payload: list[dict[str, Any]]) -> list[GameEventOdds]:
                         ),
                         outcomes=outcomes,
                         period=period,
+                        event_link=event_link,
                     )
                 )
         events.append(GameEventOdds(event=event, markets=tuple(markets)))
@@ -336,6 +351,7 @@ class TheOddsApiAdapter:
             regions=self.regions,
             markets=",".join(provider_keys(market_keys)),
             oddsFormat=DEFAULT_ODDS_FORMAT,
+            **LINK_PARAMS,
         ) or {}
 
     def fetch_props(
@@ -373,6 +389,7 @@ class TheOddsApiAdapter:
             regions=regions,
             markets=",".join(markets),
             oddsFormat=DEFAULT_ODDS_FORMAT,
+            **LINK_PARAMS,
         ) or []
         return parse_game_odds(payload)
 
@@ -395,6 +412,7 @@ class TheOddsApiAdapter:
             regions=regions,
             markets=",".join(markets),
             oddsFormat=DEFAULT_ODDS_FORMAT,
+            **LINK_PARAMS,
         )
         return parse_game_odds([payload]) if payload else []
 

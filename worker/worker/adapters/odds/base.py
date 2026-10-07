@@ -128,6 +128,11 @@ class BookPrice:
     line: float
     over_price: int | None
     under_price: int | None
+    # The book's links to each side's bet and to the game's page, when the
+    # provider sends them (`includeLinks`). Display only: never part of the price.
+    over_link: str | None = None
+    under_link: str | None = None
+    event_link: str | None = None
 
     @property
     def is_two_way(self) -> bool:
@@ -168,6 +173,7 @@ class GameOutcome:
     name: str
     price: int | None
     point: float | None
+    link: str | None = None
 
 
 @dataclass(frozen=True)
@@ -185,6 +191,7 @@ class GameBookMarket:
     book_updated_at: datetime | None
     outcomes: tuple[GameOutcome, ...]
     period: str = "full"
+    event_link: str | None = None
 
 
 @dataclass(frozen=True)

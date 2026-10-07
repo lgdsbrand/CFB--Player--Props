@@ -14,6 +14,9 @@ WRITES ONLY WHAT MOVED. Each quote is compared with the book's newest row for
 the same (game, book, period, market); an unchanged price writes nothing. See
 migration 0074 for why that loses no information.
 
+ALSO WRITES THE CURRENT OFFERS (migration 0089): every book's price per side
+with its bet link, replaced per captured game, for the bet slip.
+
 ALSO WRITES THE +EV LIST (migration 0087), and only this run can. Because
 `game_odds` keeps only changes, its newest row cannot say whether a book is
 still posting a price; this run's quotes can. So after writing, the run
@@ -88,6 +91,13 @@ class GameOddsRow:
     under_price: int | None
     book_updated_at: datetime | None
     period: str = PERIOD
+    # Bet links (migration 0089), per side, and the game's page. Never part of
+    # `price_key`: a link changing is not the price moving.
+    home_link: str | None = None
+    away_link: str | None = None
+    over_link: str | None = None
+    under_link: str | None = None
+    event_link: str | None = None
 
     def price_key(self) -> tuple:
         """What counts as 'the price moved'. Timestamps deliberately excluded."""
@@ -187,6 +197,7 @@ def orient(
             market=market.market,
             book_updated_at=market.book_updated_at,
             period=market.period,
+            event_link=market.event_link,
             **{
                 "line": None,
                 "home_price": None,
@@ -213,6 +224,8 @@ def orient(
             line=points.pop(),
             over_price=o.price if o else None,
             under_price=u.price if u else None,
+            over_link=o.link if o else None,
+            under_link=u.link if u else None,
         ), None
 
     sided: dict[str, list] = {"home": [], "away": []}
@@ -229,9 +242,13 @@ def orient(
     away_price = away.price if away else None
     if home_price is None and away_price is None:
         return None, f"{market.market}: no price"
+    links = {
+        "home_link": home.link if home else None,
+        "away_link": away.link if away else None,
+    }
 
     if market.market == "h2h":
-        return row(home_price=home_price, away_price=away_price), None
+        return row(home_price=home_price, away_price=away_price, **links), None
 
     # spreads — stored from OUR home team's perspective.
     home_point = home.point if home else None
@@ -246,7 +263,7 @@ def orient(
         line = -away_point
     else:
         return None, "spreads: no point"
-    return row(line=line, home_price=home_price, away_price=away_price), None
+    return row(line=line, home_price=home_price, away_price=away_price, **links), None
 
 
 def ensure_books(conn: psycopg.Connection, rows: list[GameOddsRow]) -> dict[str, int]:
@@ -335,6 +352,7 @@ def run(
             return report
 
         oriented: list[tuple[int, GameOddsRow]] = []
+        captured: set[int] = set()
         for event_odds in events:
             event = event_odds.event
             matched = match_event_to_game(event, games, resolver)
@@ -349,6 +367,7 @@ def run(
                 report.events_started += 1
                 continue
 
+            captured.add(int(game["id"]))
             side_of = side_resolver(event_odds, game, resolver)
             for market in event_odds.markets:
                 row, reason = orient(market, side_of)
@@ -368,6 +387,7 @@ def run(
 
         write_changed(conn, oriented, now, report)
         write_ev_wagers(conn, wagers, now)
+        write_game_offers(conn, oriented, captured, (PERIOD,), now)
 
     log.info("Provider quota: %s", adapter.quota.summary())
     return report
@@ -463,6 +483,62 @@ def write_ev_wagers(
     conn.commit()
 
 
+def offer_rows(row: GameOddsRow) -> list[tuple[str, int, str | None]]:
+    """(side, price, link) for each priced side of one oriented quote."""
+    sides = (
+        (("over", row.over_price, row.over_link), ("under", row.under_price, row.under_link))
+        if row.market == "totals"
+        else (("home", row.home_price, row.home_link), ("away", row.away_price, row.away_link))
+    )
+    return [(side, price, link) for side, price, link in sides if price is not None]
+
+
+def write_game_offers(
+    conn: psycopg.Connection,
+    oriented: list[tuple[int, GameOddsRow]],
+    captured: set[int],
+    periods: tuple[str, ...],
+    now: datetime,
+) -> None:
+    """Replace the captured games' current offers in these periods, and commit.
+
+    Every captured game is cleared, including one whose quotes were all
+    refused, so the slip never keeps a price this run did not see. Rows for
+    games over a day past kickoff go too.
+    """
+    if not captured:
+        return
+    book_ids = ensure_books(conn, [r for _, r in oriented])
+    rows = [
+        (game_id, row.period, row.market, book_ids[row.sportsbook_key], side,
+         row.line, price, link, row.event_link, now)
+        for game_id, row in oriented
+        if row.period in periods
+        for side, price, link in offer_rows(row)
+    ]
+    with conn.cursor() as cur:
+        cur.execute(
+            "delete from game_offers where game_id = any(%s) and period = any(%s)",
+            (sorted(captured), list(periods)),
+        )
+        cur.execute(
+            "delete from game_offers o using games g where g.id = o.game_id "
+            "and g.start_date < now() - interval '1 day'"
+        )
+        if rows:
+            cur.executemany(
+                """
+                insert into game_offers
+                  (game_id, period, market, sportsbook_id, side, line, price,
+                   link, event_link, captured_at)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                on conflict do nothing
+                """,
+                rows,
+            )
+    conn.commit()
+
+
 def games_with_period_odds(conn: psycopg.Connection, game_ids: list[int]) -> set[int]:
     """Games that already hold at least one first-half or first-quarter price."""
     if not game_ids:
@@ -522,6 +598,7 @@ def run_periods(
         held = games_with_period_odds(conn, [int(g["id"]) for _, g in matched])
 
         oriented: list[tuple[int, GameOddsRow]] = []
+        asked: set[int] = set()
         for event, game in matched:
             kickoff = event.commence_time or game.get("start_date")
             if kickoff is not None and kickoff <= now:
@@ -537,6 +614,7 @@ def run_periods(
                 )
                 break
             report.events_asked += 1
+            asked.add(int(game["id"]))
             for event_odds in adapter.fetch_period_odds(event.event_id):
                 side_of = side_resolver(event_odds, game, resolver)
                 for market in event_odds.markets:
@@ -551,8 +629,10 @@ def run_periods(
 
         if dry_run:
             log.info("Dry run: %d quote(s) oriented, nothing written.", len(oriented))
-        elif oriented:
-            write_changed(conn, oriented, now, report)
+        else:
+            if oriented:
+                write_changed(conn, oriented, now, report)
+            write_game_offers(conn, oriented, asked, PERIODS, now)
 
     log.info(
         "Requested %s in region %s. Provider quota: %s",

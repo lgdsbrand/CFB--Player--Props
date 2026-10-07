@@ -813,6 +813,13 @@ class TestOpenAndClose:
         monkeypatch.setattr(
             ingest_odds, "refresh_no_vig_rows", lambda conn: refreshed.append(True)
         )
+        self.offers_replaced = []
+        monkeypatch.setattr(
+            ingest_odds, "write_prop_offers",
+            lambda conn, game_id, markets, offers: self.offers_replaced.append(
+                (game_id, offers)
+            ),
+        )
         report = ingest_odds.run(
             season=2025, week=8, adapter_name="theoddsapi", dry_run=dry_run,
             event_limit=None, now=now, **kw,
@@ -882,6 +889,16 @@ class TestOpenAndClose:
             monkeypatch, now=KICK - timedelta(days=2), dry_run=False
         )
         assert refreshed == [True]
+
+    def test_a_game_whose_props_are_gone_has_its_offers_cleared(self, monkeypatch):
+        # The fake adapter returns no quotes: the books pulled everything, so
+        # the bet slip must stop offering this game's props.
+        self._run(monkeypatch, now=KICK - timedelta(days=2), dry_run=False)
+        assert self.offers_replaced == [(100, [])]
+
+    def test_a_dry_run_leaves_the_offers_alone(self, monkeypatch):
+        self._run(monkeypatch, now=KICK - timedelta(days=2), dry_run=True)
+        assert self.offers_replaced == []
 
     def test_cli_refuses_a_non_positive_window(self, monkeypatch):
         def settings_must_not_load():

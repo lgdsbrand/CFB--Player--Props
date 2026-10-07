@@ -438,6 +438,7 @@ def ingest_event(
     dry_run: bool,
     captured_at: datetime | None = None,
     is_closing: bool = False,
+    offer_markets: list[str] | None = None,
 ) -> None:
     """Resolve and write one event's quotes.
 
@@ -452,11 +453,17 @@ def ingest_event(
     just before kickoff, which is the definition the column carries. A live
     in-week run cannot know it is looking at the last line before kickoff, so
     it never claims to be.
+
+    `offer_markets` is the live capture's: the markets it asked for, whose
+    current offers (`prop_offers`, the bet slip's) this event's quotes
+    replace. None writes no offers, which is right for a backfill: a past
+    snapshot is not what a book is offering now.
     """
     players = load_roster(conn, game)
     books = ensure_sportsbooks(conn, quotes) if not dry_run else {}
 
     rows: list[tuple] = []
+    offers: list[PropOffer] = []
     for quote in quotes:
         report.quotes_seen += 1
         outcome = players.resolve(quote.player_name)
@@ -476,6 +483,16 @@ def ingest_event(
                 report.quotes_no_price += 1
                 continue
             report.market_mix[quote.market_key] += 1
+            offers.extend(
+                PropOffer(outcome.player_id, quote.market_key,
+                          books[price.sportsbook_key], price.line, side, value,
+                          link, price.event_link)
+                for side, value, link in (
+                    ("over", price.over_price, price.over_link),
+                    ("under", price.under_price, price.under_link),
+                )
+                if value is not None and not dry_run
+            )
             rows.append(
                 (
                     game["id"], outcome.player_id, quote.market_key,
@@ -490,7 +507,11 @@ def ingest_event(
     # A dry run resolves everything and reports the rate, but writes nothing —
     # that is the whole point of it, so the counter must NOT advance or the
     # report would claim rows that do not exist.
-    if dry_run or not rows:
+    if dry_run:
+        return
+    if offer_markets is not None:
+        write_prop_offers(conn, game["id"], offer_markets, offers)
+    if not rows:
         return
 
     with conn.cursor() as cur:
@@ -538,6 +559,59 @@ def ingest_event(
                 ),
             )
             report.synthetic_displaced += cur.rowcount
+
+
+@dataclass(frozen=True)
+class PropOffer:
+    """One side of one book's current prop price, for `prop_offers` (0089)."""
+
+    player_id: int
+    market_key: str
+    sportsbook_id: int
+    line: float
+    side: str
+    price: int
+    link: str | None
+    event_link: str | None
+
+
+def write_prop_offers(
+    conn: psycopg.Connection,
+    game_id: int,
+    market_keys: list[str],
+    offers: list[PropOffer],
+) -> None:
+    """Replace one game's current offers in the markets this capture asked for.
+
+    Scoped to the markets asked for, not the whole game: the first-quarter
+    capture asks for Q1 markets only, and must not wipe the full-game offers
+    an earlier run left. Rows for games over a day past kickoff go too, so the
+    table stays a slate in size. Committed with the run's other writes.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "delete from prop_offers where game_id = %s and market_key = any(%s)",
+            (game_id, market_keys),
+        )
+        cur.execute(
+            "delete from prop_offers o using games g where g.id = o.game_id "
+            "and g.start_date < now() - interval '1 day'"
+        )
+        if offers:
+            cur.executemany(
+                """
+                insert into prop_offers
+                  (game_id, player_id, market_key, sportsbook_id, line, side,
+                   price, link, event_link, captured_at)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                on conflict do nothing
+                """,
+                [
+                    (game_id, o.player_id, o.market_key, o.sportsbook_id, o.line,
+                     o.side, o.price, o.link, o.event_link)
+                    for o in offers
+                ],
+            )
 
 
 def run(
@@ -733,10 +807,15 @@ def run(
                 break
 
             if not quotes:
+                # Nothing posted any more: the slip must not keep offering
+                # what the books have pulled.
+                if not dry_run:
+                    write_prop_offers(conn, game["id"], market_keys, [])
                 continue
             report.events_with_props += 1
             ingest_event(
-                conn, quotes, game, adapter_name, report, dry_run=dry_run
+                conn, quotes, game, adapter_name, report, dry_run=dry_run,
+                offer_markets=market_keys,
             )
 
         if not dry_run:

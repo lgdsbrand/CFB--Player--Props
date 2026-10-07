@@ -310,6 +310,15 @@ events came back and NONE matched a game fails on purpose.
   from an unchanged one. Prices outside -400..+300 are skipped. Expect few
   sportsbook rows and many exchange rows (before fees) — measured 2026-10-03,
   sportsbooks cleared 2% seven times all Saturday. The log prints the count.
+- **It also writes the bet slip's current offers** (`game_offers`, migration
+  0089): every book's price per side with its bet link, replaced per captured
+  game and period (the 1H/1Q run replaces its periods). `ingest_odds` does the
+  same for props into `prop_offers`, per game and requested market, and clears
+  a game whose props have all been pulled. Links cost no credits
+  (`includeLinks`). Rows over a day past kickoff are deleted by each run.
+  Measured 2026-10-07: 7,462 game rows (1.9 MB); bet links from FanDuel,
+  DraftKings, BetMGM, BetRivers, Novig, ProphetX; game-page links from most
+  others.
 
 #### `build_team_strength` — daily 08:00 UTC, end of the CFB results chain (game model)
 

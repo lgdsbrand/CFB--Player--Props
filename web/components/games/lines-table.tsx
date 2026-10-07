@@ -62,7 +62,8 @@ export function LinesTable({
           is the model&rsquo;s
           probability of the side shown minus the book&rsquo;s, with the vig
           removed from the book&rsquo;s two prices; {Math.round(edgeThreshold * 100)}%{" "}
-          or more is highlighted. Win % is Pinnacle&rsquo;s moneyline with the
+          or more is highlighted. Edges are calibrated against past seasons, so
+          a wide gap between the two lines can still be a small edge. Win % is Pinnacle&rsquo;s moneyline with the
           vig removed. Sharp and retail prices for each game are on its page.
           A game with a team new to FBS shows the book only: the model has no
           previous season for that team.

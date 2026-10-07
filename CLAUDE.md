@@ -371,6 +371,17 @@ for "a better way" if there is one.
   > keep running. A game with a team new to FBS shows the book only (migration
   > 0083). This overrides the rule above for the games table; it is not a
   > finding that the model now beats the close.
+  >
+  > **2026-10-07 — the table's edge is calibrated.** The raw edges were far
+  > larger than history supports (a raw 70% spread side covered ~51%), and the
+  > user approved calibrating them "to make it honest". One slope per market,
+  > fitted on the 2023-2025 walk-forward backtest (`CALIBRATION_SLOPE` in
+  > `worker/core/game_picks.py`, migration 0085): spreads 0.0565, totals 0.256.
+  > The spread edge is now almost always under 3%; totals keep a small signal.
+  > The fair line is NOT moved toward the book (that would be the market
+  > feeding the model). Shadow picks stay on the raw probability, because the
+  > test and its pre-registered totals tier were set up on it. Refit each
+  > offseason with `run_game_backtest`, never mid-season.
 - **Picks are frozen before kickoff.** Each pick is stamped with the time it
   was made and the price it was made against, and never rewritten after
   kickoff. A grading page built on picks that can be revised is not grading.

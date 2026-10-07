@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import polars as pl
+from sklearn.linear_model import LogisticRegression
 
 from worker.core.game_model import (
     BoostedModel,
@@ -137,6 +138,30 @@ def side_metrics(p: np.ndarray, won: np.ndarray, push: np.ndarray) -> dict:
         "picks": int(pick.sum()),
         "pick_hit": float(np.mean(pick_won)) if pick.any() else float("nan"),
         "roi": roi,
+    }
+
+
+def calibration_slope(p: np.ndarray, won: np.ndarray, push: np.ndarray) -> float:
+    """The `slope` in sigmoid(slope * logit(p)) that best fits the outcomes.
+
+    No intercept, so the calibration stays symmetric and 50% stays 50%; one
+    was tried and did no better on held-out seasons. Pushes and games without
+    a line are dropped. See CALIBRATION_SLOPE in core/game_picks.py.
+    """
+    m = ~np.isnan(p) & ~push
+    q = np.clip(p[m], 1e-4, 1 - 1e-4)
+    x = np.log(q / (1 - q))[:, None]
+    fit = LogisticRegression(fit_intercept=False, C=np.inf).fit(x, won[m].astype(int))
+    return float(fit.coef_[0, 0])
+
+
+def calibration_slopes(frame: pl.DataFrame) -> dict[str, float]:
+    """Both markets' slopes from out-of-sample predictions, keyed as picks are."""
+    cover = _num(frame, "margin") + _num(frame, "mkt_spread")
+    over = _num(frame, "total") - _num(frame, "mkt_total")
+    return {
+        "spreads": calibration_slope(_num(frame, "p_home_cover"), cover > 0, cover == 0),
+        "totals": calibration_slope(_num(frame, "p_over"), over > 0, over == 0),
     }
 
 

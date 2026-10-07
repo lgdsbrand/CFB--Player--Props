@@ -324,6 +324,25 @@ Scheduled as the last step of `cfb-props-ingest-results`, because next week's
 rows only exist once this week's games are in, and `run_game_model` refuses to
 project a game whose week has no rows. **Monitored:** 36h.
 
+#### `ingest_coaches` — Sunday 09:00 UTC, last step of `cfb-props-ingest-week`
+
+```bash
+python -m worker.jobs.ingest_coaches --current
+python -m worker.jobs.ingest_coaches --seasons 2025 2026
+python -m worker.jobs.ingest_coaches --current --dry-run   # count calls, write nothing
+```
+
+Head coaches for the game page's coach panel (migration 0084): `coaches`,
+`coach_seasons` (every season of every current FBS head coach's career, with
+conference, home, away, neutral and bowl splits where CFBD recorded them, NULL
+where it did not) and `team_coaches` (who coaches each team this season, with
+the hire date). One CFBD `/coaches` call for the season plus one
+`/coaches/seasons` call per coach: about 140 calls a week. Re-runs upsert, so
+they are always safe.
+
+Last in the Sunday chain on purpose: a coaching data failure must not stop the
+weekly rosters or ratings ahead of it. **Monitored:** 200h.
+
 #### `run_game_model` — daily 09:30/15:30/19:30/23:30 UTC (game model, G4)
 
 ```bash
@@ -335,15 +354,20 @@ Fits the ratings model on every completed game since 2022 and, for each
 current-season game that has not kicked off:
 
 - writes `game_projections`: projected margin and total for the full game, 1H
-  and 1Q with 80% ranges, and home win probability. The site shows these as a
-  **labelled fair line with no call**, because the G3 backtest found the model
-  does not beat closing lines.
+  and 1Q with 80% ranges, and home win probability. Since migration 0082 each
+  row also carries the full-game spread and total of the book picks are priced
+  against, with the model's probability at that line, from which the games
+  table shows an edge (CLAUDE.md §11, amended 2026-10-06). Since 2026-10-07
+  that probability is **calibrated** (`CALIBRATION_SLOPE` in
+  `core/game_picks.py`, migration 0085): spread edges are honestly near zero.
+  Refit the slopes each offseason from the line `run_game_backtest` logs.
 - writes `game_picks`, the **shadow test**: a pick where the model's
   probability beats one book's vig-free price by 5% or more. The book is
   Pinnacle when it priced the market, else DraftKings, else FanDuel. A pick
   stands at the price it was made against; a new row is written only when the
   model switches side. The database freezes picks at kickoff, and since
-  migration 0078 no visitor can read them.
+  migration 0078 no visitor can read them. Picks use the **raw** probability,
+  not the calibrated one the table shows.
 
 Picks need fresh prices: if the last successful `ingest_game_odds` is over 36h
 old the run writes projections and **no picks**, and says so in the log. A

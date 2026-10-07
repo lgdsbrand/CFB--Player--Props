@@ -11,9 +11,11 @@ import numpy as np
 
 from worker.core.game_grading import clv_points, clv_probability, grade, payout, result
 from worker.core.game_picks import (
+    CALIBRATION_SLOPE,
     PRICED_COLUMNS,
     Pick,
     Quote,
+    calibrate,
     choose_quote,
     devig,
     evaluate,
@@ -161,7 +163,7 @@ def test_the_grade_reports_the_pre_registered_totals_tier_separately():
 
 # --- The games table's comparison (migration 0082) ---------------------------
 
-def test_the_table_comparison_is_the_pick_s_quote_and_probability():
+def test_the_table_comparison_is_the_pick_s_quote_and_calibrated_probability():
     margins = np.array([4.0, 7, 10, 13, 16, 2, 20, 10, 8, 12])
     q = _q("pinnacle", "spreads", -3.0, home_price=-105, away_price=-115)
     cols = priced_columns(q, margins, np.zeros(10), 0.8, "spreads")
@@ -171,10 +173,24 @@ def test_the_table_comparison_is_the_pick_s_quote_and_probability():
         "spread_line": -3.0,
         "spread_home_price": -105,
         "spread_away_price": -115,
-        "spread_model_home_prob": round(pick.model_prob, 5),
+        "spread_model_home_prob": round(calibrate(pick.model_prob, "spreads"), 5),
     }
-    # The edge the site will derive is the pick's edge.
-    assert abs(cols["spread_model_home_prob"] - devig(-105, -115) - pick.edge) < 1e-5
+    # The pick is still made on the raw probability; the table shows the
+    # calibrated one, which is far closer to 50%.
+    assert pick.model_prob == 0.9
+    assert 0.5 < cols["spread_model_home_prob"] < 0.54
+
+
+def test_calibration_shrinks_toward_half_and_keeps_the_side():
+    assert calibrate(0.5, "spreads") == 0.5
+    for market in CALIBRATION_SLOPE:
+        for p in (0.55, 0.7, 0.9, 0.999):
+            c = calibrate(p, market)
+            assert 0.5 < c < p
+            # Symmetric: the other side's probability calibrates to 1 - c.
+            assert abs(calibrate(1 - p, market) - (1 - c)) < 1e-9
+    # Spreads carry almost nothing, totals a little (2023-2025 backtest).
+    assert calibrate(0.9, "spreads") < 0.54 < calibrate(0.9, "totals")
 
 
 def test_the_comparison_is_written_even_when_no_pick_clears_the_threshold():

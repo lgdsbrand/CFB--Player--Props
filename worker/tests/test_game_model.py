@@ -115,6 +115,20 @@ def test_walk_forward_never_trains_on_the_test_season(monkeypatch):
     assert all(2024 not in s for s in seen[:2])
 
 
+def test_calibration_slope_recovers_an_overconfident_model():
+    # Outcomes drawn at sigmoid(0.25 * logit(p)): a model four times too sure.
+    rng = np.random.default_rng(0)
+    p = rng.uniform(0.05, 0.95, 20000)
+    truth = 1 / (1 + np.exp(-0.25 * np.log(p / (1 - p))))
+    won = rng.uniform(size=p.size) < truth
+    push = np.zeros(p.size, dtype=bool)
+    push[:500] = True  # pushes are dropped, whatever their outcome
+    p_with_gaps = p.copy()
+    p_with_gaps[500:700] = np.nan  # games without a line
+    slope = game_backtest.calibration_slope(p_with_gaps, won, push)
+    assert abs(slope - 0.25) < 0.03
+
+
 def test_a_team_with_no_prior_season_in_the_data_is_flagged():
     # Last season: team 1 plays MIN_PRIOR_GAMES + 1 games (one each against
     # 2..7, and one away at 9); 2 and 9 play one game each. Team 9's full

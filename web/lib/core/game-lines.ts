@@ -294,7 +294,10 @@ export interface ModelRange {
  * the over of a total; `line` is from the HOME team's side, like every spread
  * in this file. The model's probability is its share of simulated outcomes
  * at exactly this line, which the site could not reproduce from the mean and
- * range, so it is stored rather than derived here.
+ * range, so it is stored rather than derived here — and stored CALIBRATED
+ * since 2026-10-07 (CALIBRATION_SLOPE in worker/core/game_picks.py): pulled
+ * toward 50% by how often the model's past confidence actually came in. So a
+ * wide gap between the two lines can honestly be a small edge.
  */
 export interface PricedMarket {
   bookKey: string | null;

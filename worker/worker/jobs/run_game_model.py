@@ -13,9 +13,10 @@ G4 of the game model (CLAUDE.md §11). Each run:
   3. prices each projected game's full-game spread and total against one
      book's CURRENT captured price (core/game_picks.py), records that
      comparison on the projection row whatever the edge (migration 0082, for
-     the games table), and writes a `game_picks` row where the edge clears
-     5%. Those rows are the SHADOW TEST: frozen at kickoff by the database,
-     readable by no visitor (migration 0078), graded by `grade_game_picks`.
+     the games table; its probability CALIBRATED since 2026-10-07), and
+     writes a `game_picks` row where the RAW edge clears 5%. Those rows
+     are the SHADOW TEST: frozen at kickoff by the database, readable by no
+     visitor (migration 0078), graded by `grade_game_picks`.
 
 THE MARKET STILL NEVER FEEDS THE MODEL. Prices are read in step 3, after the
 projection is fixed, to decide whether it disagrees with a book by enough to

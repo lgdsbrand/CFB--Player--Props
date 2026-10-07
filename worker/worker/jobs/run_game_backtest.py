@@ -16,7 +16,7 @@ import sys
 import polars as pl
 
 from worker.config import REPO_ROOT, ConfigError, get_settings
-from worker.core.game_backtest import summarise_runs, walk_forward
+from worker.core.game_backtest import calibration_slopes, summarise_runs, walk_forward
 from worker.core.game_data import load_games
 from worker.core.game_report import render
 from worker.db import get_config_value
@@ -55,6 +55,15 @@ def main(argv: list[str] | None = None) -> int:
         (pl.col("season") == current) & pl.col("completed")
     ).height:
         extra = summarise_runs(walk_forward(games, [current]))
+
+    # The games table's calibration (CALIBRATION_SLOPE in core/game_picks.py)
+    # is fitted on the ratings model's pooled test seasons. Printed, never
+    # written back: changing it is a decision, made in the offseason.
+    ratings = pl.concat([r.frame for r in runs if r.model == "ratings"])
+    log.info(
+        "Calibration slopes on %s: %s", args.test_seasons,
+        {m: round(s, 4) for m, s in calibration_slopes(ratings).items()},
+    )
 
     REPORT_PATH.write_text(
         render(summary, seasons=args.test_seasons, extra=extra), encoding="utf-8"

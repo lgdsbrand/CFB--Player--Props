@@ -49,7 +49,8 @@ export function ModelLinePanel({
           opponent-adjusted play this season and last season&rsquo;s rating.
           The range is where 8 in 10 results should land. The edge is the
           model&rsquo;s probability of the side shown minus the book&rsquo;s,
-          with the vig removed from the book&rsquo;s two prices.
+          with the vig removed from the book&rsquo;s two prices, and is
+          calibrated against past seasons.
         </p>
       </div>
 

@@ -171,6 +171,36 @@ def evaluate(
     )
 
 
+# CALIBRATION OF THE TABLE'S EDGE (2026-10-07, on the user's decision: "it's
+# necessary to make it honest"). The raw probability at the book's line is
+# far too confident: in the 2023-2025 walk-forward backtest a raw 70% spread
+# side covered 49-51% and a raw 70% total about 56%. One number per market
+# pulls it back toward 50% on the log-odds scale,
+#
+#     p_calibrated = sigmoid(slope * logit(p_raw)),
+#
+# fitted by `calibration_slope` (core/game_backtest.py) on every 2023-2025
+# out-of-sample prediction; `run_game_backtest` prints the refit. Checked on
+# seasons each fit never saw, including 2026 to date: an intercept and an
+# evidence-phase term did no better. Spreads at 0.0565 means the spread edge
+# is honestly almost nil (a raw 90% is a calibrated 53%); totals at 0.256 keep
+# a small real signal (a raw 70% is 55%). Win % was already calibrated (slope
+# 1.06) and is left alone.
+#
+# ONLY THE GAMES TABLE IS CALIBRATED. Shadow picks are still made on the raw
+# probability (`evaluate`): they are a test already running, with a totals
+# tier pre-registered on raw numbers (grade_game_picks), and changing what is
+# frozen mid-season would break both. Refit each offseason, never mid-season.
+CALIBRATION_SLOPE: dict[str, float] = {"spreads": 0.0565, "totals": 0.2560}
+
+
+def calibrate(p_raw: float, market: str) -> float:
+    """The calibrated probability of the same side; symmetric, so 50% stays 50%."""
+    p = float(np.clip(p_raw, _PROB_FLOOR, 1 - _PROB_FLOOR))
+    z = CALIBRATION_SLOPE[market] * np.log(p / (1 - p))
+    return float(1 / (1 + np.exp(-z)))
+
+
 # Where each market's comparison lands on a game_projections row (migration
 # 0082). Two-way prices in the quote's own order: home/away, or over/under.
 PRICED_COLUMNS: dict[str, tuple[str, str, str, str, str]] = {
@@ -190,11 +220,13 @@ def priced_columns(
 ) -> dict[str, object]:
     """The projection row's comparison with one book on `market`, or all NULL.
 
-    THE SAME QUOTE AND PROBABILITY A PICK WOULD BE PRICED FROM — `choose_quote`
-    picks the book and `first_side_probability` the model's side — but written
-    whatever the edge, because the games table shows the edge on every game,
-    not only on the ones that cleared the pick threshold. The site removes the
-    vig and takes the difference (CLAUDE.md §6); this stores the inputs.
+    THE SAME QUOTE A PICK WOULD BE PRICED FROM — `choose_quote` picks the
+    book — but written whatever the edge, because the games table shows the
+    edge on every game, not only on the ones that cleared the pick threshold.
+    The probability is the pick's (`first_side_probability`) CALIBRATED (see
+    CALIBRATION_SLOPE), so the table's edge is smaller than a pick's. The site
+    removes the vig and takes the difference (CLAUDE.md §6); this stores the
+    inputs.
     """
     columns = PRICED_COLUMNS[market]
     empty: dict[str, object] = dict.fromkeys(columns)
@@ -210,7 +242,7 @@ def priced_columns(
         line: quote.line,
         first_price: int(prices[0]),
         second_price: int(prices[1]),
-        prob: round(float(np.clip(p_model, _PROB_FLOOR, 1 - _PROB_FLOOR)), 5),
+        prob: round(calibrate(p_model, market), 5),
     }
 
 

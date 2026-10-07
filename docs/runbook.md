@@ -350,6 +350,29 @@ they are always safe.
 Last in the Sunday chain on purpose: a coaching data failure must not stop the
 weekly rosters or ratings ahead of it. **Monitored:** 200h.
 
+#### `poll_live_scores` — every 2 minutes (`cfb-live-scores`)
+
+```bash
+python -m worker.jobs.poll_live_scores             # what the cron runs
+python -m worker.jobs.poll_live_scores --dry-run   # call and match, write nothing
+```
+
+College live scores into `live_scores` (migration 0088), one row per game,
+overwritten: status, quarter, clock, scores by quarter, possession, down and
+distance, last play. The games page's Live strip and each game page read it.
+
+**Most runs do nothing, on purpose.** Each run first asks our own `games`
+whether a college game is in its window (5 minutes before kickoff to 5 hours
+after, not yet final). If not, it exits with no CFBD call and no
+`pipeline_runs` row. When one is, ONE `/scoreboard` call covers the whole FBS
+week. ~360 calls on a Saturday, ~3,500 a month. College only: NFL scores would
+cost Odds API credits.
+
+**Not the score of record.** `games` gets the final from the daily results
+ingest; this table only says what the scoreboard shows now. **Monitored:** 96h
+on the job (it is idle between game nights), and `check_live_scores` warns when
+a game on the field has no live row newer than 15 minutes.
+
 #### `run_game_model` — daily 09:30/15:30/19:30/23:30 UTC (game model, G4)
 
 ```bash

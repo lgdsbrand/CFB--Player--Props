@@ -4,6 +4,7 @@ import { DayStrip } from "@/components/day-strip";
 import { EvNow } from "@/components/games/ev-now";
 import { GameCard } from "@/components/games/game-card";
 import { LinesTable } from "@/components/games/lines-table";
+import { LiveStrip } from "@/components/live/live-strip";
 import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
 import { WeekStrip } from "@/components/week-strip";
@@ -16,6 +17,7 @@ import { offenseOnBoard } from "@/lib/core/board-scope";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { EV_HIGHLIGHT } from "@/lib/core/ev";
 import { formatCount } from "@/lib/core/format";
+import { LIVE_SPORTS } from "@/lib/core/live";
 import { orderByEdge } from "@/lib/core/game-lines";
 import { gameMatchups } from "@/lib/core/game-view";
 import {
@@ -27,6 +29,7 @@ import { getConferences } from "@/lib/data/catalogue";
 import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
 import { getEvWagers } from "@/lib/data/ev";
+import { getLiveScores } from "@/lib/data/live";
 import { getGameOddsSummaries, getGameProjections } from "@/lib/data/game-odds";
 import { getSlateGames } from "@/lib/data/games";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
@@ -161,6 +164,9 @@ export default async function Games({
   // flip this page's layout for everyone who never touched the toggle.
   const showLines = params.view === "table";
   const shownIds = shown.map((game) => game.gameId);
+  // Started now so it runs beside the reads below rather than after them.
+  const hasLive = LIVE_SPORTS.includes(sport);
+  const livePromise = hasLive ? getLiveScores(shownIds) : Promise.resolve([]);
   const [odds, projections, config, evWagers] = showLines
     ? await Promise.all([
         getGameOddsSummaries(shownIds),
@@ -174,6 +180,7 @@ export default async function Games({
         ),
       ])
     : [new Map(), new Map(), null, []];
+  const liveInitial = await livePromise;
 
   const conferenceLabel = params.conference ?? "displayed conferences";
 
@@ -298,6 +305,28 @@ export default async function Games({
           ? "Each game's model numbers and edges are set against one book's line, named in the table."
           : "Spreads and totals are the book\u2019s consensus, not a model output."}
       </p>
+
+      {hasLive && shown.length > 0 ? (
+        <LiveStrip
+          initial={liveInitial}
+          games={shown.map((game) => ({
+            gameId: game.gameId,
+            startDate: game.startDate,
+            home: {
+              abbreviation: game.homeAbbreviation,
+              school: game.homeSchool,
+              color: game.homeColor,
+              altColor: game.homeAltColor,
+            },
+            away: {
+              abbreviation: game.awayAbbreviation,
+              school: game.awaySchool,
+              color: game.awayColor,
+              altColor: game.awayAltColor,
+            },
+          }))}
+        />
+      ) : null}
 
       {shown.length === 0 ? (
         <div className="panel p-6">

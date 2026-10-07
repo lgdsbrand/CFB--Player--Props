@@ -194,6 +194,23 @@ services:
     envVars:
       - fromGroup: cfb-props-worker
 
+  # Every two minutes, all week: college live scores (migration 0088). Almost
+  # every run ends in a second or two on a database query that finds no game
+  # in its window, with NO CFBD call and no pipeline_runs row. While a game is
+  # on, ONE /scoreboard call covers the whole FBS week: ~360 calls on a
+  # Saturday, ~3,500 a month against CFBD's 30,000. College only: NFL scores
+  # would be bought from the Odds API.
+  - type: cron
+    name: cfb-live-scores
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "*/2 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.poll_live_scores
+    envVars:
+      - fromGroup: cfb-props-worker
+
   # Tuesday 09:00 UTC. Runs on all projected starters and high-usage skill
   # players regardless of whether a book has posted a line, so the tool is
   # useful early in the week (CLAUDE.md §7). Season and weeks resolve from the

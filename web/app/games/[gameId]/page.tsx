@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { TeamChip } from "@/components/board/team-chip";
+import { GameLive } from "@/components/live/game-live";
 import { BookOddsPanel } from "@/components/games/book-odds-panel";
 import { CoachPanel } from "@/components/games/coach-panel";
 import { EvWagersPanel } from "@/components/games/ev-wagers-panel";
@@ -26,12 +27,14 @@ import { formatCount, formatKickoff, formatVenue } from "@/lib/core/format";
 import { currentCoach, summarizeCoach } from "@/lib/core/coach";
 import { favourite, gameMatchups } from "@/lib/core/game-view";
 import { hasKickedOff } from "@/lib/core/kickoff";
+import { LIVE_SPORTS } from "@/lib/core/live";
 import { rankStrength } from "@/lib/core/team-strength";
 import { getCoaches } from "@/lib/data/coaches";
 import { getTeamStrength } from "@/lib/data/team-strength";
 import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
 import { getEvWagers } from "@/lib/data/ev";
+import { getLiveScores } from "@/lib/data/live";
 import {
   getEarliestSeason,
   getGameBookOdds,
@@ -98,6 +101,7 @@ export default async function GamePage({
     coaches,
     roster,
     evWagers,
+    liveRows,
   ] = await Promise.all([
     getDefenseRatings(game.season, game.week, game.sport),
     // Joins the existing wave rather than forming its own. A wave costs one
@@ -118,6 +122,7 @@ export default async function GamePage({
     // This game's week, as it stood going into the game (migration 0086).
     getStartersAndInjuries(game.season, game.week, [game.homeTeamId, game.awayTeamId]),
     getEvWagers([gameId]),
+    LIVE_SPORTS.includes(game.sport) && !game.completed ? getLiveScores([gameId]) : [],
   ]);
 
   // +EV rows are the last capture's prices: an offer before kickoff, history
@@ -189,6 +194,17 @@ export default async function GamePage({
             atHome={!game.neutralSite}
           />
         </div>
+
+        {/* Live state until `games` has the final, which the headings print. */}
+        {LIVE_SPORTS.includes(game.sport) && !game.completed ? (
+          <GameLive
+            gameId={gameId}
+            startDate={game.startDate}
+            home={game.homeAbbreviation ?? game.homeSchool}
+            away={game.awayAbbreviation ?? game.awaySchool}
+            initial={liveRows[0] ?? null}
+          />
+        ) : null}
 
         <div className="border-border-subtle flex flex-wrap items-baseline gap-x-6 gap-y-2 border-t pt-3">
           <Stat label="Spread">

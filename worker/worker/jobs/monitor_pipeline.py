@@ -221,6 +221,14 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
         note="Sunday 09:00 UTC, chained — polls publish Sunday, one call/season",
     ),
     JobExpectation(
+        name="poll_live_scores",
+        max_age_hours=96,
+        note="every 2 minutes, but it records a run ONLY while a college game "
+             "is on, so the gap between Saturday night and the next weeknight "
+             "game is normal; 96h covers it. A live game that stops updating is "
+             "caught by check_live_scores, not here.",
+    ),
+    JobExpectation(
         name="ingest_coaches",
         max_age_hours=200,
         note="Sunday 09:00 UTC, LAST in the weekly chain — head coaches and "
@@ -710,6 +718,42 @@ def check_data_freshness(report: MonitorReport, slate: Slate | None) -> None:
             )
 
 
+#: A game on the field whose live row is older than this has stopped updating.
+LIVE_STALE_MINUTES = 15
+
+
+def check_live_scores(report: MonitorReport) -> None:
+    """A college game in progress whose live score has stopped moving.
+
+    The poller is idle most of the week by design, so its staleness check
+    cannot see this; what can is a game that kicked off over 20 minutes ago,
+    is not final, and has no live row or an old one.
+    """
+    rows = fetch_all(
+        """
+        select g.id, l.updated_at
+          from games g
+          left join live_scores l on l.game_id = g.id
+         where g.sport = 'cfb' and not g.completed
+           and g.start_date between now() - interval '4 hours'
+                                and now() - interval '20 minutes'
+           and (l.status is null or l.status <> 'completed')
+           and (l.updated_at is null
+                or l.updated_at < now() - make_interval(mins => %s))
+        """,
+        (LIVE_STALE_MINUTES,),
+    )
+    if rows:
+        report.add(
+            "warning",
+            "live-scores-stale",
+            f"{len(rows)} live college game(s) without a fresh score",
+            f"Games {', '.join(str(r['id']) for r in rows[:10])} are on the field "
+            f"and their live_scores row is missing or over {LIVE_STALE_MINUTES} "
+            "minutes old. Check the cfb-live-scores cron on Render.",
+        )
+
+
 # -----------------------------------------------------------------------------
 # Entrypoint
 # -----------------------------------------------------------------------------
@@ -718,6 +762,7 @@ def run_checks(slates: Mapping[str, Slate | None]) -> MonitorReport:
     check_stuck_runs(report)
     check_latest_run_failed(report)
     check_staleness(report, slates)
+    check_live_scores(report)
     # COLLEGE ONLY, deliberately, and it is a known gap. This check counts
     # `projections` rows for the slate week and compares them against earlier
     # weeks and the prior season — a comparison the NFL cannot make yet, having

@@ -189,6 +189,12 @@ const EXPECTED = {
     "first_line", "captured_at", "first_captured_at",
   ],
   v_game_line_consensus: ["game_id", "spread", "over_under"],
+  // College live scores, read by the server and the browser (migration 0088).
+  live_scores: [
+    "game_id", "status", "period", "clock", "home_points", "away_points",
+    "home_line_scores", "away_line_scores", "possession", "situation",
+    "last_play", "updated_at",
+  ],
   // +EV wagers on the game page and the slate (migration 0087).
   game_ev_wagers: [
     "game_id", "period", "market", "sportsbook_id", "side", "line", "price",

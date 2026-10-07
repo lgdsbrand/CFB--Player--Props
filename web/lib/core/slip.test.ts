@@ -5,7 +5,6 @@ import {
   addLeg,
   americanToDecimal,
   decimalToAmerican,
-  flipLeg,
   hasSameGameLegs,
   legKey,
   legTitle,
@@ -64,6 +63,7 @@ test("titles read the way a book prints the bet", () => {
   assert.equal(legTitle(prop), "Rickie Collins Over 193.5 Pass Yards");
   // The stored line is the home team's: UGA -3.5 makes the away side CLEM +3.5.
   assert.equal(legTitle(spread), "CLEM +3.5");
+  assert.equal(legTitle({ ...spread, side: "home" }), "UGA -3.5");
   assert.equal(legTitle({ ...spread, period: "h1", market: "h2h", side: "home", line: null }), "1H UGA ML");
   assert.equal(legTitle({ ...spread, market: "totals", side: "under", line: 51.5 }), "Under 51.5");
   assert.equal(
@@ -72,19 +72,13 @@ test("titles read the way a book prints the bet", () => {
   );
 });
 
-test("flipping a spread keeps the home-perspective line", () => {
-  const flipped = flipLeg(spread) as GameLeg;
-  assert.equal(flipped.side, "home");
-  assert.equal(flipped.line, -3.5);
-  assert.equal(legTitle(flipped), "UGA -3.5");
-  assert.equal((flipLeg(prop) as PropLeg).side, "under");
-});
-
 test("adding the other side of a bet replaces it rather than holding both", () => {
-  const legs = addLeg(addLeg([prop], spread), flipLeg(prop));
+  const under: PropLeg = { ...prop, side: "under" };
+  const legs = addLeg(addLeg([prop], spread), under);
   assert.equal(legs.length, 2);
-  assert.equal(legs.filter((l) => l.kind === "prop")[0].side, "under");
-  assert.notEqual(legKey(prop), legKey(flipLeg(prop)));
+  // Replaced in place: the prop stays first.
+  assert.equal((legs[0] as PropLeg).side, "under");
+  assert.notEqual(legKey(prop), legKey(under));
 });
 
 test("stored legs that are malformed are dropped", () => {

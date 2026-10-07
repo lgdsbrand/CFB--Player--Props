@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 
-import { addLeg, flipLeg, legKey, parseLegs, type SlipLeg } from "@/lib/core/slip";
+import { addLeg, legKey, parseLegs, type SlipLeg } from "@/lib/core/slip";
 
 /**
  * The bet slip's state: its legs and the reader's state (for the BetMGM and
@@ -74,12 +74,6 @@ export const slip = {
   },
   remove(key: string) {
     write({ ...current(), legs: current().legs.filter((l) => legKey(l) !== key) });
-  },
-  flip(key: string) {
-    write({
-      ...current(),
-      legs: current().legs.map((l) => (legKey(l) === key ? flipLeg(l) : l)),
-    });
   },
   clear() {
     write({ ...current(), legs: [] });

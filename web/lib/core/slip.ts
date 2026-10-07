@@ -155,13 +155,6 @@ export function legMatchup(leg: SlipLeg): string {
   return leg.kind === "prop" ? leg.matchup : `${leg.away} @ ${leg.home}`;
 }
 
-/** The other side of the same bet. A spread keeps its home-perspective line. */
-export function flipLeg(leg: SlipLeg): SlipLeg {
-  if (leg.kind === "prop") return { ...leg, side: leg.side === "over" ? "under" : "over" };
-  const other = { home: "away", away: "home", over: "under", under: "over" } as const;
-  return { ...leg, side: other[leg.side] };
-}
-
 /** Add a leg; one on the same bet's other side or line is replaced in place. */
 export function addLeg(legs: SlipLeg[], leg: SlipLeg): SlipLeg[] {
   const at = legs.findIndex((l) => betKey(l) === betKey(leg));

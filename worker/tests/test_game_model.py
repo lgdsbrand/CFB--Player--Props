@@ -13,9 +13,11 @@ import polars as pl
 from worker.core import game_backtest
 from worker.core.game_data import FEATURE_COLUMNS, STRENGTH_METRICS
 from worker.core.game_model import (
+    MIN_PRIOR_GAMES,
     RatingsModel,
     devig_moneyline,
     evidence_phase,
+    missing_prior_season,
     side_probabilities,
 )
 
@@ -111,3 +113,28 @@ def test_walk_forward_never_trains_on_the_test_season(monkeypatch):
     game_backtest.walk_forward(df, [2023, 2024])
     assert seen[0] == {2022} and seen[2] == {2022, 2023}
     assert all(2024 not in s for s in seen[:2])
+
+
+def test_a_team_with_no_prior_season_in_the_data_is_flagged():
+    # Last season: team 1 plays MIN_PRIOR_GAMES + 1 games (one each against
+    # 2..7, and one away at 9); 2 and 9 play one game each. Team 9's full
+    # schedule is two seasons back, which must not count.
+    prior = [(2025, 1, 2 + i) for i in range(MIN_PRIOR_GAMES)] + [(2025, 9, 1)]
+    games = pl.DataFrame({
+        "season": [s for s, _, _ in prior] + [2024] * 12,
+        "home_team_id": [h for _, h, _ in prior] + [9] * 12,
+        "away_team_id": [a for _, _, a in prior] + [50] * 12,
+        "completed": [True] * (len(prior) + 12),
+    })
+    upcoming = pl.DataFrame({"home_team_id": [1, 9, 1], "away_team_id": [2, 1, 77]})
+    flags = missing_prior_season(games, upcoming, 2026)
+    # Flagged when EITHER side is short: 2 has one game, 9 one, 77 none.
+    assert flags.tolist() == [True, True, True]
+    # Give team 2 a full season and the 1 v 2 game clears.
+    full = pl.concat([games, pl.DataFrame({
+        "season": [2025] * MIN_PRIOR_GAMES,
+        "home_team_id": [2] * MIN_PRIOR_GAMES,
+        "away_team_id": [3] * MIN_PRIOR_GAMES,
+        "completed": [True] * MIN_PRIOR_GAMES,
+    })])
+    assert missing_prior_season(full, upcoming.head(1), 2026).tolist() == [False]

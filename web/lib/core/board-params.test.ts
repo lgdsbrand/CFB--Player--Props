@@ -67,6 +67,8 @@ const FULLY_FILTERED: BoardParams = {
   // pick `cards`, so this only round-trips if an explicit choice is being
   // carried rather than re-derived.
   view: "table",
+  // Non-default, or a dropped `order` would round-trip as kickoff and pass.
+  gameOrder: "total_edge",
   // Carried through the URL like every other key. A preset and the filters are
   // mutually exclusive on screen — the page ignores the filters in preset mode
   // — but they must still SERIALISE together, or a shared preset link would

@@ -15,6 +15,7 @@ import type {
   GameMarketSummary,
   GameOddsSummary,
   GameProjection,
+  PricedMarket,
   ModelPeriod,
   GradedGame,
   MarketRole,
@@ -95,9 +96,39 @@ const MODEL_VERSION = "ratings-v1";
 
 const PROJECTION_COLUMNS = [
   "game_id", "model_version", "evidence_phase", "p_home_win", "made_at",
+  "missing_prior_season",
   ...(["margin", "total", "h1_margin", "h1_total", "q1_margin", "q1_total"] as const)
     .flatMap((t) => [`${t}_mean`, `${t}_p10`, `${t}_p90`]),
+  // The comparison with one book (migration 0082), and that book's name
+  // through each foreign key, so the table can say whose line it is.
+  "spread_line", "spread_home_price", "spread_away_price", "spread_model_home_prob",
+  "total_line", "total_over_price", "total_under_price", "total_model_over_prob",
+  "spread_book:sportsbooks!spread_sportsbook_id(key, display_name)",
+  "total_book:sportsbooks!total_sportsbook_id(key, display_name)",
 ].join(", ");
+
+type EmbeddedBook = { key: string; display_name: string } | null;
+
+/** One market's comparison, or null when that run had no usable price. */
+function toPriced(
+  row: DbRow,
+  line: string,
+  first: string,
+  second: string,
+  prob: string,
+  book: string,
+): PricedMarket | null {
+  if (row[line] === null || row[line] === undefined) return null;
+  const embedded = row[book] as EmbeddedBook;
+  return {
+    bookKey: embedded?.key ?? null,
+    bookName: embedded?.display_name ?? null,
+    line: Number(row[line]),
+    firstPrice: Number(row[first]),
+    secondPrice: Number(row[second]),
+    modelFirstProb: Number(row[prob]),
+  };
+}
 
 function toProjection(row: DbRow): GameProjection {
   const range = (prefix: string) => ({
@@ -116,6 +147,15 @@ function toProjection(row: DbRow): GameProjection {
     pHomeWin: Number(row.p_home_win),
     madeAt: row.made_at as string,
     periods: { full: period("full"), h1: period("h1"), q1: period("q1") },
+    missingPriorSeason: row.missing_prior_season === true,
+    spread: toPriced(
+      row, "spread_line", "spread_home_price", "spread_away_price",
+      "spread_model_home_prob", "spread_book",
+    ),
+    total: toPriced(
+      row, "total_line", "total_over_price", "total_under_price",
+      "total_model_over_prob", "total_book",
+    ),
   };
 }
 

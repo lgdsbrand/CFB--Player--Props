@@ -171,6 +171,49 @@ def evaluate(
     )
 
 
+# Where each market's comparison lands on a game_projections row (migration
+# 0082). Two-way prices in the quote's own order: home/away, or over/under.
+PRICED_COLUMNS: dict[str, tuple[str, str, str, str, str]] = {
+    "spreads": ("spread_sportsbook_id", "spread_line", "spread_home_price",
+                "spread_away_price", "spread_model_home_prob"),
+    "totals": ("total_sportsbook_id", "total_line", "total_over_price",
+               "total_under_price", "total_model_over_prob"),
+}
+
+
+def priced_columns(
+    quote: Quote | None,
+    margin_samples: np.ndarray,
+    total_samples: np.ndarray,
+    p_home_win: float,
+    market: str,
+) -> dict[str, object]:
+    """The projection row's comparison with one book on `market`, or all NULL.
+
+    THE SAME QUOTE AND PROBABILITY A PICK WOULD BE PRICED FROM — `choose_quote`
+    picks the book and `first_side_probability` the model's side — but written
+    whatever the edge, because the games table shows the edge on every game,
+    not only on the ones that cleared the pick threshold. The site removes the
+    vig and takes the difference (CLAUDE.md §6); this stores the inputs.
+    """
+    columns = PRICED_COLUMNS[market]
+    empty: dict[str, object] = dict.fromkeys(columns)
+    if quote is None or quote.market != market:
+        return empty
+    prices = quote.two_way()
+    p_model = first_side_probability(quote, margin_samples, total_samples, p_home_win)
+    if prices is None or p_model is None or quote.line is None:
+        return empty
+    book_id, line, first_price, second_price, prob = columns
+    return {
+        book_id: quote.sportsbook_id,
+        line: quote.line,
+        first_price: int(prices[0]),
+        second_price: int(prices[1]),
+        prob: round(float(np.clip(p_model, _PROB_FLOOR, 1 - _PROB_FLOOR)), 5),
+    }
+
+
 def is_new(pick: Pick, standing_side: str | None) -> bool:
     """Write a row only for a first pick or a switch of side (see module docstring)."""
     return standing_side is None or standing_side != pick.side

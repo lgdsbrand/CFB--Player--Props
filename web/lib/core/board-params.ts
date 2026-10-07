@@ -108,6 +108,18 @@ export function resolveBoardVenue(value: string | undefined): BoardVenue {
   return value === "home" || value === "away" ? value : DEFAULT_BOARD_VENUE;
 }
 
+/**
+ * How the games page's Lines table is ordered, besides kickoff — the default,
+ * expressed as the absence of the parameter like every other default here.
+ */
+export type GameLinesOrder = "spread_edge" | "total_edge";
+
+export function resolveGameLinesOrder(
+  value: string | undefined,
+): GameLinesOrder | undefined {
+  return value === "spread_edge" || value === "total_edge" ? value : undefined;
+}
+
 export type BoardParams = {
   /**
    * Which sport's board this is.
@@ -201,6 +213,14 @@ export type BoardParams = {
    */
   view?: BoardView;
   /**
+   * The games page's Lines-table order (client, 2026-10-06: sort the slate by
+   * the model's edge). The board has no control for it and ignores it; it is
+   * here, like `view`, because the games page reuses this parser and every
+   * link on that page is built by `boardHref`, so a value kept anywhere else
+   * would be dropped by the first day or conference click.
+   */
+  gameOrder?: GameLinesOrder;
+  /**
    * Render as a named list with no controls. See `BoardPreset`.
    *
    * Deliberately NOT a filter the controls can set — it is the absence of them.
@@ -234,6 +254,7 @@ const BOARD_PARAM_KEYS = [
   "scope",
   "season", "week", "position", "market", "game", "day", "conference", "q",
   "sort", "edges", "top25", "side", "conf", "rank", "window", "venue", "view",
+  "order",
   "preset", "page",
 ] as const;
 
@@ -387,6 +408,7 @@ export function parseBoardParams(
     hitRateWindow: int(raw.window) ?? DEFAULT_HIT_RATE_WINDOW,
     venue: resolveBoardVenue(first(raw.venue)),
     view: view === "cards" || view === "table" ? view : undefined,
+    gameOrder: resolveGameLinesOrder(first(raw.order)),
     preset: isBoardPreset(preset) ? preset : undefined,
     page: Math.max(int(raw.page) ?? 1, 1),
   };
@@ -511,6 +533,7 @@ export function boardHref(
   // turn an explicit choice back into "not chosen", so the next market change
   // would silently flip the layout out from under a reader who had just set it.
   set("view", next.view);
+  set("order", next.gameOrder);
   set("preset", next.preset);
   if (next.page > 1) set("page", next.page);
 

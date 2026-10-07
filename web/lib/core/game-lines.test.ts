@@ -3,22 +3,29 @@ import { test } from "node:test";
 
 import {
   atsResult,
+  devigFirst,
   formatFair,
   formatPoints,
   formatRecord,
   lineMove,
   marginRangeLabel,
+  marketEdge,
   modelFavourite,
   modelSpreadLabel,
+  orderByEdge,
   sharpRetailGap,
   spreadLabel,
   spreadMoveToward,
+  spreadSideLabel,
   teamRecord,
   totalMoveLabel,
+  totalSideLabel,
   totalRangeLabel,
   totalResult,
   type GameMarketSummary,
+  type GameProjection,
   type GradedGame,
+  type PricedMarket,
 } from "./game-lines.ts";
 
 test("spread labels name the favourite from a home-perspective line", () => {
@@ -151,4 +158,99 @@ test("the model's ranges read in team terms", () => {
   assert.equal(marginRangeLabel({ mean: 0, p10: 0.2, p90: 7 }, "UGA", "CLEM"), "level to UGA by 7");
   assert.equal(totalRangeLabel({ mean: 50, p10: 37.6, p90: 62.2 }), "38 to 62");
   assert.deepEqual(modelFavourite(0.3, "UGA", "CLEM"), { team: "CLEM", p: 0.7 });
+});
+
+// -----------------------------------------------------------------------------
+// The game model's edge against one book (migration 0082)
+// -----------------------------------------------------------------------------
+
+const close = (a: number, b: number, tol = 1e-12) =>
+  assert.ok(Math.abs(a - b) < tol, `${a} vs ${b}`);
+
+test("devig matches the worker's proportional method on the same prices", () => {
+  // The vectors of `test_devig_is_proportional` in worker/tests/test_game_picks.py.
+  close(devigFirst(-110, -110), 0.5);
+  close(devigFirst(-150, 130), 0.6 / (0.6 + 100 / 230));
+});
+
+function priced(overrides: Partial<PricedMarket> = {}): PricedMarket {
+  return {
+    bookKey: "pinnacle",
+    bookName: "Pinnacle",
+    line: -10,
+    firstPrice: -105,
+    secondPrice: -115,
+    modelFirstProb: 0.655,
+    ...overrides,
+  };
+}
+
+test("the edge is model minus vig-free book, on the side the model prefers", () => {
+  const home = marketEdge(priced());
+  assert.equal(home.side, "first");
+  close(home.bookProb, devigFirst(-105, -115));
+  close(home.edge, 0.655 - devigFirst(-105, -115));
+
+  const away = marketEdge(priced({ modelFirstProb: 0.331 }));
+  assert.equal(away.side, "second");
+  close(away.modelProb, 1 - 0.331);
+  close(away.edge, 1 - 0.331 - (1 - devigFirst(-105, -115)));
+  assert.ok(away.edge > 0);
+});
+
+test("the two sides' edges mirror, so the preferred side's is never negative", () => {
+  for (const p of [0.01, 0.3, 0.49, 0.5, 0.51, 0.7, 0.99]) {
+    assert.ok(marketEdge(priced({ modelFirstProb: p })).edge >= 0, String(p));
+  }
+});
+
+test("a spread side is named from the home line, with the away side mirrored", () => {
+  assert.equal(spreadSideLabel(-10, "first", "TROY", "USM"), "TROY -10.0");
+  assert.equal(spreadSideLabel(-10, "second", "TROY", "USM"), "USM +10.0");
+  assert.equal(spreadSideLabel(3, "first", "KENN", "JXST"), "KENN +3.0");
+  assert.equal(spreadSideLabel(0, "second", "KENN", "JXST"), "JXST PK");
+});
+
+test("a total side reads Over or Under the line", () => {
+  assert.equal(totalSideLabel(51.5, "first"), "Over 51.5");
+  assert.equal(totalSideLabel(51.5, "second"), "Under 51.5");
+});
+
+test("edge order puts the biggest edge first and unpriced games last, in kickoff order", () => {
+  const projection = (gameId: number, spread: PricedMarket | null): GameProjection => ({
+    gameId,
+    modelVersion: "ratings-v1",
+    evidencePhase: "later",
+    pHomeWin: 0.5,
+    madeAt: "2026-10-06T23:30:00Z",
+    periods: {
+      full: { margin: { mean: 0, p10: 0, p90: 0 }, total: { mean: 0, p10: 0, p90: 0 } },
+      h1: { margin: { mean: 0, p10: 0, p90: 0 }, total: { mean: 0, p10: 0, p90: 0 } },
+      q1: { margin: { mean: 0, p10: 0, p90: 0 }, total: { mean: 0, p10: 0, p90: 0 } },
+    },
+    spread,
+    total: null,
+    missingPriorSeason: gameId === 4,
+  });
+  // Kickoff order 1..5. Even prices, so each edge is |p - 0.5|.
+  const games = [1, 2, 3, 4, 5].map((gameId) => ({ gameId }));
+  const projections = new Map([
+    [1, projection(1, priced({ firstPrice: -110, secondPrice: -110, modelFirstProb: 0.52 }))],
+    [2, projection(2, null)],
+    [3, projection(3, priced({ firstPrice: -110, secondPrice: -110, modelFirstProb: 0.3 }))],
+    [5, projection(5, priced({ firstPrice: -110, secondPrice: -110, modelFirstProb: 0.6 }))],
+    // The largest edge of all, but flagged (a team new to FBS): not shown, so
+    // it sorts with the unpriced games instead of heading the table.
+    [4, projection(4, priced({ firstPrice: -110, secondPrice: -110, modelFirstProb: 0.95 }))],
+  ]);
+  assert.deepEqual(
+    orderByEdge(games, projections, "spread_edge").map((g) => g.gameId),
+    [3, 5, 1, 2, 4],
+  );
+  // No total priced anywhere: every game is "unpriced" and keeps kickoff order.
+  assert.deepEqual(
+    orderByEdge(games, projections, "total_edge").map((g) => g.gameId),
+    [1, 2, 3, 4, 5],
+  );
+  assert.equal(orderByEdge(games, projections, undefined), games);
 });

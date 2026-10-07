@@ -1,23 +1,28 @@
-import { formatKickoff } from "@/lib/core/format";
+import { formatEdge, formatKickoff, meetsEdgeThreshold } from "@/lib/core/format";
 import {
   MODEL_PERIOD_LABELS,
   formatFair,
   marginRangeLabel,
+  marketEdge,
   modelFavourite,
   modelSpreadLabel,
+  spreadSideLabel,
   totalRangeLabel,
+  totalSideLabel,
   type GameProjection,
   type ModelPeriod,
+  type PricedMarket,
 } from "@/lib/core/game-lines";
 
 /**
- * The game model's own numbers for one game (CLAUDE.md §11, G4).
+ * The game model's own numbers for one game (CLAUDE.md §11).
  *
- * A FAIR LINE, NOT A PICK. The G3 backtest found the model less accurate than
- * the closing line, so this panel states what the model thinks the game is
- * worth and never sets it against a book: no OVER/UNDER, no cover call, no
- * "edge". The caption says why, in the reader's terms. The model's picks exist
- * only as a private shadow test (migration 0078) and are not read here.
+ * The fair line by period, the win chance, and since 2026-10-06 the full-game
+ * EDGE against one book, shown at the user's instruction (§11 records it; it
+ * overrides the G4 decision to show the number only). The edges are the same
+ * ones the slate's Lines table shows, from the same `game_projections` row, so
+ * the two pages cannot disagree. The model's picks are still a private shadow
+ * test (migration 0078) and are not read here.
  */
 
 const PERIODS: ModelPeriod[] = ["full", "h1", "q1"];
@@ -27,11 +32,13 @@ export function ModelLinePanel({
   home,
   away,
   completed,
+  edgeThreshold,
 }: {
   projection: GameProjection | null;
   home: string;
   away: string;
   completed: boolean;
+  edgeThreshold: number;
 }) {
   return (
     <section className="panel flex flex-col gap-3 p-4">
@@ -39,12 +46,10 @@ export function ModelLinePanel({
         <h2 className="section-header">🧮 Model fair line</h2>
         <p className="text-muted text-xs">
           What the game model thinks this game is worth, from each team&rsquo;s
-          opponent-adjusted play this season and last season&rsquo;s rating.{" "}
-          <strong className="text-ink">This is not a pick.</strong>
-          {/* Explicit: a space opening a line after an element is dropped. */}
-          {" "}Tested on 2023 to 2025, the model was about a point less
-          accurate than the closing line, so it does not say which side to
-          take. The range is where 8 in 10 results should land.
+          opponent-adjusted play this season and last season&rsquo;s rating.
+          The range is where 8 in 10 results should land. The edge is the
+          model&rsquo;s probability of the side shown minus the book&rsquo;s,
+          with the vig removed from the book&rsquo;s two prices.
         </p>
       </div>
 
@@ -53,6 +58,15 @@ export function ModelLinePanel({
           {completed
             ? "The model did not project this game."
             : "Not projected yet. A week's games are projected once the previous week has been played."}
+        </p>
+      ) : projection.missingPriorSeason ? (
+        // User decision 2026-10-06: the book's lines only (see
+        // `GameProjection.missingPriorSeason`). Said in full here; the slate
+        // table has room for two words.
+        <p className="text-muted text-xs">
+          One of these teams is new to FBS this season, so the model has no
+          previous season for it and its numbers for this game are not shown.
+          The book&rsquo;s lines are on this page as usual.
         </p>
       ) : (
         <>
@@ -102,6 +116,18 @@ export function ModelLinePanel({
                 })()}
               </span>
             </span>
+            <Edge
+              label="Spread edge"
+              market={projection.spread}
+              side={(side, line) => spreadSideLabel(line, side, home, away)}
+              edgeThreshold={edgeThreshold}
+            />
+            <Edge
+              label="Total edge"
+              market={projection.total}
+              side={(side, line) => totalSideLabel(line, side)}
+              edgeThreshold={edgeThreshold}
+            />
             <span className="text-dim text-[0.6875rem]">
               Updated {formatKickoff(projection.madeAt)}.
               {projection.evidencePhase === "early"
@@ -112,6 +138,44 @@ export function ModelLinePanel({
         </>
       )}
     </section>
+  );
+}
+
+/** "+16.2%" over "TROY -10.0 · Pinnacle", or a dash when no book priced it. */
+function Edge({
+  label,
+  market,
+  side,
+  edgeThreshold,
+}: {
+  label: string;
+  market: PricedMarket | null;
+  side: (side: "first" | "second", line: number) => string;
+  edgeThreshold: number;
+}) {
+  const edge = market ? marketEdge(market) : null;
+  return (
+    <span className="flex flex-col">
+      <span className="label-caption">{label}</span>
+      {market && edge ? (
+        <>
+          <span
+            className={
+              "font-mono text-sm font-extrabold tabular-nums " +
+              (meetsEdgeThreshold(edge.edge, edgeThreshold) ? "text-target" : "text-muted")
+            }
+          >
+            {formatEdge(edge.edge)}
+          </span>
+          <span className="text-dim text-[0.6875rem] whitespace-nowrap">
+            {side(edge.side, market.line)}
+            {market.bookName ? ` · ${market.bookName}` : ""}
+          </span>
+        </>
+      ) : (
+        <span className="text-dim text-sm">—</span>
+      )}
+    </span>
   );
 }
 

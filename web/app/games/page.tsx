@@ -14,6 +14,7 @@ import {
 import { offenseOnBoard } from "@/lib/core/board-scope";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount } from "@/lib/core/format";
+import { orderByEdge } from "@/lib/core/game-lines";
 import { gameMatchups } from "@/lib/core/game-view";
 import {
   findSlateDay,
@@ -21,6 +22,7 @@ import {
   slateDays,
 } from "@/lib/core/slate-days";
 import { getConferences } from "@/lib/data/catalogue";
+import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
 import { getGameOddsSummaries, getGameProjections } from "@/lib/data/game-odds";
 import { getSlateGames } from "@/lib/data/games";
@@ -44,12 +46,12 @@ import { getSlateConditions } from "@/lib/data/weather";
  * consensus spread and total from CFBD, the poll ranks, and the position splits
  * the model already consumes.
  *
- * IT IS NOT (YET) A GAME PREDICTION MODEL. When this view was agreed, CLAUDE.md
+ * THE LINES VIEW CARRIES THE GAME MODEL. When the cards were agreed, CLAUDE.md
  * §10 put game prediction out of scope; on 2026-09-23 the client commissioned
- * it as a separate project (§11). The Lines view is that project's first
- * screen. Its model did not beat closing lines in the backtest, so the only
- * model number here is the Lines view's labelled fair-line column; everything
- * else describing the game is the books'.
+ * it as a separate project (§11), and the Lines view is its screen: the
+ * book's spread and total, the model's, and since 2026-10-06 the edge between
+ * them, shown at the user's instruction (§11 records it). The cards stay the
+ * books' numbers only.
  */
 
 /**
@@ -156,9 +158,13 @@ export default async function Games({
   // flip this page's layout for everyone who never touched the toggle.
   const showLines = params.view === "table";
   const shownIds = shown.map((game) => game.gameId);
-  const [odds, projections] = showLines
-    ? await Promise.all([getGameOddsSummaries(shownIds), getGameProjections(shownIds)])
-    : [new Map(), new Map()];
+  const [odds, projections, config] = showLines
+    ? await Promise.all([
+        getGameOddsSummaries(shownIds),
+        getGameProjections(shownIds),
+        getAppConfig(),
+      ])
+    : [new Map(), new Map(), null];
 
   const conferenceLabel = params.conference ?? "displayed conferences";
 
@@ -229,6 +235,28 @@ export default async function Games({
         />
       </div>
 
+      {/* Only with the table: the cards carry no edge to order by. */}
+      {showLines ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="label-caption">Order</span>
+          <ConferencePill
+            href={boardHref(linkParams, { gameOrder: undefined }, GAMES_PATH)}
+            active={params.gameOrder === undefined}
+            label="Kickoff"
+          />
+          <ConferencePill
+            href={boardHref(linkParams, { gameOrder: "spread_edge" }, GAMES_PATH)}
+            active={params.gameOrder === "spread_edge"}
+            label="Spread edge"
+          />
+          <ConferencePill
+            href={boardHref(linkParams, { gameOrder: "total_edge" }, GAMES_PATH)}
+            active={params.gameOrder === "total_edge"}
+            label="Total edge"
+          />
+        </div>
+      ) : null}
+
       {played > 0 ? (
         <p className="text-dim border-border-subtle rounded-xl border px-3 py-2 text-xs">
           <span className="text-muted font-bold uppercase tracking-label">
@@ -256,7 +284,10 @@ export default async function Games({
         {narrowings.length === 0
           ? "the whole slate"
           : `those ${narrowings.join(" ")}`}
-        . Spreads and totals are the book&rsquo;s consensus, not a model output.
+        .{" "}
+        {showLines
+          ? "Each game's model numbers and edges are set against one book's line, named in the table."
+          : "Spreads and totals are the book\u2019s consensus, not a model output."}
       </p>
 
       {shown.length === 0 ? (
@@ -274,7 +305,12 @@ export default async function Games({
           </p>
         </div>
       ) : showLines ? (
-        <LinesTable games={shown} odds={odds} projections={projections} />
+        <LinesTable
+          games={orderByEdge(shown, projections, params.gameOrder)}
+          odds={odds}
+          projections={projections}
+          edgeThreshold={config?.edgeThreshold ?? 0.05}
+        />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {shown.map((game) => (

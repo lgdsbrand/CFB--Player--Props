@@ -357,6 +357,20 @@ for "a better way" if there is one.
   that plainly if it does. Compare candidate models (ratings/efficiency
   score models against gradient boosting at least) rather than picking one up
   front. With ~900 FBS games a season, overfitting is the default failure.
+
+  > **Amended 2026-10-06 — the edge is shown publicly, on the user's
+  > instruction.** G3 found the model does not beat closing lines, and G4
+  > showed its fair line only. The client then asked for the games table as
+  > book spread / our spread / spread edge / book total / our total / total
+  > edge / win %, and the user instructed that it be built as asked: "I don't
+  > care about previous results, he wants it like that so follow his
+  > instructions." No track-record caveat is required. The edge is the §6
+  > definition against one book's price (Pinnacle, then DraftKings, then
+  > FanDuel), stored per game by the model run (migration 0082), so the table
+  > and the shadow picks never disagree. The shadow picks and weekly grading
+  > keep running. A game with a team new to FBS shows the book only (migration
+  > 0083). This overrides the rule above for the games table; it is not a
+  > finding that the model now beats the close.
 - **Picks are frozen before kickoff.** Each pick is stamped with the time it
   was made and the price it was made against, and never rewritten after
   kickoff. A grading page built on picks that can be revised is not grading.

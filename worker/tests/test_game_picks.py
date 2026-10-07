@@ -10,7 +10,16 @@ from __future__ import annotations
 import numpy as np
 
 from worker.core.game_grading import clv_points, clv_probability, grade, payout, result
-from worker.core.game_picks import Pick, Quote, choose_quote, devig, evaluate, is_new
+from worker.core.game_picks import (
+    PRICED_COLUMNS,
+    Pick,
+    Quote,
+    choose_quote,
+    devig,
+    evaluate,
+    is_new,
+    priced_columns,
+)
 
 
 def _q(key, market, line=None, **prices) -> Quote:
@@ -148,3 +157,40 @@ def test_the_grade_reports_the_pre_registered_totals_tier_separately():
     assert "W-L-P 1-2-0" in lines["totals"]
     assert "W-L-P 1-1-0" in lines["totals 64%+"]
     assert "64%+" not in lines["spreads"]
+
+
+# --- The games table's comparison (migration 0082) ---------------------------
+
+def test_the_table_comparison_is_the_pick_s_quote_and_probability():
+    margins = np.array([4.0, 7, 10, 13, 16, 2, 20, 10, 8, 12])
+    q = _q("pinnacle", "spreads", -3.0, home_price=-105, away_price=-115)
+    cols = priced_columns(q, margins, np.zeros(10), 0.8, "spreads")
+    pick = evaluate(1, q, margins, np.zeros(10), 0.8)
+    assert cols == {
+        "spread_sportsbook_id": q.sportsbook_id,
+        "spread_line": -3.0,
+        "spread_home_price": -105,
+        "spread_away_price": -115,
+        "spread_model_home_prob": round(pick.model_prob, 5),
+    }
+    # The edge the site will derive is the pick's edge.
+    assert abs(cols["spread_model_home_prob"] - devig(-105, -115) - pick.edge) < 1e-5
+
+
+def test_the_comparison_is_written_even_when_no_pick_clears_the_threshold():
+    totals = np.array([49.0, 51, 48, 52, 50])  # 2 over, 2 under, 1 push
+    q = _q("draftkings", "totals", 50.0, over_price=-110, under_price=-110)
+    assert evaluate(1, q, np.zeros(5), totals, 0.5) is None
+    cols = priced_columns(q, np.zeros(5), totals, 0.5, "totals")
+    assert cols["total_line"] == 50.0 and cols["total_model_over_prob"] == 0.5
+    assert cols["total_over_price"] == -110 and cols["total_under_price"] == -110
+
+
+def test_no_usable_quote_writes_every_column_null():
+    for market in ("spreads", "totals"):
+        cols = priced_columns(None, np.zeros(3), np.zeros(3), 0.5, market)
+        assert set(cols) == set(PRICED_COLUMNS[market])
+        assert all(v is None for v in cols.values())
+    one_sided = _q("pinnacle", "spreads", -3.0, home_price=-105, away_price=None)
+    assert all(v is None for v in priced_columns(
+        one_sided, np.ones(3), np.zeros(3), 0.5, "spreads").values())

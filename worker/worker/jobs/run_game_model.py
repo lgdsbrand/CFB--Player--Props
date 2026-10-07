@@ -10,11 +10,12 @@ G4 of the game model (CLAUDE.md §11). Each run:
   2. projects every game of the current season that has not kicked off and
      whose week's team strength exists, and writes `game_projections` — the
      labelled fair line the site shows, with no call attached;
-  3. prices each projected game's full-game moneyline, spread and total
-     against one book's CURRENT captured price (core/game_picks.py) and writes
-     a `game_picks` row where the edge clears 5%. Those rows are the SHADOW
-     TEST: frozen at kickoff by the database, readable by no visitor
-     (migration 0078), graded by `grade_game_picks`.
+  3. prices each projected game's full-game spread and total against one
+     book's CURRENT captured price (core/game_picks.py), records that
+     comparison on the projection row whatever the edge (migration 0082, for
+     the games table), and writes a `game_picks` row where the edge clears
+     5%. Those rows are the SHADOW TEST: frozen at kickoff by the database,
+     readable by no visitor (migration 0078), graded by `grade_game_picks`.
 
 THE MARKET STILL NEVER FEEDS THE MODEL. Prices are read in step 3, after the
 projection is fixed, to decide whether it disagrees with a book by enough to
@@ -46,8 +47,21 @@ import polars as pl
 
 from worker.config import ConfigError, get_settings
 from worker.core.game_data import load_games
-from worker.core.game_model import TARGETS, RatingsModel, evidence_phase
-from worker.core.game_picks import Pick, Quote, choose_quote, evaluate, is_new
+from worker.core.game_model import (
+    TARGETS,
+    RatingsModel,
+    evidence_phase,
+    missing_prior_season,
+)
+from worker.core.game_picks import (
+    PRICED_COLUMNS,
+    Pick,
+    Quote,
+    choose_quote,
+    evaluate,
+    is_new,
+    priced_columns,
+)
 from worker.db import connect, fetch_all, get_config_value, pipeline_run, set_rows_written
 from worker.logging_setup import configure_logging, get_logger
 
@@ -256,6 +270,18 @@ def run(*, season: int, sport: str = "cfb", dry_run: bool = False,
 
     projections, dist = project(model, ready)
     game_ids = [int(g) for g in ready["game_id"].to_list()]
+    # A display flag (migration 0083): the site hides the model's numbers for
+    # a game with a team new to FBS. Picks below are priced regardless.
+    for row, missing in zip(
+        projections, missing_prior_season(games, ready, season), strict=True
+    ):
+        row["missing_prior_season"] = bool(missing)
+    # Every row carries every comparison column, NULL until priced: the upsert
+    # takes its column list from the first row, and a stale run must CLEAR an
+    # edge rather than leave one standing against an old price.
+    for row in projections:
+        for market in PICK_MARKETS:
+            row.update(dict.fromkeys(PRICED_COLUMNS[market]))
 
     report.odds_age_hours = last_capture_age_hours(now)
     fresh = report.odds_age_hours is not None and report.odds_age_hours <= STALE_ODDS_HOURS
@@ -272,6 +298,10 @@ def run(*, season: int, sport: str = "cfb", dry_run: bool = False,
         for i, game_id in enumerate(game_ids):
             for market in PICK_MARKETS:
                 quote = choose_quote(quotes.get(game_id, []), market)
+                projections[i].update(priced_columns(
+                    quote, dist["margin"][i], dist["total"][i],
+                    float(dist["p_home_win"][i]), market,
+                ))
                 if quote is None:
                     continue
                 pick = evaluate(

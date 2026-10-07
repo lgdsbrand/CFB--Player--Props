@@ -54,6 +54,36 @@ def evidence_phase(h_games: np.ndarray, a_games: np.ndarray) -> np.ndarray:
     return np.where(np.minimum(h_games, a_games) <= EARLY_GAMES, "early", "later")
 
 
+# A team with fewer completed games than this LAST season has no prior the
+# model can lean on. In practice that is a team new to FBS: its previous
+# season was FCS, outside the data, so the model sees none of it (NDSU 0 and
+# Sacramento State 1 in 2026, against 12 or so for every FBS team). Six is
+# half a season: well clear of both, and of any real FBS schedule.
+MIN_PRIOR_GAMES = 6
+
+
+def missing_prior_season(
+    games: pl.DataFrame, upcoming: pl.DataFrame, season: int
+) -> np.ndarray:
+    """True per upcoming game when either team has under MIN_PRIOR_GAMES last season.
+
+    Counted from `games` itself — the frame the model trains on — so the flag
+    describes exactly what the model saw, not a conference table's opinion of
+    which division a team was in.
+    """
+    prior = games.filter((pl.col("season") == season - 1) & pl.col("completed"))
+    counts: dict[int, int] = {}
+    for column in ("home_team_id", "away_team_id"):
+        for team_id in prior[column].to_list():
+            counts[int(team_id)] = counts.get(int(team_id), 0) + 1
+    home = upcoming["home_team_id"].to_list()
+    away = upcoming["away_team_id"].to_list()
+    return np.array([
+        min(counts.get(int(h), 0), counts.get(int(a), 0)) < MIN_PRIOR_GAMES
+        for h, a in zip(home, away, strict=True)
+    ], dtype=bool)
+
+
 # =============================================================================
 # Features
 # =============================================================================

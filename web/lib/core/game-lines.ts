@@ -1,10 +1,10 @@
 /**
  * Game lines — the pure half of the game model's screens (CLAUDE.md §11, G1).
  *
- * Everything here describes the MARKET, not a model: consensus and sharp
- * spreads, how far they moved, and how each team has done against the number.
- * The game model's own projection lands beside these in G4; nothing in this
- * file may start to look like one before then.
+ * The MARKET's numbers — consensus and sharp spreads, how far they moved,
+ * how each team has done against the number — and, at the bottom, the game
+ * model's projection and its edge against one book (G4, and since 2026-10-06
+ * shown publicly at the user's instruction; CLAUDE.md §11).
  *
  * ONE ORIENTATION RULE. Every spread in this file is stored from the HOME
  * team's perspective, negative = home favoured, exactly as `game_odds.line`
@@ -236,12 +236,14 @@ export function formatRecord(w: number, l: number, p = 0): string {
 }
 
 // =============================================================================
-// The game model's fair line (CLAUDE.md §11, G4)
+// The game model's fair line and its edge (CLAUDE.md §11)
 // =============================================================================
-// SHOWN AS A NUMBER, NEVER AS A CALL. The G3 backtest found the model less
-// accurate than the closing line, so nothing here compares the model with a
-// book or says which side to take. Its picks exist, frozen, as a private
-// shadow test (migration 0078), and nothing on the site reads them.
+// The fair line has been on the site since G4. THE EDGE JOINED IT ON
+// 2026-10-06, at the user's instruction and against the G4 decision to show
+// the number only (CLAUDE.md §11 records both). Its shadow picks are still a
+// private, frozen test (migration 0078) that nothing on the site reads; the
+// edge below is computed from the same quote and probability, so the two
+// never disagree about a game.
 
 export type ModelPeriod = "full" | "h1" | "q1";
 
@@ -249,6 +251,25 @@ export interface ModelRange {
   mean: number;
   p10: number;
   p90: number;
+}
+
+/**
+ * The model set against ONE book's full-game price (migration 0082).
+ *
+ * Written by `run_game_model` from the quote its shadow picks use (Pinnacle,
+ * then DraftKings, then FanDuel). `first` is the home side of a spread and
+ * the over of a total; `line` is from the HOME team's side, like every spread
+ * in this file. The model's probability is its share of simulated outcomes
+ * at exactly this line, which the site could not reproduce from the mean and
+ * range, so it is stored rather than derived here.
+ */
+export interface PricedMarket {
+  bookKey: string | null;
+  bookName: string | null;
+  line: number;
+  firstPrice: number;
+  secondPrice: number;
+  modelFirstProb: number;
 }
 
 /** One row of `game_projections`. Margin is HOME minus AWAY. */
@@ -259,6 +280,111 @@ export interface GameProjection {
   pHomeWin: number;
   madeAt: string;
   periods: Record<ModelPeriod, { margin: ModelRange; total: ModelRange }>;
+  /** Null when no listed book had a usable price at the last run. */
+  spread: PricedMarket | null;
+  total: PricedMarket | null;
+  /**
+   * A team in this game has no previous season in the model's data — in
+   * practice it is new to FBS (migration 0083). The site then shows none of
+   * the model's numbers for the game, only the book's; user decision,
+   * 2026-10-06, after NDSU and Sacramento State topped the table at +47% and
+   * +39% on a season the model never saw.
+   */
+  missingPriorSeason: boolean;
+}
+
+/** Why a flagged game shows no model numbers, in the reader's terms. */
+export const MISSING_PRIOR_NOTE = "new to FBS";
+
+/** An American price's implied probability, vig included. */
+export function impliedProbability(price: number): number {
+  return price < 0 ? -price / (-price + 100) : 100 / (price + 100);
+}
+
+/**
+ * The vig-free probability of the FIRST side of a two-way price, by the
+ * proportional method — the same arithmetic as `devig` in
+ * `worker/core/game_picks.py`, pinned to the same numbers by the tests.
+ */
+export function devigFirst(firstPrice: number, secondPrice: number): number {
+  const a = impliedProbability(firstPrice);
+  const b = impliedProbability(secondPrice);
+  return a / (a + b);
+}
+
+/**
+ * The edge on the side the model prefers (CLAUDE.md §6): model probability
+ * minus the book's vig-free probability of the same side.
+ *
+ * WHY ONE SIDE AND NOT TWO. With the vig removed the two sides' edges are
+ * exact mirrors, so the preferred side's is the non-negative one and the
+ * other carries no information. A dead heat reads as the first side at 0.
+ */
+export function marketEdge(market: PricedMarket): {
+  side: "first" | "second";
+  edge: number;
+  modelProb: number;
+  bookProb: number;
+} {
+  const book = devigFirst(market.firstPrice, market.secondPrice);
+  const edge = market.modelFirstProb - book;
+  return edge >= 0
+    ? { side: "first", edge, modelProb: market.modelFirstProb, bookProb: book }
+    : {
+        side: "second",
+        edge: -edge,
+        modelProb: 1 - market.modelFirstProb,
+        bookProb: 1 - book,
+      };
+}
+
+/**
+ * One side of a spread as a bettor reads it: "TROY -10.0", "USM +10.0".
+ * `homeLine` is the home team's handicap; the away side holds its mirror.
+ */
+export function spreadSideLabel(
+  homeLine: number,
+  side: "first" | "second",
+  home: string,
+  away: string,
+): string {
+  const line = side === "first" ? homeLine : -homeLine;
+  if (line === 0) return `${side === "first" ? home : away} PK`;
+  const sign = line > 0 ? "+" : "-";
+  return `${side === "first" ? home : away} ${sign}${formatPoints(line)}`;
+}
+
+/**
+ * The games in the Lines table's order: by the model's edge on one market,
+ * largest first, or untouched (kickoff) when no edge order is asked for.
+ *
+ * A GAME WITH NO EDGE GOES LAST, in the order it arrived, rather than being
+ * treated as an edge of zero: "not priced" and "priced at no edge" are
+ * different facts, and sorting them together would scatter unpriced games
+ * among the small edges. The sort is stable, so ties keep kickoff order.
+ */
+export function orderByEdge<G extends { gameId: number }>(
+  games: G[],
+  projections: Map<number, GameProjection>,
+  order: "spread_edge" | "total_edge" | undefined,
+): G[] {
+  if (!order) return games;
+  const edgeOf = (game: G): number | null => {
+    const projection = projections.get(game.gameId);
+    // Not shown, so not ranked: a hidden edge sorted to the top would leave
+    // the table's first row reading "—".
+    if (projection?.missingPriorSeason) return null;
+    const market = order === "spread_edge" ? projection?.spread : projection?.total;
+    return market ? marketEdge(market).edge : null;
+  };
+  const priced = games.filter((game) => edgeOf(game) !== null);
+  const unpriced = games.filter((game) => edgeOf(game) === null);
+  return [...priced.sort((a, b) => edgeOf(b)! - edgeOf(a)!), ...unpriced];
+}
+
+/** "Over 51.5" / "Under 51.5". */
+export function totalSideLabel(line: number, side: "first" | "second"): string {
+  return `${side === "first" ? "Over" : "Under"} ${formatPoints(line)}`;
 }
 
 export const MODEL_PERIOD_LABELS: Record<ModelPeriod, string> = {

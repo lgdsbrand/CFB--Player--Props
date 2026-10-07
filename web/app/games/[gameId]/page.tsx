@@ -6,6 +6,7 @@ import { BookOddsPanel } from "@/components/games/book-odds-panel";
 import { MatchupGrid } from "@/components/games/matchup-grid";
 import { ModelLinePanel } from "@/components/games/model-line-panel";
 import { RecordsPanel } from "@/components/games/records-panel";
+import { SharpRetailPanel } from "@/components/games/sharp-retail-panel";
 import { WeatherPanel } from "@/components/games/weather-panel";
 import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
@@ -19,10 +20,12 @@ import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount, formatKickoff, formatVenue } from "@/lib/core/format";
 import { favourite, gameMatchups } from "@/lib/core/game-view";
+import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
 import {
   getEarliestSeason,
   getGameBookOdds,
+  getGameOddsSummaries,
   getGameProjections,
   getHeadToHead,
   getSeasonResults,
@@ -78,6 +81,8 @@ export default async function GamePage({
     meetings,
     earliestSeason,
     projections,
+    summaries,
+    config,
   ] = await Promise.all([
     getDefenseRatings(game.season, game.week, game.sport),
     // Joins the existing wave rather than forming its own. A wave costs one
@@ -89,6 +94,9 @@ export default async function GamePage({
     getHeadToHead(game.homeTeamId, game.awayTeamId, game.startDate),
     getEarliestSeason(game.sport),
     getGameProjections([gameId]),
+    getGameOddsSummaries([gameId]),
+    // Cached; only for the edge threshold the model panel highlights at.
+    getAppConfig(),
   ]);
 
   const matchups = gameMatchups(game, ratings);
@@ -186,15 +194,15 @@ export default async function GamePage({
         )}
 
         {/* Stated on the page, not just in a comment: whose numbers these
-            are. The game model (CLAUDE.md §11) did not beat closing lines in
-            its backtest, so its numbers sit in their own labelled panel below
-            and never share a line with the market's. */}
+            are. These are CFBD's consensus; the game model's numbers and its
+            edge against one book (CLAUDE.md §11) are in their own panel
+            below, so a reader never has to guess which line is whose. */}
         <p className="text-dim text-[0.6875rem]">
           The spread and total are the median across{" "}
           {game.gameLineProviders ?? 0} sportsbook
           {game.gameLineProviders === 1 ? "" : "s"}, ingested from
           CollegeFootballData. They are the market&rsquo;s numbers. The game
-          model&rsquo;s own fair line is in its panel below.
+          model&rsquo;s fair line and edge are in its panel below.
         </p>
       </header>
 
@@ -209,6 +217,13 @@ export default async function GamePage({
         home={game.homeAbbreviation ?? game.homeSchool}
         away={game.awayAbbreviation ?? game.awaySchool}
         completed={game.completed}
+        edgeThreshold={config.edgeThreshold}
+      />
+
+      <SharpRetailPanel
+        summary={summaries.get(gameId)}
+        home={game.homeAbbreviation ?? game.homeSchool}
+        away={game.awayAbbreviation ?? game.awaySchool}
       />
 
       {(["full", "h1", "q1"] as const).map((period) => (

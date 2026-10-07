@@ -196,6 +196,12 @@ const EXPECTED = {
     "h1_total_mean", "h1_total_p10", "h1_total_p90", "q1_margin_mean",
     "q1_margin_p10", "q1_margin_p90", "q1_total_mean", "q1_total_p10",
     "q1_total_p90",
+    // The comparison with one book that the Lines table's edge comes from
+    // (migration 0082).
+    "spread_sportsbook_id", "spread_line", "spread_home_price",
+    "spread_away_price", "spread_model_home_prob", "total_sportsbook_id",
+    "total_line", "total_over_price", "total_under_price",
+    "total_model_over_prob", "missing_prior_season",
   ],
   // `ladder_step` backs the alternate-line ladder AND the hit-rate chart's
   // line stepper; null on binary markets and only there.

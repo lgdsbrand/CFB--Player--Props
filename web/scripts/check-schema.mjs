@@ -189,6 +189,11 @@ const EXPECTED = {
     "first_line", "captured_at", "first_captured_at",
   ],
   v_game_line_consensus: ["game_id", "spread", "over_under"],
+  // +EV wagers on the game page and the slate (migration 0087).
+  game_ev_wagers: [
+    "game_id", "period", "market", "sportsbook_id", "side", "line", "price",
+    "fair_prob", "ev", "captured_at",
+  ],
   // The game page's starters and injuries (migration 0086).
   depth_charts: [
     "season", "week", "team_id", "position_group", "slot", "depth", "position",

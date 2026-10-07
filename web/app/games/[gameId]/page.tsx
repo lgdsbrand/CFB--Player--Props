@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { TeamChip } from "@/components/board/team-chip";
 import { BookOddsPanel } from "@/components/games/book-odds-panel";
 import { CoachPanel } from "@/components/games/coach-panel";
+import { EvWagersPanel } from "@/components/games/ev-wagers-panel";
 import { MatchupGrid } from "@/components/games/matchup-grid";
 import { ModelLinePanel } from "@/components/games/model-line-panel";
 import { RecordsPanel } from "@/components/games/records-panel";
@@ -24,11 +25,13 @@ import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount, formatKickoff, formatVenue } from "@/lib/core/format";
 import { currentCoach, summarizeCoach } from "@/lib/core/coach";
 import { favourite, gameMatchups } from "@/lib/core/game-view";
+import { hasKickedOff } from "@/lib/core/kickoff";
 import { rankStrength } from "@/lib/core/team-strength";
 import { getCoaches } from "@/lib/data/coaches";
 import { getTeamStrength } from "@/lib/data/team-strength";
 import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
+import { getEvWagers } from "@/lib/data/ev";
 import {
   getEarliestSeason,
   getGameBookOdds,
@@ -94,6 +97,7 @@ export default async function GamePage({
     strengthRows,
     coaches,
     roster,
+    evWagers,
   ] = await Promise.all([
     getDefenseRatings(game.season, game.week, game.sport),
     // Joins the existing wave rather than forming its own. A wave costs one
@@ -113,7 +117,12 @@ export default async function GamePage({
     getCoaches(game.season, [game.homeTeamId, game.awayTeamId]),
     // This game's week, as it stood going into the game (migration 0086).
     getStartersAndInjuries(game.season, game.week, [game.homeTeamId, game.awayTeamId]),
+    getEvWagers([gameId]),
   ]);
+
+  // +EV rows are the last capture's prices: an offer before kickoff, history
+  // after it, so the panel is shown only while the game is still to play.
+  const notStarted = !game.completed && !hasKickedOff(game.startDate);
 
   const strength = rankStrength(strengthRows, [game.homeTeamId, game.awayTeamId]);
   const coachFor = (teamId: number) => {
@@ -247,6 +256,14 @@ export default async function GamePage({
         home={game.homeAbbreviation ?? game.homeSchool}
         away={game.awayAbbreviation ?? game.awaySchool}
       />
+
+      {notStarted && summaries.has(gameId) ? (
+        <EvWagersPanel
+          wagers={evWagers}
+          home={game.homeAbbreviation ?? game.homeSchool}
+          away={game.awayAbbreviation ?? game.awaySchool}
+        />
+      ) : null}
 
       {(["full", "h1", "q1"] as const).map((period) => (
         <BookOddsPanel

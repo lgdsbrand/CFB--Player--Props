@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { DayStrip } from "@/components/day-strip";
+import { EvNow } from "@/components/games/ev-now";
 import { GameCard } from "@/components/games/game-card";
 import { LinesTable } from "@/components/games/lines-table";
 import { NotConfigured } from "@/components/not-configured";
@@ -13,6 +14,7 @@ import {
 } from "@/lib/core/board-params";
 import { offenseOnBoard } from "@/lib/core/board-scope";
 import { isSupabaseConfigured } from "@/lib/core/env";
+import { EV_HIGHLIGHT } from "@/lib/core/ev";
 import { formatCount } from "@/lib/core/format";
 import { orderByEdge } from "@/lib/core/game-lines";
 import { gameMatchups } from "@/lib/core/game-view";
@@ -24,11 +26,12 @@ import {
 import { getConferences } from "@/lib/data/catalogue";
 import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
+import { getEvWagers } from "@/lib/data/ev";
 import { getGameOddsSummaries, getGameProjections } from "@/lib/data/game-odds";
 import { getSlateGames } from "@/lib/data/games";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
 import { getTeamDirectory } from "@/lib/data/teams";
-import { kickoffCutoff, playedCount, upcomingGames } from "@/lib/core/kickoff";
+import { hasKickedOff, kickoffCutoff, playedCount, upcomingGames } from "@/lib/core/kickoff";
 import {
   DEFAULT_SPORT,
   resolveSport,
@@ -158,13 +161,19 @@ export default async function Games({
   // flip this page's layout for everyone who never touched the toggle.
   const showLines = params.view === "table";
   const shownIds = shown.map((game) => game.gameId);
-  const [odds, projections, config] = showLines
+  const [odds, projections, config, evWagers] = showLines
     ? await Promise.all([
         getGameOddsSummaries(shownIds),
         getGameProjections(shownIds),
         getAppConfig(),
+        // Only what the list shows. `shown` keeps games that kicked off
+        // earlier today (the slate-day cutoff); their prices are history.
+        getEvWagers(
+          shown.filter((game) => !hasKickedOff(game.startDate)).map((game) => game.gameId),
+          EV_HIGHLIGHT,
+        ),
       ])
-    : [new Map(), new Map(), null];
+    : [new Map(), new Map(), null, []];
 
   const conferenceLabel = params.conference ?? "displayed conferences";
 
@@ -305,12 +314,18 @@ export default async function Games({
           </p>
         </div>
       ) : showLines ? (
-        <LinesTable
+        <>
+          {/* Only where game odds are captured at all (college today): on a
+              slate with none, the list would claim "nothing is +EV" about
+              prices it never saw. */}
+          {odds.size > 0 ? <EvNow wagers={evWagers} games={shown} /> : null}
+          <LinesTable
           games={orderByEdge(shown, projections, params.gameOrder)}
           odds={odds}
           projections={projections}
           edgeThreshold={config?.edgeThreshold ?? 0.05}
-        />
+          />
+        </>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {shown.map((game) => (

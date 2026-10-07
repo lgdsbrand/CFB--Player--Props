@@ -14,6 +14,12 @@ WRITES ONLY WHAT MOVED. Each quote is compared with the book's newest row for
 the same (game, book, period, market); an unchanged price writes nothing. See
 migration 0074 for why that loses no information.
 
+ALSO WRITES THE +EV LIST (migration 0087), and only this run can. Because
+`game_odds` keeps only changes, its newest row cannot say whether a book is
+still posting a price; this run's quotes can. So after writing, the run
+computes each captured game's +EV wagers from exactly what it saw
+(core/ev.py) and replaces that game's `game_ev_wagers` rows.
+
 NEVER CAPTURES A GAME THAT HAS STARTED. The bulk endpoint returns in-play
 prices for live games, and one of those written after kickoff would become the
 "closing" line every grade is measured against.
@@ -46,6 +52,7 @@ from worker.adapters.odds.theoddsapi import (
     TheOddsApiAdapter,
 )
 from worker.config import ConfigError, get_settings
+from worker.core.ev import EvQuote, EvWager, ev_wagers
 from worker.core.name_match import TeamMatch, TeamResolver
 from worker.db import connect, pipeline_run, resolve_seasons, set_rows_written
 from worker.jobs.ingest_odds import load_games, load_teams, match_event_to_game
@@ -105,6 +112,7 @@ class GameOddsReport:
     books: set[str] = field(default_factory=set)
     rows_written: int = 0
     rows_unchanged: int = 0
+    ev_wagers: int = 0
     rejected: Counter = field(default_factory=Counter)
 
     def render(self) -> str:
@@ -124,6 +132,7 @@ class GameOddsReport:
             f"books            {len(self.books)}: {', '.join(sorted(self.books))}",
             f"rows written     {self.rows_written}",
             f"rows unchanged   {self.rows_unchanged}",
+            f"+EV wagers       {self.ev_wagers}",
         ]
         if self.rejected:
             lines.append(
@@ -349,6 +358,8 @@ def run(
                 report.books.add(row.sportsbook_key)
                 oriented.append((int(game["id"]), row))
 
+        wagers = ev_rows(oriented)
+        report.ev_wagers = sum(len(w) for w in wagers.values())
         if dry_run:
             report.rows_written = 0
             log.info("Dry run: %d quote(s) oriented, nothing written.", len(oriented))
@@ -356,6 +367,7 @@ def run(
             return report
 
         write_changed(conn, oriented, now, report)
+        write_ev_wagers(conn, wagers, now)
 
     log.info("Provider quota: %s", adapter.quota.summary())
     return report
@@ -399,6 +411,55 @@ def write_changed(
                 changed,
             )
     report.rows_written = len(changed)
+    conn.commit()
+
+
+def ev_rows(oriented: list[tuple[int, GameOddsRow]]) -> dict[int, list[EvWager]]:
+    """Each captured game's +EV wagers, from this run's full-game quotes only.
+
+    Every captured game gets an entry, empty when nothing beats the fair
+    price, so the write below clears a game whose last +EV price has gone.
+    """
+    by_game: dict[int, list[EvQuote]] = {}
+    for game_id, row in oriented:
+        quotes = by_game.setdefault(game_id, [])
+        if row.period != PERIOD:
+            continue
+        first, second = (
+            (row.over_price, row.under_price) if row.market == "totals"
+            else (row.home_price, row.away_price)
+        )
+        quotes.append(EvQuote(row.sportsbook_key, row.market, row.line, first, second))
+    return {game_id: ev_wagers(quotes) for game_id, quotes in by_game.items()}
+
+
+def write_ev_wagers(
+    conn: psycopg.Connection, wagers: dict[int, list[EvWager]], now: datetime
+) -> None:
+    """Replace the captured games' +EV rows, in one transaction."""
+    if not wagers:
+        return
+    with conn.cursor() as cur:
+        cur.execute("select id, key from sportsbooks")
+        book_ids = {r["key"]: int(r["id"]) for r in cur.fetchall()}
+        cur.execute(
+            "delete from game_ev_wagers where game_id = any(%s) and period = %s",
+            (list(wagers), PERIOD),
+        )
+        cur.executemany(
+            """
+            insert into game_ev_wagers
+              (game_id, period, market, sportsbook_id, side, line, price,
+               fair_prob, ev, captured_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                (game_id, PERIOD, w.market, book_ids[w.book_key], w.side, w.line,
+                 w.price, round(w.fair_prob, 5), round(w.ev, 5), now)
+                for game_id, rows in wagers.items()
+                for w in rows
+            ],
+        )
     conn.commit()
 
 

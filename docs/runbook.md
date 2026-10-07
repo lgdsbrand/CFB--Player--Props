@@ -303,6 +303,13 @@ events came back and NONE matched a game fails on purpose.
   of those would become the closing line.
 - **Never add the sharp regions to `DEFAULT_REGIONS`.** Props bill per region
   too; that would triple every prop capture.
+- **It also writes the +EV list** (`game_ev_wagers`, migration 0087): every
+  book price beating Pinnacle's power-de-vigged fair price at the same line,
+  from the quotes THIS run saw, replacing each captured game's rows. It has to
+  be here: `game_odds` keeps only changes, so it cannot tell a pulled price
+  from an unchanged one. Prices outside -400..+300 are skipped. Expect few
+  sportsbook rows and many exchange rows (before fees) — measured 2026-10-03,
+  sportsbooks cleared 2% seven times all Saturday. The log prints the count.
 
 #### `build_team_strength` — daily 08:00 UTC, end of the CFB results chain (game model)
 

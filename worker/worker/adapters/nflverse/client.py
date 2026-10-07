@@ -37,6 +37,7 @@ from pathlib import Path
 import polars as pl
 
 from worker.adapters.nflverse.assets import (
+    ASSETS,
     REQUIRE_SEASON_PRESENT,
     SEASON_IN_URL,
     asset_url,
@@ -100,9 +101,10 @@ class NflverseClient:
         # for 2025 and then 2026 is ONE download, and caching it twice under two
         # names would serve the second read a copy that is a season out of date
         # the moment the first one goes stale.
+        suffix = ".parquet" if ASSETS[asset].endswith(".parquet") else ".csv"
         if asset in SEASON_IN_URL and season is not None:
-            return self.cache_dir / f"{asset}_{season}.csv"
-        return self.cache_dir / f"{asset}.csv"
+            return self.cache_dir / f"{asset}_{season}{suffix}"
+        return self.cache_dir / f"{asset}{suffix}"
 
     def _download(self, url: str, dest: Path) -> bytes:
         """Fetch one asset, retrying transport failures but never HTTP ones.
@@ -184,11 +186,14 @@ class NflverseClient:
         if payload is None:
             payload = self._download(url, path)
 
-        frame = pl.read_csv(
-            io.BytesIO(payload),
-            infer_schema_length=10_000,
-            null_values=["", "NA"],
-        )
+        if url.endswith(".parquet"):
+            frame = pl.read_parquet(io.BytesIO(payload))
+        else:
+            frame = pl.read_csv(
+                io.BytesIO(payload),
+                infer_schema_length=10_000,
+                null_values=["", "NA"],
+            )
         self._assert_season_present(asset, season, frame, url)
         return frame
 

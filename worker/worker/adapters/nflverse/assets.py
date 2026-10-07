@@ -71,6 +71,15 @@ WHAT EACH ASSET IS FOR (measured 2026-09-05, not assumed)
     reading the note in `ingest_charting.py`: that asset publishes once, after a
     season ends, so a man/zone panel would show last season's numbers all year.
 
+  * `depth_charts_{season}` — ESPN's depth charts, re-snapshotted twice a
+    day in season (~06:00 and ~14:00 UTC; 2026 had 220 snapshots by 10-06),
+    ~2,290 rows per snapshot across 32 teams, with `gsis_id` on all but a
+    handful. Read as PARQUET: 2.8 MB against 58 MB for the CSV, because every
+    snapshot of the season is in the one file. IT HAS NO SEASON COLUMN, so
+    `REQUIRE_SEASON_PRESENT` cannot guard it; the ingest checks the newest
+    snapshot's `dt` is recent instead, which is the same trap from the other
+    side (a file that stopped updating still answers 200).
+
   * `team_meta` / `team_seasons` — the 32 franchises: conference, division,
     full name, nickname and the two team colours the chips are drawn from.
 
@@ -101,6 +110,7 @@ ASSETS: dict[str, str] = {
     "play_by_play": f"{RELEASE_BASE}/pbp/play_by_play_{{season}}.csv",
     "snap_counts": f"{RELEASE_BASE}/snap_counts/snap_counts_{{season}}.csv",
     "ftn_charting": f"{RELEASE_BASE}/ftn_charting/ftn_charting_{{season}}.csv",
+    "depth_charts": f"{RELEASE_BASE}/depth_charts/depth_charts_{{season}}.parquet",
     "players": f"{RELEASE_BASE}/players/players.csv",
     "schedule": f"{NFLDATA_BASE}/games.csv",
     "team_seasons": f"{NFLDATA_BASE}/teams.csv",
@@ -109,7 +119,8 @@ ASSETS: dict[str, str] = {
 
 #: Assets whose URL carries the season, so one file is one season.
 SEASON_IN_URL: frozenset[str] = frozenset(
-    {"weekly_stats", "roster", "play_by_play", "snap_counts", "ftn_charting"}
+    {"weekly_stats", "roster", "play_by_play", "snap_counts", "ftn_charting",
+     "depth_charts"}
 )
 
 #: Assets whose contents must include the season asked for.

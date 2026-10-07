@@ -189,6 +189,15 @@ const EXPECTED = {
     "first_line", "captured_at", "first_captured_at",
   ],
   v_game_line_consensus: ["game_id", "spread", "over_under"],
+  // The game page's starters and injuries (migration 0086).
+  depth_charts: [
+    "season", "week", "team_id", "position_group", "slot", "depth", "position",
+    "player_id", "player_name", "source_as_of",
+  ],
+  player_injuries: [
+    "season", "week", "team_id", "player_id", "player_name", "position",
+    "status", "body_part",
+  ],
   // The game page's coach panel (migration 0084).
   team_coaches: ["team_id", "season", "coach_id", "hire_date"],
   coaches: ["id", "first_name", "last_name"],

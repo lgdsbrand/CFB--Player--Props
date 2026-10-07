@@ -992,6 +992,56 @@ each defense has about 35 dropbacks behind its rate — enough to clear the floo
 in `core/charting.py`, not enough to lean on. The sample travels with the number
 on every surface for that reason.
 
+#### `nfl_ingest_depth_charts` — daily 08:20 UTC, NFL results chain
+
+```bash
+python -m worker.jobs.nfl_ingest_depth_charts --current             # what the cron runs
+python -m worker.jobs.nfl_ingest_depth_charts --current --dry-run   # resolve and count, write nothing
+```
+
+ESPN's depth charts via nflverse (`depth_charts_{season}.parquet`, refreshed
+about 06:00 and 14:00 UTC) into `depth_charts` (migration 0086), for the NFL
+game page's Starters panel. Takes the NEWEST snapshot and writes it as each
+team's depth chart for its next game's week, replacing that week until the
+game kicks off (`core/team_weeks.py`). A past week is never rewritten, so a
+finished game's page shows the depth chart going into it.
+
+**Fails if the newest snapshot is over 48 hours old.** The file has no season
+column, so the frozen-legacy guard cannot see it; the snapshot time can. Players
+resolve on `gsis_id` (2,282 of 2,288 on 2026-10-07); one that does not is kept by
+name with a NULL `player_id`. Only teams the snapshot covers are replaced. No API
+calls, one ~3 MB download. **Monitored:** 36h.
+
+#### `nfl_ingest_injuries` — daily 08:20 UTC, last in the NFL results chain
+
+```bash
+python -m worker.jobs.nfl_ingest_injuries --current             # what the cron runs
+python -m worker.jobs.nfl_ingest_injuries --current --dry-run   # resolve and count, write nothing
+```
+
+Injury designations (Out, Doubtful, Questionable, IR, PUP...) from **Sleeper's
+public API** into `player_injuries` (migration 0086), per team per week, frozen
+at kickoff exactly as the depth charts are. Chosen 2026-10-07 because nflverse's
+injury file runs a week behind (it had weeks 1-4 the day after week 5 ended).
+
+- **One Sleeper call a day, as Sleeper asks.** The ~15 MB dump is kept in
+  `worker/.cache/sleeper/` and reused for 20 hours, so a re-run does not call
+  again. Delete the file to force a fresh read.
+- **Every open team-week is replaced, including with nothing**: a team whose
+  last designated player was cleared must lose the row. The guard is on the
+  whole response instead: under 1,500 active players or 100 designated, or a
+  newest update over 4 days old, and the job fails without writing.
+- **Players resolve through nflverse's roster** (Sleeper's own GSIS id is on
+  one record in five): own GSIS id, then Sleeper id, then ESPN id, then a name
+  unique on the team. 576 of 581 on 2026-10-07. Unresolved rows keep their name.
+- Sleeper writes the Rams as `LAR` (aliased to `LA`); stale `OAK` records are
+  skipped and counted.
+- **"Out, Coach's Decision" is skipped.** It is last game's healthy scratch,
+  which Sleeper keeps until the next report: 116 of 220 "Out" rows on
+  2026-10-07. Not an injury, and not about the next game.
+
+**Monitored:** 36h. No keys, no credits.
+
 #### `build_usage_shares`
 
 ```bash

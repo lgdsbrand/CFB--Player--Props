@@ -349,6 +349,22 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
              "advances, which reads as a quiet defense rather than a stale job.",
     ),
     JobExpectation(
+        name="nfl_ingest_depth_charts",
+        max_age_hours=36,
+        sport="nfl",
+        note="daily 08:20 UTC, near the end of the NFL results chain -- the game "
+             "page's starters (migration 0086). A warning: a stale run leaves the "
+             "last depth chart standing for this week's game.",
+    ),
+    JobExpectation(
+        name="nfl_ingest_injuries",
+        max_age_hours=36,
+        sport="nfl",
+        note="daily 08:20 UTC, LAST in the NFL results chain -- Sleeper injury "
+             "designations for the game page (migration 0086). A warning: a stale "
+             "run leaves yesterday's report, and a cleared player still shows Out.",
+    ),
+    JobExpectation(
         name="build_usage_shares",
         max_age_hours=36,
         sport="nfl",

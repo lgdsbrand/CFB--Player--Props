@@ -371,6 +371,12 @@ services:
   # the FTN file names no team on any row, so the defense comes from our own
   # plays through the nflverse play key. Newest step, so it goes where a failure
   # can only cost itself.
+  #
+  # Then the game page's starters and injuries (migration 0086), after
+  # everything the board needs, for the same reason. Depth charts first (nflverse,
+  # refreshed ~06:00 UTC, so 08:20 takes that morning's snapshot); injuries last,
+  # because Sleeper is the only outside service in the chain. Sleeper asks for
+  # one player call a day, and this is it.
   - type: cron
     name: nfl-props-ingest-results
     runtime: python
@@ -385,7 +391,9 @@ services:
       python -m worker.jobs.build_splits --current --sport nfl &&
       python -m worker.jobs.build_quarter_stats --current --sport nfl &&
       python -m worker.jobs.build_usage_shares --current --sport nfl &&
-      python -m worker.jobs.nfl_ingest_charting --current
+      python -m worker.jobs.nfl_ingest_charting --current &&
+      python -m worker.jobs.nfl_ingest_depth_charts --current &&
+      python -m worker.jobs.nfl_ingest_injuries --current
     envVars:
       - fromGroup: cfb-props-worker
 

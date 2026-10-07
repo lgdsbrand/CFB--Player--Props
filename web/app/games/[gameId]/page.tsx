@@ -8,6 +8,7 @@ import { MatchupGrid } from "@/components/games/matchup-grid";
 import { ModelLinePanel } from "@/components/games/model-line-panel";
 import { RecordsPanel } from "@/components/games/records-panel";
 import { SharpRetailPanel } from "@/components/games/sharp-retail-panel";
+import { StartersPanel } from "@/components/games/starters-panel";
 import { TeamComparisonPanel } from "@/components/games/team-comparison-panel";
 import { WeatherPanel } from "@/components/games/weather-panel";
 import { NotConfigured } from "@/components/not-configured";
@@ -37,6 +38,7 @@ import {
   getSeasonResults,
 } from "@/lib/data/game-odds";
 import { getGame } from "@/lib/data/games";
+import { getStartersAndInjuries } from "@/lib/data/starters";
 import { getGameConditions } from "@/lib/data/weather";
 
 /**
@@ -91,6 +93,7 @@ export default async function GamePage({
     config,
     strengthRows,
     coaches,
+    roster,
   ] = await Promise.all([
     getDefenseRatings(game.season, game.week, game.sport),
     // Joins the existing wave rather than forming its own. A wave costs one
@@ -108,6 +111,8 @@ export default async function GamePage({
     // Entering this game's week, so nothing after kickoff (migration 0077).
     getTeamStrength(game.season, game.week, game.sport),
     getCoaches(game.season, [game.homeTeamId, game.awayTeamId]),
+    // This game's week, as it stood going into the game (migration 0086).
+    getStartersAndInjuries(game.season, game.week, [game.homeTeamId, game.awayTeamId]),
   ]);
 
   const strength = rankStrength(strengthRows, [game.homeTeamId, game.awayTeamId]);
@@ -270,6 +275,18 @@ export default async function GamePage({
           homeStrength={strength.get(game.homeTeamId)}
           week={game.week}
           league={game.sport === "nfl" ? "NFL teams" : "FBS teams"}
+        />
+      ) : null}
+
+      {roster.depth.length > 0 || roster.injuries.length > 0 ? (
+        <StartersPanel
+          sport={game.sport}
+          season={game.season}
+          week={game.week}
+          away={{ teamId: game.awayTeamId, label: game.awaySchool }}
+          home={{ teamId: game.homeTeamId, label: game.homeSchool }}
+          depth={roster.depth}
+          injuries={roster.injuries}
         />
       ) : null}
 

@@ -36,6 +36,7 @@ from typing import Literal
 
 from worker.core.probability import (
     american_to_implied_probability,
+    calibrate_prop_probability,
     consensus_book_probability,
     edge_on_side,
     prob_over,
@@ -128,6 +129,7 @@ def grade_bet(
     params: dict,
     prices: Sequence[BookPriceRow],
     actual_value: float | None,
+    raw: bool = False,
 ) -> BookBet | None:
     """Turn one player-market-line into a graded bet, or None if it cannot be.
 
@@ -153,7 +155,11 @@ def grade_bet(
     if book_prob is None:
         return None
 
+    # The PUBLISHED probability, calibrated as the board shows it, unless `raw`
+    # asks for the distribution's own (what the calibration is refitted on).
     model_prob = prob_over(distribution, params, line)
+    if not raw:
+        model_prob = calibrate_prop_probability(market_key, model_prob)
     side, confidence = side_and_confidence(model_prob)
     edge = edge_on_side(model_prob, book_prob, side)
     if edge is None:

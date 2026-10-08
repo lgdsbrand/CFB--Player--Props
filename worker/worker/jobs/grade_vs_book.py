@@ -270,7 +270,9 @@ def describe_line_age(rows: list[dict[str, Any]]) -> str | None:
     return f"line age at kickoff: median {median:.1f}h, oldest {ages[-1]:.1f}h"
 
 
-def to_bets(rows: list[dict[str, Any]], season: int, week: int) -> list[BookBet]:
+def to_bets(
+    rows: list[dict[str, Any]], season: int, week: int, *, raw: bool = False
+) -> list[BookBet]:
     """Grade each row, dropping the ones that are not really gradeable."""
     bets: list[BookBet] = []
     skipped_one_sided = 0
@@ -297,6 +299,7 @@ def to_bets(rows: list[dict[str, Any]], season: int, week: int) -> list[BookBet]
             params=row["params"],
             prices=prices,
             actual_value=None if actual is None else float(actual),
+            raw=raw,
         )
         if bet is None:
             skipped_one_sided += 1
@@ -519,6 +522,7 @@ def run(
     thresholds: tuple[float, ...],
     closing_only: bool = True,
     first_quarter: bool = False,
+    raw: bool = False,
 ) -> list[BookBet]:
     bets: list[BookBet] = []
     for week in weeks:
@@ -545,7 +549,7 @@ def run(
             rows = load_gradeable(
                 sport, season, week, adapter, closing_only=closing_only
             )
-        got = to_bets(rows, season, week)
+        got = to_bets(rows, season, week, raw=raw)
         age = describe_line_age(rows)
         log.info(
             "%s %s week %s: %d gradeable bet(s)%s",
@@ -596,6 +600,12 @@ def main(argv: list[str] | None = None) -> int:
              "projections, which first-quarter markets do not have.",
     )
     parser.add_argument(
+        "--raw", action="store_true",
+        help="Grade the distribution's own probabilities instead of the "
+             "published, calibrated ones (PROP_CALIBRATION_SLOPE). What the "
+             "calibration is refitted on.",
+    )
+    parser.add_argument(
         "--threshold", type=float, action="append",
         help="Edge threshold to report. Repeatable. Defaults to "
              f"{DEFAULT_THRESHOLDS}.",
@@ -641,6 +651,7 @@ def main(argv: list[str] | None = None) -> int:
                 "weeks": weeks,
                 "closing_only": not args.include_non_closing,
                 "first_quarter": args.first_quarter,
+                "raw": args.raw,
             },
         ):
             bets = run(
@@ -651,6 +662,7 @@ def main(argv: list[str] | None = None) -> int:
                 thresholds=thresholds,
                 closing_only=not args.include_non_closing,
                 first_quarter=args.first_quarter,
+                raw=args.raw,
             )
             # THE BASIS IS PART OF THE RESULT. A number from a pre-kickoff
             # snapshot and a number from a closing line are different claims,
@@ -664,6 +676,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             if args.first_quarter:
                 basis = f"FIRST-QUARTER {basis} (raw, uncalibrated projections)"
+            elif args.raw:
+                basis = f"{basis} (RAW probabilities, before calibration)"
             log.info(
                 "Model vs %s %s, %s %s week(s) %s:\n%s",
                 args.adapter, basis, args.sport, args.season, weeks,

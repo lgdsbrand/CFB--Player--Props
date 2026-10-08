@@ -162,6 +162,18 @@ provider serves this cleanly; we build it).
   our numbers consistent with the pitcher-props model already on their site, which
   defines edge the same way. Support an edge threshold (their pitcher model uses
   ≥ 5%) and an "edges only" filter.
+  > **2026-10-08 — published prop probabilities are calibrated per market.**
+  > Graded against real book prices (7,028 bets, 2025 w7-8 closing, 2026
+  > college w1/2/5/6 and NFL w1/4), the distributions were overconfident,
+  > worst in pass TDs (model 70%+ hit 51%; the book said 60%). The user
+  > approved one shrink-toward-50% factor per market (`PROP_CALIBRATION_SLOPE`
+  > in `worker/core/probability.py`): pass TDs 0.21, receptions 0.22, rec
+  > yards 0.31, pass yards 0.34, rush yards 0.42. Fitted on six weeks, it beat
+  > the raw probability on every held-out seventh week in all five markets.
+  > Picks and ladders publish the calibrated number; the side never changes.
+  > Anytime TD, attempts, completions, rush attempts and first-quarter markets
+  > are untouched. Refit with `grade_vs_book --raw` each offseason. It is an
+  > honesty fix, not evidence of an edge.
 - **Markets:**
   - QB: pass yds, pass TDs, attempts, completions, rush yds
   - RB: rush yds, rec yds, rush att, receptions

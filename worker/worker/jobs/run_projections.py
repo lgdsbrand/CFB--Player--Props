@@ -52,7 +52,7 @@ from worker.config import ConfigError, get_settings
 from worker.core.calibration import StoredCalibration
 from worker.core.features import CHANGED_TEAM_PRIOR_MULTIPLIER, AsOf
 from worker.core.ladder import build_ladder, ladder_json
-from worker.core.probability import side_and_confidence
+from worker.core.probability import calibrate_prop_probability, side_and_confidence
 from worker.core.projections import (
     LAST_OPENING_WEEK,
     MIN_GAMES_TO_PROJECT,
@@ -769,7 +769,10 @@ def _pick_values(
     over_price: int | None,
     under_price: int | None,
 ) -> tuple[Any, ...]:
-    probability = row.projection.probability_over(line)
+    # Published probability: calibrated per market (`PROP_CALIBRATION_SLOPE`).
+    probability = calibrate_prop_probability(
+        row.market_key, row.projection.probability_over(line)
+    )
     probability = min(max(probability, PROBABILITY_EPSILON), 1 - PROBABILITY_EPSILON)
     side, _confidence = side_and_confidence(probability)
     return (
@@ -869,6 +872,7 @@ def _backfill_ladders(*, dry_run: bool = False) -> int:
                     float(steps[row["market_key"]]),
                     low=float(low),
                     high=float(high),
+                    market_key=row["market_key"],
                 )
             )
             if rungs is None:

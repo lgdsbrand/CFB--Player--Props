@@ -329,6 +329,53 @@ def side_and_confidence(model_prob_over: float) -> tuple[BetSide, float]:
 
 
 # -----------------------------------------------------------------------------
+# Calibration of published probabilities (user-approved 2026-10-08)
+# -----------------------------------------------------------------------------
+# The distributions were OVERCONFIDENT at real book lines, worst in pass TDs:
+# where the model said 70%+ the pick hit 51% while the book's own price said
+# 60%. Measured on every graded week with real prices (2025 w7-8 closing,
+# college 2026 w1/2/5/6 and NFL 2026 w1/4 last pre-kickoff; 7,028 bets).
+#
+# One factor per market pulls the probability toward a coin flip:
+#     p' = 0.5 + SLOPE * (p - 0.5)
+# Fitted per market by least squares on the Brier score. Fitting a single factor
+# across ALL markets is what failed on 2026-09-08 (it swung from -0.2 to +0.8);
+# per market it is stable, and fitted on six weeks and scored on the seventh it
+# beat the raw probability on every held-out week in all five markets. Range of
+# the held-out fits: pass_tds 0.15-0.40, receptions 0.17-0.25, rec_yards
+# 0.22-0.41, pass_yards 0.21-0.46, rush_yards 0.31-0.54.
+#
+# WHAT IT IS: an honesty fix. The shrunk numbers roughly tie a flat 50% on the
+# Brier score; they stop the board claiming 80% for a 55% pick. The call (side)
+# never changes, only how sure it is, so edges shrink and far fewer clear the
+# threshold (graded weeks: 4,309 -> 1,312).
+#
+# Toward 50%, NOT toward the book: the projection stays the engine
+# (CLAUDE.md §1) and the market stays out of it.
+#
+# Left alone: anytime TD (one-way prices, cannot be measured this way),
+# attempts and completions (already within the book's Brier), rush attempts
+# (204 bets, fits swing sign) and every first-quarter market. Refit with
+# `grade_vs_book --raw` once a season of graded weeks accumulates, never
+# mid-week.
+PROP_CALIBRATION_SLOPE: dict[str, float] = {
+    "pass_tds": 0.21,
+    "receptions": 0.22,
+    "rec_yards": 0.31,
+    "pass_yards": 0.34,
+    "rush_yards": 0.42,
+}
+
+
+def calibrate_prop_probability(market_key: str, prob_over: float) -> float:
+    """The published P(over) for a market: shrunk toward 50% where calibrated."""
+    slope = PROP_CALIBRATION_SLOPE.get(market_key)
+    if slope is None:
+        return prob_over
+    return 0.5 + slope * (prob_over - 0.5)
+
+
+# -----------------------------------------------------------------------------
 # Distributions
 # -----------------------------------------------------------------------------
 def _normal_cdf(x: float, mu: float, sigma: float) -> float:

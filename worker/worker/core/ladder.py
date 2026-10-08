@@ -30,7 +30,11 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from worker.core.probability import prob_over, validate_params
+from worker.core.probability import (
+    calibrate_prop_probability,
+    prob_over,
+    validate_params,
+)
 
 # Rungs land on half-integers (60.5, not 60), because that is how books post a
 # line and because it removes the push case outright -- `prob_over` treats an
@@ -151,6 +155,7 @@ def build_ladder(
     low: float,
     high: float,
     max_rungs: int = MAX_RUNGS,
+    market_key: str | None = None,
 ) -> list[Rung]:
     """The ladder for one projection, or empty when the market has no step.
 
@@ -161,12 +166,22 @@ def build_ladder(
 
     Returns [] rather than raising for a market with no `ladder_step`, because
     that is a legitimate state (anytime_td) and not an error.
+
+    `market_key` applies that market's published calibration to every rung,
+    so the player page's other lines say what the board says at its line.
     """
     if step is None:
         return []
     validate_params(distribution, params)
     return [
-        Rung(line=line, prob_over=prob_over(distribution, params, line))
+        Rung(
+            line=line,
+            prob_over=(
+                calibrate_prop_probability(market_key, prob_over(distribution, params, line))
+                if market_key
+                else prob_over(distribution, params, line)
+            ),
+        )
         for line in rung_lines(step, low, high, max_rungs=max_rungs)
     ]
 

@@ -60,6 +60,9 @@ def bet(**overrides):
         params=NORMAL["params"],
         prices=[price("dk", -110, -110)],
         actual_value=120.0,
+        # The grading mechanics, on the distribution's own probability. The
+        # published calibration has its own test (test_prop_calibration.py).
+        raw=True,
     )
     kwargs.update(overrides)
     return grade_bet(**kwargs)
@@ -542,3 +545,15 @@ class TestBandReplication:
         band = next(b for b in band_replication(band_bets(7, 40, 20)) if b.lower == 0.6)
         assert band.spread is None
         assert not band.disagrees
+
+
+def test_the_published_probability_is_graded_by_default() -> None:
+    """Without `raw`, the grade scores what the board showed: calibrated."""
+    from worker.core.probability import calibrate_prop_probability, prob_over
+
+    raw = prob_over(NORMAL["distribution"], NORMAL["params"], 100.0)
+    published = bet(raw=False)
+    assert published is not None
+    assert published.model_prob_over == pytest.approx(
+        calibrate_prop_probability("rush_yards", raw)
+    )

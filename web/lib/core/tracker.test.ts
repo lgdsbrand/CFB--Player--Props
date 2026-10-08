@@ -3,12 +3,14 @@ import { test } from "node:test";
 
 import {
   byDay,
+  cardFilter,
   cards,
   formatUnits,
   inPeriod,
   isEdgePlay,
   pickLabel,
   record,
+  resolveCardKey,
   resolveEngine,
   resolvePeriod,
   type TrackerPick,
@@ -103,4 +105,29 @@ test("parsing and units", () => {
   assert.equal(formatUnits(1.5), "+1.50u");
   assert.equal(formatUnits(-6.57), "-6.57u");
   assert.equal(formatUnits(0), "0.00u");
+});
+
+test("a card's filter picks exactly what the card counts", () => {
+  const picks = [
+    pick({ market: "spreads", edge: 0.021 }),
+    pick({ market: "spreads", edge: 0.034 }),
+    pick({ market: "totals", side: "over", line: 52.5, edge: 0.05 }),
+    pick({ market: "totals", side: "under", line: 48.5, edge: 0.022 }),
+  ];
+  for (const card of cards(picks, "v2")) {
+    const filtered = picks.filter(cardFilter(card.key));
+    assert.equal(record(filtered).wins + record(filtered).losses, card.record.wins + card.record.losses);
+  }
+  assert.equal(picks.filter(cardFilter("spreads")).length, 2);
+  assert.equal(picks.filter(cardFilter("totals")).length, 2);
+  assert.equal(picks.filter(cardFilter("edge")).length, 2);
+});
+
+test("resolveCardKey accepts only the cards the engine shows", () => {
+  assert.equal(resolveCardKey("spreads", "v2"), "spreads");
+  assert.equal(resolveCardKey("edge", "v2"), "edge");
+  assert.equal(resolveCardKey("h2h", "v2"), null);
+  assert.equal(resolveCardKey("h2h", "v1"), "h2h");
+  assert.equal(resolveCardKey(undefined, "v2"), null);
+  assert.equal(resolveCardKey("bogus", "v2"), null);
 });

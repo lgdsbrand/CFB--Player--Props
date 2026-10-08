@@ -150,6 +150,21 @@ export function isEdgePlay(p: TrackerPick): boolean {
   return p.edge !== null && p.edge >= 0.03;
 }
 
+/** Which picks a card counts; the page's list filters by the same rule. */
+export function cardFilter(key: CardKey): (p: TrackerPick) => boolean {
+  return key === "edge" ? isEdgePlay : (p) => p.market === key;
+}
+
+/**
+ * The card the graded-picks list is narrowed to (client, 2026-10-08: "separate
+ * and record" each market). Null is every pick. Only the cards the page shows
+ * are valid: v2 has no moneyline card.
+ */
+export function resolveCardKey(raw: string | undefined, engine: Engine): CardKey | null {
+  const valid: CardKey[] = engine === "v1" ? ["spreads", "totals", "edge", "h2h"] : ["spreads", "totals", "edge"];
+  return valid.includes(raw as CardKey) ? (raw as CardKey) : null;
+}
+
 export function cards(picks: TrackerPick[], engine: Engine): Card[] {
   const of = (filter: (p: TrackerPick) => boolean) => record(picks.filter(filter));
   const out: Card[] = [
@@ -159,7 +174,7 @@ export function cards(picks: TrackerPick[], engine: Engine): Card[] {
       tag: "ATS",
       emoji: "📊",
       rule: "Against the spread",
-      record: of((p) => p.market === "spreads"),
+      record: of(cardFilter("spreads")),
     },
     {
       key: "totals",
@@ -167,15 +182,16 @@ export function cards(picks: TrackerPick[], engine: Engine): Card[] {
       tag: "O/U",
       emoji: "🎯",
       rule: "Game totals",
-      record: of((p) => p.market === "totals"),
+      record: of(cardFilter("totals")),
     },
     {
       key: "edge",
-      title: "Edge plays",
+      // The client's name for them (2026-10-08).
+      title: "Recommended plays",
       tag: "EDGE",
       emoji: "⚡",
       rule: engine === "v1" ? "Totals the model gave 64%+" : "Picks at a 3%+ edge",
-      record: of(isEdgePlay),
+      record: of(cardFilter("edge")),
     },
   ];
   // v1 made moneyline picks until 2026-10-03; v2 never does.
@@ -186,7 +202,7 @@ export function cards(picks: TrackerPick[], engine: Engine): Card[] {
       tag: "ML",
       emoji: "💰",
       rule: "Retired Oct 3, 2026",
-      record: of((p) => p.market === "h2h"),
+      record: of(cardFilter("h2h")),
     });
   }
   return out;

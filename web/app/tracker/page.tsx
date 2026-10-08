@@ -9,6 +9,7 @@ import { formatPoints } from "@/lib/core/game-lines";
 import { DEFAULT_SPORT, resolveSport, type Sport } from "@/lib/core/sport";
 import {
   byDay,
+  cardFilter,
   cards,
   ENGINE_SINCE,
   formatUnits,
@@ -17,6 +18,7 @@ import {
   PERIODS,
   pickLabel,
   record,
+  resolveCardKey,
   resolvePeriod,
   type Card,
   type CardKey,
@@ -74,6 +76,8 @@ export default async function TrackerPage({
   const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
   const engine = ENGINE;
   const period = resolvePeriod(first(raw.period));
+  // The card the graded-picks list is narrowed to; null is every pick.
+  const market = resolveCardKey(first(raw.market), engine);
 
   if (sport !== "cfb") {
     return (
@@ -95,10 +99,14 @@ export default async function TrackerPage({
   const picks = await getTrackerPicks(sport, engine);
   const shown = inPeriod(picks, period);
   const overall = record(shown);
-  const href = (changes: { period?: Period }) => {
+  const marketCards = cards(shown, engine);
+  const listed = market ? shown.filter(cardFilter(market)) : shown;
+  const href = (changes: { period?: Period; market?: CardKey | null }) => {
     const nextPeriod = changes.period ?? period;
+    const nextMarket = changes.market === undefined ? market : changes.market;
     return scopedHref("/tracker", { sport }, {
       period: nextPeriod === "all" ? undefined : nextPeriod,
+      market: nextMarket ?? undefined,
     });
   };
 
@@ -142,17 +150,41 @@ export default async function TrackerPage({
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
-          {cards(shown, engine).map((card) => (
-            <MarketCard key={card.key} card={card} />
+          {marketCards.map((card) => (
+            <MarketCard
+              key={card.key}
+              card={card}
+              active={card.key === market}
+              // A second tap on the selected card shows every pick again.
+              href={href({ market: card.key === market ? null : card.key })}
+            />
           ))}
         </div>
       )}
 
       {shown.length > 0 ? (
         <section className="panel flex flex-col">
-          <h2 className="section-header border-border-subtle border-b px-4 py-3">✅ Graded picks</h2>
+          <div className="border-border-subtle flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-3">
+            <h2 className="section-header">✅ Graded picks</h2>
+            <nav className="flex flex-wrap gap-1.5 sm:ml-auto" aria-label="Show picks for">
+              <FilterPill href={href({ market: null })} active={market === null} label="All" />
+              {marketCards.map((card) => (
+                <FilterPill
+                  key={card.key}
+                  href={href({ market: card.key })}
+                  active={card.key === market}
+                  label={card.title}
+                />
+              ))}
+            </nav>
+          </div>
+          {listed.length === 0 ? (
+            <p className="text-muted px-4 py-5 text-sm">
+              No {marketCards.find((c) => c.key === market)?.title.toLowerCase()} picks in this period.
+            </p>
+          ) : null}
           {/* One fold per day, newest open: all time is hundreds of picks. */}
-          {byDay(shown).map(({ day, picks: dayPicks }, index) => (
+          {byDay(listed).map(({ day, picks: dayPicks }, index) => (
             <details key={day} open={index === 0} className="group border-border-subtle border-t first:border-0">
               <summary className="bg-panel-inset/60 label-caption flex cursor-pointer list-none items-center gap-2 px-4 py-2 [&::-webkit-details-marker]:hidden">
                 <span>
@@ -209,12 +241,19 @@ function RecordLine({ r, size }: { r: Record_; size: "lg" | "md" }) {
   );
 }
 
-function MarketCard({ card }: { card: Card }) {
+function MarketCard({ card, active, href }: { card: Card; active: boolean; href: string }) {
   const r = card.record;
   const decided = r.wins + r.losses;
   return (
-    <section
-      className={`flex flex-col gap-3 rounded-[14px] border bg-gradient-to-br to-transparent p-5 ${CARD_TINT[card.key]}`}
+    <Link
+      href={href}
+      scroll={false}
+      aria-current={active ? "true" : undefined}
+      title={active ? "Show every pick" : `Show only ${card.title.toLowerCase()} picks`}
+      className={
+        `flex flex-col gap-3 rounded-[14px] border bg-gradient-to-br to-transparent p-5 transition-shadow hover:ring-1 hover:ring-white/15 ${CARD_TINT[card.key]}` +
+        (active ? " ring-2 ring-white/40 hover:ring-2 hover:ring-white/40" : "")
+      }
     >
       <div className="flex items-start gap-3">
         <span className="text-2xl" aria-hidden>
@@ -251,7 +290,23 @@ function MarketCard({ card }: { card: Card }) {
           </span>
         </div>
       </div>
-    </section>
+    </Link>
+  );
+}
+
+function FilterPill({ href, active, label }: { href: string; active: boolean; label: string }) {
+  return (
+    <Link
+      href={href}
+      scroll={false}
+      aria-current={active ? "true" : undefined}
+      className={
+        "rounded-full border px-2.5 py-1 text-[0.625rem] font-extrabold uppercase tracking-label transition-colors " +
+        (active ? "border-accent-cyan/50 bg-accent-cyan/10 text-accent-cyan" : "border-border-subtle text-muted hover:text-ink")
+      }
+    >
+      {label}
+    </Link>
   );
 }
 

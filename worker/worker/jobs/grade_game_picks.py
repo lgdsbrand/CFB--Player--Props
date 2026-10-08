@@ -26,6 +26,7 @@ from collections import defaultdict
 
 from worker.config import ConfigError, get_settings
 from worker.core.game_grading import Graded, grade
+from worker.core.game_picks import V2_EDGE_PLAY
 from worker.db import fetch_all, get_config_value
 from worker.logging_setup import configure_logging, get_logger
 
@@ -48,7 +49,7 @@ _SQL = """
 with graded as (
   select distinct on (p.game_id, p.market)
          p.id, p.game_id, p.market, p.side, p.line, p.price, p.sportsbook_id,
-         p.model_prob, p.made_at, g.start_date, g.week,
+         p.model_prob, p.edge, p.made_at, g.start_date, g.week,
          g.home_points - g.away_points as margin,
          g.home_points + g.away_points as total
     from game_picks p
@@ -57,6 +58,7 @@ with graded as (
      and (%(weeks)s::int[] is null or g.week = any(%(weeks)s))
      and g.completed and g.home_points is not null
      and p.period = %(period)s and p.made_at < g.start_date
+     and p.engine = %(engine)s
    order by p.game_id, p.market, p.made_at desc, p.id desc
 )
 select gr.*,
@@ -81,20 +83,29 @@ def _mean(xs: list[float]) -> float:
     return sum(xs) / len(xs) if xs else float("nan")
 
 
-def summarise(graded: list[tuple[Graded, float | None, float]]) -> str:
-    """One block per market, then the pre-registered high-confidence totals.
+def summarise(
+    graded: list[tuple[Graded, float | None, float, float | None]],
+    engine: str = "v1",
+) -> str:
+    """One block per market, then the engine's pre-registered tier.
 
     Each item is (graded pick, hours its close was captured before kickoff,
-    the model's probability for the side it took).
+    the model's probability for the side it took, the recorded edge). v1's tier
+    is totals at 64%+ raw probability; v2's is any pick at a 3%+ calibrated
+    edge (`V2_EDGE_PLAY`), fixed before the first v2 pick was graded.
     """
+    tier = "totals 64%+" if engine == "v1" else "edge 3%+"
     by_market: dict[str, list[tuple[Graded, float | None]]] = defaultdict(list)
-    for g, hours, model_prob in graded:
+    for g, hours, model_prob, edge in graded:
         by_market[g.market].append((g, hours))
-        if g.market == "totals" and model_prob >= TOTALS_HIGH_CONFIDENCE:
-            by_market["totals 64%+"].append((g, hours))
+        if engine == "v1":
+            if g.market == "totals" and model_prob >= TOTALS_HIGH_CONFIDENCE:
+                by_market[tier].append((g, hours))
+        elif edge is not None and edge >= V2_EDGE_PLAY:
+            by_market[tier].append((g, hours))
 
     lines = []
-    for market in ("spreads", "totals", "totals 64%+", "h2h"):
+    for market in ("spreads", "totals", tier, "h2h"):
         rows = by_market.get(market, [])
         if not rows:
             continue
@@ -109,7 +120,7 @@ def summarise(graded: list[tuple[Graded, float | None, float]]) -> str:
         beat = sum(p > 0 for p in pts) if pts else 0
         lines.append(
             f"{market:11s} picks {len(gs):4d}  W-L-P {w}-{lo}-{pu}  ROI {100 * roi:+.1f}%"
-            + ("  (pre-registered tier, inside 'totals')" if market == "totals 64%+" else "")
+            + ("  (pre-registered tier)" if market == tier else "")
         )
         if pts:
             se = (
@@ -133,9 +144,12 @@ def summarise(graded: list[tuple[Graded, float | None, float]]) -> str:
     return "\n".join(lines) if lines else "no graded picks"
 
 
-def run(*, season: int, sport: str = "cfb", weeks: list[int] | None = None) -> str:
+def run(
+    *, season: int, sport: str = "cfb", weeks: list[int] | None = None, engine: str = "v1"
+) -> str:
     rows = fetch_all(
-        _SQL, {"sport": sport, "season": season, "weeks": weeks, "period": PERIOD}
+        _SQL,
+        {"sport": sport, "season": season, "weeks": weeks, "period": PERIOD, "engine": engine},
     )
     graded = []
     for r in rows:
@@ -155,8 +169,9 @@ def run(*, season: int, sport: str = "cfb", weeks: list[int] | None = None) -> s
             grade(pick, float(r["margin"]), float(r["total"]), close),
             hours,
             float(r["model_prob"]),
+            None if r["edge"] is None else float(r["edge"]),
         ))
-    return summarise(graded)
+    return summarise(graded, engine)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -164,6 +179,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sport", default="cfb", choices=("cfb",))
     parser.add_argument("--season", type=int, help="default: app_config.current_season")
     parser.add_argument("--weeks", type=int, nargs="+")
+    parser.add_argument(
+        "--engine", default="v1", choices=("v1", "v2"),
+        help="v1: raw 5%% shadow picks since week 4; v2: calibrated 2%% picks from 2026-10-08.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -178,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     if season is None:
         log.error("app_config.current_season is unset and no --season given.")
         return 2
-    print(run(season=int(season), sport=args.sport, weeks=args.weeks))
+    print(run(season=int(season), sport=args.sport, weeks=args.weeks, engine=args.engine))
     return 0
 
 

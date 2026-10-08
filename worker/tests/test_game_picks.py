@@ -13,12 +13,15 @@ from worker.core.game_grading import clv_points, clv_probability, grade, payout,
 from worker.core.game_picks import (
     CALIBRATION_SLOPE,
     PRICED_COLUMNS,
+    V2_EDGE_PLAY,
+    V2_EDGE_THRESHOLD,
     Pick,
     Quote,
     calibrate,
     choose_quote,
     devig,
     evaluate,
+    evaluate_calibrated,
     is_new,
     priced_columns,
 )
@@ -147,10 +150,10 @@ def test_the_grade_reports_the_pre_registered_totals_tier_separately():
         return Graded(market, "over", result, profit, None, None)
 
     text = summarise([
-        (g("totals", "win"), 1.0, 0.70),
-        (g("totals", "loss"), 1.0, 0.64),
-        (g("totals", "loss"), 1.0, 0.60),
-        (g("spreads", "win"), 1.0, 0.90),
+        (g("totals", "win"), 1.0, 0.70, None),
+        (g("totals", "loss"), 1.0, 0.64, None),
+        (g("totals", "loss"), 1.0, 0.60, None),
+        (g("spreads", "win"), 1.0, 0.90, None),
     ])
     lines = {
         line.split(" picks ")[0].strip(): line
@@ -210,3 +213,48 @@ def test_no_usable_quote_writes_every_column_null():
     one_sided = _q("pinnacle", "spreads", -3.0, home_price=-105, away_price=None)
     assert all(v is None for v in priced_columns(
         one_sided, np.ones(3), np.zeros(3), 0.5, "spreads").values())
+
+
+# --- Engine v2: the calibrated table edge as a pick (migration 0090) ---------
+
+def test_v2_picks_on_the_calibrated_probability_at_two_percent():
+    assert V2_EDGE_THRESHOLD == 0.02 and V2_EDGE_PLAY == 0.03
+    # Raw 70% over at a -110/-110 total: calibrated ~55%, a ~5-point edge.
+    totals = np.array([60.0] * 7 + [40.0] * 3)
+    q = _q("pinnacle", "totals", 50.0, over_price=-110, under_price=-110)
+    pick = evaluate_calibrated(1, q, np.zeros(10), totals, 0.5)
+    assert pick is not None and pick.engine == "v2" and pick.side == "over"
+    assert abs(pick.model_prob - calibrate(0.7, "totals")) < 1e-12
+    assert abs(pick.edge - (calibrate(0.7, "totals") - 0.5)) < 1e-12
+    # v1 on the same game is the raw 70%.
+    assert evaluate(1, q, np.zeros(10), totals, 0.5).engine == "v1"
+
+
+def test_v2_makes_no_pick_inside_two_percent_and_no_moneyline():
+    # Raw 60% on a spread calibrates to ~50.6%: no v2 pick, though v1 has one.
+    margins = np.array([5.0] * 6 + [-5.0] * 4)
+    q = _q("pinnacle", "spreads", 0.5, home_price=-110, away_price=-110)
+    assert evaluate_calibrated(1, q, margins, np.zeros(10), 0.5) is None
+    assert evaluate(1, q, margins, np.zeros(10), 0.5) is not None
+    h2h = _q("pinnacle", "h2h", None, home_price=150, away_price=-170)
+    assert evaluate_calibrated(1, h2h, margins, np.zeros(10), 0.9) is None
+
+
+def test_v2_grade_reports_its_own_edge_tier():
+    from worker.core.game_grading import Graded
+    from worker.jobs.grade_game_picks import summarise
+
+    def g(market, result):
+        return Graded(market, "over", result, 100 / 110 if result == "win" else -1.0, None, None)
+
+    text = summarise([
+        (g("totals", "win"), 1.0, 0.56, 0.06),
+        (g("spreads", "loss"), 1.0, 0.53, 0.031),
+        (g("totals", "loss"), 1.0, 0.53, 0.025),
+    ], "v2")
+    lines = {
+        line.split(" picks ")[0].strip(): line
+        for line in text.splitlines() if " picks " in line
+    }
+    assert "W-L-P 1-1-0" in lines["edge 3%+"]
+    assert "totals 64%+" not in lines

@@ -79,6 +79,8 @@ class Pick:
     sportsbook_key: str
     model_prob: float
     book_prob: float
+    # Which pick rule made it (migration 0090): v1 raw at 5%, v2 calibrated at 2%.
+    engine: str = "v1"
 
     @property
     def edge(self) -> float:
@@ -244,6 +246,60 @@ def priced_columns(
         second_price: int(prices[1]),
         prob: round(calibrate(p_model, market), 5),
     }
+
+
+# ENGINE V2 (2026-10-08, user-approved for the public tracker). Picks from the
+# CALIBRATED probability the games table shows, at a 2% edge: on week 6 that is
+# ~5 spreads and ~30 totals a slate (calibrated spread edges top out near 3%).
+# v1 keeps running unchanged beside it; each engine's record stands alone.
+# "Edge plays" for v2 is edge >= 3%, fixed here before any v2 pick is graded.
+V2_EDGE_THRESHOLD = 0.02
+V2_EDGE_PLAY = 0.03
+V2_MARKETS = ("spreads", "totals")
+
+
+def evaluate_calibrated(
+    game_id: int,
+    quote: Quote,
+    margin_samples: np.ndarray,
+    total_samples: np.ndarray,
+    p_home_win: float,
+    threshold: float = V2_EDGE_THRESHOLD,
+) -> Pick | None:
+    """An engine-v2 pick: `evaluate` on the calibrated probability.
+
+    The same quote and the same arithmetic the games table's edge uses
+    (`priced_columns`), so a v2 pick is exactly a table edge that cleared the
+    threshold when the pick was made.
+    """
+    if quote.market not in V2_MARKETS:
+        return None
+    prices = quote.two_way()
+    p_raw = first_side_probability(quote, margin_samples, total_samples, p_home_win)
+    if prices is None or p_raw is None:
+        return None
+    p_model = calibrate(p_raw, quote.market)
+    p_book = devig(*prices)
+    first, second = ("over", "under") if quote.market == "totals" else ("home", "away")
+
+    if p_model - p_book >= threshold:
+        side, prob, book, price = first, p_model, p_book, prices[0]
+    elif (1 - p_model) - (1 - p_book) >= threshold:
+        side, prob, book, price = second, 1 - p_model, 1 - p_book, prices[1]
+    else:
+        return None
+    return Pick(
+        game_id=game_id,
+        market=quote.market,
+        side=side,
+        line=quote.line,
+        price=int(price),
+        sportsbook_id=quote.sportsbook_id,
+        sportsbook_key=quote.sportsbook_key,
+        model_prob=float(np.clip(prob, _PROB_FLOOR, 1 - _PROB_FLOOR)),
+        book_prob=book,
+        engine="v2",
+    )
 
 
 def is_new(pick: Pick, standing_side: str | None) -> bool:

@@ -60,6 +60,7 @@ from worker.core.game_picks import (
     Quote,
     choose_quote,
     evaluate,
+    evaluate_calibrated,
     is_new,
     priced_columns,
 )
@@ -101,7 +102,11 @@ class ModelRunReport:
 
     def render(self) -> str:
         age = "none" if self.odds_age_hours is None else f"{self.odds_age_hours:.1f}h"
-        by_market = {m: sum(p.market == m for p in self.picks) for m in PICK_MARKETS}
+        by_market = {
+            f"{e} {m}": sum(p.market == m and p.engine == e for p in self.picks)
+            for e in ("v1", "v2")
+            for m in PICK_MARKETS
+        }
         return "\n".join([
             f"trained on        {self.trained_games} games (k = {self.shrink_k})",
             f"upcoming games    {self.upcoming}",
@@ -199,17 +204,18 @@ def load_quotes(game_ids: list[int]) -> dict[int, list[Quote]]:
     return out
 
 
-def standing_sides(game_ids: list[int]) -> dict[tuple[int, str], str]:
+def standing_sides(game_ids: list[int]) -> dict[tuple[str, int, str], str]:
+    """Each engine's standing side per game and market: (engine, game, market)."""
     rows = fetch_all(
         """
-        select distinct on (game_id, market) game_id, market, side
+        select distinct on (engine, game_id, market) engine, game_id, market, side
           from game_picks
          where game_id = any(%s) and period = %s
-         order by game_id, market, made_at desc, id desc
+         order by engine, game_id, market, made_at desc, id desc
         """,
         (game_ids, PERIOD),
     )
-    return {(int(r["game_id"]), r["market"]): r["side"] for r in rows}
+    return {(r["engine"], int(r["game_id"]), r["market"]): r["side"] for r in rows}
 
 
 def write(projections: list[dict], picks: list[Pick]) -> int:
@@ -232,12 +238,15 @@ def write(projections: list[dict], picks: list[Pick]) -> int:
                 """
                 insert into game_picks
                   (game_id, period, market, side, line, price, sportsbook_id,
-                   model_prob, model_version)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   model_prob, model_version, engine, edge)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 [
                     (p.game_id, PERIOD, p.market, p.side, p.line, p.price,
-                     p.sportsbook_id, round(p.model_prob, 5), MODEL_VERSION)
+                     p.sportsbook_id, round(p.model_prob, 5), MODEL_VERSION,
+                     p.engine,
+                     # Recorded for v2 only: its edge-plays tier reads it.
+                     round(p.edge, 5) if p.engine == "v2" else None)
                     for p in picks
                 ],
             )
@@ -305,17 +314,19 @@ def run(*, season: int, sport: str = "cfb", dry_run: bool = False,
                 ))
                 if quote is None:
                     continue
-                pick = evaluate(
+                args = (
                     game_id, quote, dist["margin"][i], dist["total"][i],
                     float(dist["p_home_win"][i]),
                 )
-                if pick is None:
-                    continue
-                report.picks.append(pick)
-                if is_new(pick, standing.get((game_id, market))):
-                    new_picks.append(pick)
-                else:
-                    report.picks_standing += 1
+                # Both engines, each against its own standing pick.
+                for pick in (evaluate(*args), evaluate_calibrated(*args)):
+                    if pick is None:
+                        continue
+                    report.picks.append(pick)
+                    if is_new(pick, standing.get((pick.engine, game_id, market))):
+                        new_picks.append(pick)
+                    else:
+                        report.picks_standing += 1
 
     if not dry_run:
         write(projections, new_picks)

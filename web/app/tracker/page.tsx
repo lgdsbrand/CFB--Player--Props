@@ -11,14 +11,12 @@ import {
   byDay,
   cards,
   ENGINE_SINCE,
-  ENGINES,
   formatUnits,
   inPeriod,
   PERIOD_LABEL,
   PERIODS,
   pickLabel,
   record,
-  resolveEngine,
   resolvePeriod,
   type Card,
   type CardKey,
@@ -35,9 +33,12 @@ import { getTrackerPicks } from "@/lib/data/tracker";
  *
  * Every pick is frozen before kickoff (migration 0074's trigger) and appears
  * here only once its game has started (0090's policy). Units are 1-unit
- * stakes at the price the pick was made at. v2 is the default; v1, the
- * earlier rule, stays one tab away rather than being hidden.
+ * stakes at the price the pick was made at.
+ *
+ * V2 ONLY. The client does not want v1 on the page (2026-10-08). Its picks
+ * are still made and graded privately (`grade_game_picks --engine v1`).
  */
+const ENGINE: Engine = "v2";
 
 /** Break-even at -110: a win rate below this loses money at standard prices. */
 const BREAK_EVEN = 110 / 210;
@@ -71,7 +72,7 @@ export default async function TrackerPage({
   const raw = await searchParams;
   const sport = resolveSport(raw.sport);
   const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
-  const engine = resolveEngine(first(raw.engine));
+  const engine = ENGINE;
   const period = resolvePeriod(first(raw.period));
 
   if (sport !== "cfb") {
@@ -94,11 +95,9 @@ export default async function TrackerPage({
   const picks = await getTrackerPicks(sport, engine);
   const shown = inPeriod(picks, period);
   const overall = record(shown);
-  const href = (changes: { engine?: Engine; period?: Period }) => {
-    const nextEngine = changes.engine ?? engine;
+  const href = (changes: { period?: Period }) => {
     const nextPeriod = changes.period ?? period;
     return scopedHref("/tracker", { sport }, {
-      engine: nextEngine === "v2" ? undefined : nextEngine,
       period: nextPeriod === "all" ? undefined : nextPeriod,
     });
   };
@@ -108,11 +107,6 @@ export default async function TrackerPage({
       <div className="flex flex-wrap items-end justify-between gap-4">
         <Title engine={engine} />
         <div className="flex flex-col items-end gap-2">
-          <Tabs>
-            {ENGINES.map((e) => (
-              <Tab key={e} href={href({ engine: e })} active={e === engine} label={`Engine ${e.toUpperCase()}`} />
-            ))}
-          </Tabs>
           <Tabs>
             {PERIODS.map((p) => (
               <Tab key={p} href={href({ period: p })} active={p === period} label={PERIOD_LABEL[p]} />

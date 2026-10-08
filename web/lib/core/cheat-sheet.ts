@@ -276,6 +276,45 @@ export function compareRows(a: CheatSheetRow, b: CheatSheetRow): number {
   return a.projectionId - b.projectionId;
 }
 
+/**
+ * How many entries each game holds, for the game selector (client,
+ * 2026-10-08: "a game selector to see if there's any 80 or 100% props").
+ *
+ * ONLY FROM A COMPLETE READ. Counted from a truncated sheet, a game whose
+ * entries fell past the cap would print 0 and read as "nothing here", which
+ * is the exact question the counts answer. The caller passes `truncated` and
+ * gets no counts at all rather than wrong ones.
+ */
+export function gameEntryCounts(
+  rows: Pick<CheatSheetRow, "gameId">[],
+  truncated: boolean,
+): Record<number, number> | undefined {
+  if (truncated) return undefined;
+  const counts: Record<number, number> = {};
+  for (const row of rows) counts[row.gameId] = (counts[row.gameId] ?? 0) + 1;
+  return counts;
+}
+
+/**
+ * The picked games' rows from a COMPLETE read, or null when the read was
+ * truncated and the page must ask the database for those games instead.
+ *
+ * One read serves both the counts and the filter on an ordinary week: the
+ * sheet is far under its cap (92 rows on 2026 week 6, 405 on the fullest 2025
+ * week against 600), and a second pass over the grading view costs as much as
+ * the first. When the cap did bite, filtering what came back would drop the
+ * picked games' entries that fell past it, so this declines.
+ */
+export function rowsForGames<T extends Pick<CheatSheetRow, "gameId">>(
+  rows: T[],
+  gameIds: number[],
+  truncated: boolean,
+): T[] | null {
+  if (truncated) return null;
+  const picked = new Set(gameIds);
+  return rows.filter((row) => picked.has(row.gameId));
+}
+
 /** `5, 0` -> `"5-0"`. The record, printed beside every rate. */
 export function formatRecord(hits: number, decided: number): string {
   return `${hits}-${decided - hits}`;

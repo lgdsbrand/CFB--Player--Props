@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { SheetGamePicker } from "@/components/cheat-sheet/sheet-game-picker";
 import { SheetRow } from "@/components/cheat-sheet/sheet-row";
 import { NavSelect } from "@/components/nav-select";
 import { NotConfigured } from "@/components/not-configured";
@@ -18,8 +19,10 @@ import {
   cheatSections,
   cheatSheetMarkets,
   emptyReason,
+  gameEntryCounts,
   minDecidedFor,
   resolveCheatTier,
+  rowsForGames,
   tierBand,
   type CheatSection,
   type CheatTierKey,
@@ -27,7 +30,7 @@ import {
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount } from "@/lib/core/format";
 import { POSITION_GROUPS, type BetSide, type PositionGroup } from "@/lib/core/types";
-import { kickoffCutoff } from "@/lib/core/kickoff";
+import { kickoffCutoff, upcomingGames } from "@/lib/core/kickoff";
 import {
   DEFAULT_SPORT,
   resolveSport,
@@ -36,7 +39,7 @@ import {
 } from "@/lib/core/sport";
 import { getMarkets } from "@/lib/data/catalogue";
 import { getCheatSheet, getCheatSheetContext } from "@/lib/data/cheat-sheet";
-import { findWeek, getSlateWeeks } from "@/lib/data/slate";
+import { findWeek, getSlateGames, getSlateWeeks } from "@/lib/data/slate";
 
 /**
  * Cheat Sheets — props whose recent games have already cleared today's line.
@@ -119,8 +122,7 @@ export default async function CheatSheets({
 
   const cutoff = kickoffCutoff();
 
-  const page = await getCheatSheet({
-    sport,
+  const sheetFilters = {
     season: active.season,
     week: active.week,
     windowSize,
@@ -130,7 +132,27 @@ export default async function CheatSheets({
     minHitRate: band?.min,
     belowHitRate: band?.below,
     kickoffCutoff: cutoff,
-  });
+  };
+  // THE WHOLE SHEET FIRST, EVEN WITH GAMES PICKED (client, 2026-10-08: a game
+  // selector "to see if there's any 80 or 100% props"). The same read gives
+  // every game's count for the selector and, being far under its cap on any
+  // week measured, the picked games' rows too. Only a truncated read sends the
+  // game filter to the database — see `rowsForGames`.
+  const [whole, slateGames] = await Promise.all([
+    getCheatSheet({ ...sheetFilters, sport }),
+    getSlateGames(active.season, active.week, sport),
+  ]);
+  const pickedGames = params.games;
+  let page = whole;
+  if (pickedGames) {
+    const local = rowsForGames(whole.rows, pickedGames, whole.truncated);
+    page = local
+      ? { rows: local, truncated: false, total: local.length }
+      : await getCheatSheet({ ...sheetFilters, sport, gameIds: pickedGames });
+  }
+  const gameCounts = gameEntryCounts(whole.rows, whole.truncated);
+  // Games still to kick off: the sheet has already dropped the others' rows.
+  const pickableGames = upcomingGames(slateGames, cutoff);
 
   // With a tier chosen the read already holds only that band, so the other
   // section would be empty; it is left out rather than shown as "0".
@@ -158,6 +180,7 @@ export default async function CheatSheets({
     side?: BetSide | null;
     tier?: CheatTierKey | null;
     market?: string | null;
+    games?: number[] | null;
   }) => {
     const nextWindow = changes.window ?? windowSize;
     const nextPosition =
@@ -174,12 +197,14 @@ export default async function CheatSheets({
       )
         ? keptMarket
         : undefined;
+    const nextGames = changes.games === undefined ? pickedGames : changes.games;
     return scopedHref("/cheat-sheets", scope, {
       window: nextWindow !== DEFAULT_CHEAT_WINDOW ? nextWindow : undefined,
       position: nextPosition,
       side: nextSide,
       tier: nextTier ? CHEAT_TIER_PARAM[nextTier] : undefined,
       market: nextMarket,
+      game: nextGames?.length ? nextGames.join(",") : undefined,
     });
   };
   const allMarketsHref = href({ market: null });
@@ -187,7 +212,8 @@ export default async function CheatSheets({
     params.position !== undefined ||
     params.side !== undefined ||
     tier !== undefined ||
-    market !== undefined;
+    market !== undefined ||
+    pickedGames !== undefined;
   // Every mention of "the board" on this page, pointed at the same slate.
   const boardLink = scopedHref(BOARD_PATH, scope);
 
@@ -197,7 +223,8 @@ export default async function CheatSheets({
 
       <WeekStrip weeks={weeks} active={active} basePath="/cheat-sheets" sport={sport} />
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      {/* `relative`: the Games list opens across this row at phone width. */}
+      <div className="relative flex flex-wrap items-center gap-x-4 gap-y-2">
         {/* "80%" is the 80-99% list on its own and "100%" the perfect one --
             see `CHEAT_TIER_PARAM`. All is both, as the page always showed. */}
         <div className="flex items-center gap-2">
@@ -282,6 +309,15 @@ export default async function CheatSheets({
             })),
           ]}
         />
+
+        {/* Each game's count follows the filters above, so "80%" + a game
+            answers "any 80% props in this game?" before it is picked. */}
+        <SheetGamePicker
+          games={pickableGames}
+          value={pickedGames?.join(",") ?? ""}
+          counts={gameCounts}
+          baseHref={href({ games: null })}
+        />
       </div>
 
       {/*
@@ -336,12 +372,14 @@ export default async function CheatSheets({
           marketLabel={
             marketOptions.find((m) => m.key === market)?.displayName ?? null
           }
+          gamesPicked={pickedGames?.length ?? 0}
           filtered={filtered}
           clearedHref={href({
             position: null,
             side: null,
             tier: null,
             market: null,
+            games: null,
           })}
           boardLink={boardLink}
           sport={sport}
@@ -416,6 +454,7 @@ function EmptySheet({
   side,
   tier,
   marketLabel,
+  gamesPicked,
   filtered,
   clearedHref,
   boardLink,
@@ -430,6 +469,8 @@ function EmptySheet({
   tier: CheatTierKey | undefined;
   /** The chosen market's name, or null for every market. */
   marketLabel: string | null;
+  /** How many games the reader picked; 0 is the whole slate. */
+  gamesPicked: number;
   /** Whether any of the reader's own filters is narrowing the sheet. */
   filtered: boolean;
   clearedHref: string;
@@ -506,7 +547,13 @@ function EmptySheet({
       <p className="text-muted max-w-prose text-sm">
         No {side ? `${side} ` : ""}
         {marketLabel ? `${marketLabel} ` : ""}prop
-        {position ? ` at ${position}` : ""} on this slate has hit{" "}
+        {position ? ` at ${position}` : ""}{" "}
+        {gamesPicked === 0
+          ? "on this slate"
+          : gamesPicked === 1
+            ? "in the picked game"
+            : `in the ${gamesPicked} picked games`}{" "}
+        has hit{" "}
         {tier === "perfect"
           ? "100%"
           : tier === "strong"

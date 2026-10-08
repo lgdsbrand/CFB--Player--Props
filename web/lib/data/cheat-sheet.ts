@@ -74,6 +74,11 @@ export type CheatSheetFilters = {
   side?: BetSide;
   /** One market — the sheet's market dropdown. */
   marketKey?: string;
+  /**
+   * Only these games. The page normally filters games from the complete read
+   * (`rowsForGames`); this is for when that read was truncated.
+   */
+  gameIds?: number[];
   /** The floor to read at. Defaults to the lowest tier the page shows. */
   minHitRate?: number;
   /**
@@ -122,6 +127,7 @@ export async function getCheatSheet(
   }
   if (filters.side) query = query.eq("hit_side", filters.side);
   if (filters.marketKey) query = query.eq("market_key", filters.marketKey);
+  if (filters.gameIds) query = query.in("game_id", filters.gameIds);
   if (filters.belowHitRate !== undefined) {
     query = query.lt("hit_rate", filters.belowHitRate);
   }

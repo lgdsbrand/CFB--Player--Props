@@ -24,9 +24,11 @@ import {
   compareRows,
   emptyReason,
   formatRecord,
+  gameEntryCounts,
   minDecidedFor,
   qualifies,
   resolveCheatTier,
+  rowsForGames,
   sideLabel,
   tierBand,
   type CheatSheetRow,
@@ -305,4 +307,25 @@ test("the dropdown offers full-game markets with a call, narrowed by position", 
     cheatSheetMarkets(catalogue, "WR").map((m) => m.key),
     ["rec_yards"],
   );
+});
+
+test("game counts come from a complete sheet, and none from a truncated one", () => {
+  const rows = [row({ gameId: 1 }), row({ gameId: 1 }), row({ gameId: 2 })];
+  assert.deepEqual(gameEntryCounts(rows, false), { 1: 2, 2: 1 });
+  // A cut-off read would print 0 for a game whose entries fell past the cap.
+  assert.equal(gameEntryCounts(rows, true), undefined);
+});
+
+test("picked games filter a complete sheet and decline a truncated one", () => {
+  const rows = [
+    row({ projectionId: 1, gameId: 1 }),
+    row({ projectionId: 2, gameId: 2 }),
+    row({ projectionId: 3, gameId: 3 }),
+  ];
+  assert.deepEqual(
+    rowsForGames(rows, [1, 3], false)?.map((r) => r.projectionId),
+    [1, 3],
+  );
+  assert.deepEqual(rowsForGames(rows, [4], false), []);
+  assert.equal(rowsForGames(rows, [1], true), null);
 });

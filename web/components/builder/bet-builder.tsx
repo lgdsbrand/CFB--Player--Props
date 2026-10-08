@@ -58,7 +58,9 @@ const DEFAULTS: Settings = {
 const STORAGE_KEY = "legends.builder.v1";
 const TARGETS: (number | null)[] = [null, 100, 200, 300, 500, 1000];
 const LEG_CHOICES: (number | "auto")[] = ["auto", 2, 3, 4, 5, 6];
-const CONFIDENCE: number[] = [0.5, 0.55, 0.6, 0.65, 0.7];
+// Since the per-market calibration (2026-10-08) almost no prop sits above
+// 60%: on week 6, 31 of ~800 priced props reached 55%. Steps sized to that.
+const CONFIDENCE: number[] = [0.5, 0.52, 0.55, 0.58, 0.6];
 const HIT_RATES: (number | null)[] = [null, 0.6, 0.8, 1];
 const MIN_PRICES = [-1000, -500, -300, -200, -150, -110];
 const MAX_PRICES = [100, 150, 200, 300, 500, 1000];
@@ -120,11 +122,16 @@ export function BetBuilder({
 
   useEffect(() => {
     let cancelled = false;
-    fetch(scopedHref("/builder/pool", { sport, season, week }, { window: settings.windowSize }))
-      .then((response) => {
+    const url = scopedHref("/builder/pool", { sport, season, week }, { window: settings.windowSize });
+    const read = () =>
+      fetch(url).then((response) => {
         if (!response.ok) throw new Error(String(response.status));
         return response.json() as Promise<BuilderPool>;
-      })
+      });
+    // One retry: a cold first read can hit the database's 3 s anonymous
+    // timeout and succeed a second later (seen live 2026-10-08).
+    read()
+      .catch(() => read())
       .then(
         (pool) => {
           if (cancelled) return;

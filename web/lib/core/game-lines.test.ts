@@ -17,6 +17,7 @@ import {
   spreadLabel,
   spreadMoveToward,
   spreadSideLabel,
+  tableSideResult,
   teamRecord,
   totalMoveLabel,
   totalSideLabel,
@@ -270,4 +271,17 @@ test("edge order puts the biggest edge first and unpriced games last, in kickoff
     [1, 2, 3, 4, 5],
   );
   assert.equal(orderByEdge(games, projections, undefined), games);
+});
+
+test("the table's side is graded against the final score", () => {
+  // Wed 10-07: FIU -6.5 at -112/-104, model 49.9% home -> the table showed
+  // NMSU +6.5. FIU won 22-3, so that side lost.
+  const fiu: PricedMarket = { bookKey: "pinnacle", bookName: "Pinnacle", line: -6.5, firstPrice: -112, secondPrice: -104, modelFirstProb: 0.49909 };
+  assert.equal(tableSideResult(fiu, "spreads", 22, 3), "loss");
+  // KENN +2.5, model 50.5% home: KENN lost 27-26, covered.
+  const kenn: PricedMarket = { bookKey: "pinnacle", bookName: "Pinnacle", line: 2.5, firstPrice: 101, secondPrice: -117, modelFirstProb: 0.50484 };
+  assert.equal(tableSideResult(kenn, "spreads", 26, 27), "win");
+  const total: PricedMarket = { bookKey: "pinnacle", bookName: "Pinnacle", line: 50, firstPrice: -105, secondPrice: -113, modelFirstProb: 0.50554 };
+  assert.equal(tableSideResult(total, "totals", 26, 27), "win");
+  assert.equal(tableSideResult(total, "totals", 25, 25), "push");
 });

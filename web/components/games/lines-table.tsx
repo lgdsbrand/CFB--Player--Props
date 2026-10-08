@@ -257,7 +257,7 @@ function LineRow({
  * The edge on the side the model prefers, with that side named under it.
  * Highlighted at the edge threshold, as on the props board.
  */
-function EdgeCell({
+export function EdgeCell({
   market,
   label,
   edgeThreshold,
@@ -285,7 +285,7 @@ function EdgeCell({
   );
 }
 
-function Cell({
+export function Cell({
   value,
   note,
 }: {

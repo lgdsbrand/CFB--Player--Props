@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { DayStrip } from "@/components/day-strip";
+import { CompletedGames } from "@/components/games/completed-games";
 import { EvNow } from "@/components/games/ev-now";
 import { GameCard } from "@/components/games/game-card";
 import { LinesTable } from "@/components/games/lines-table";
@@ -180,6 +181,31 @@ export default async function Games({
         ),
       ])
     : [new Map(), new Map(), null, []];
+
+  // COMPLETED GAMES (client, 2026-10-08): this week's finals, in the same
+  // conference scope as the slate, at the bottom of the page in either view.
+  // College only, where the game model runs; the rows are the table as it
+  // stood at kickoff (`components/games/completed-games.tsx`).
+  const finished =
+    sport === "cfb"
+      ? games
+          .filter(
+            (game) =>
+              game.completed &&
+              game.homePoints !== null &&
+              game.awayPoints !== null &&
+              (offenseOnBoard(teamDirectory.get(game.homeTeamId), params.conference) ||
+                offenseOnBoard(teamDirectory.get(game.awayTeamId), params.conference)),
+          )
+          .sort((a, b) => (b.startDate ?? "").localeCompare(a.startDate ?? ""))
+      : [];
+  const [finishedProjections, finishedConfig] =
+    finished.length > 0
+      ? await Promise.all([
+          getGameProjections(finished.map((game) => game.gameId)),
+          getAppConfig(),
+        ])
+      : [new Map(), null];
   const liveInitial = await livePromise;
 
   const conferenceLabel = params.conference ?? "displayed conferences";
@@ -367,6 +393,12 @@ export default async function Games({
           ))}
         </div>
       )}
+
+      <CompletedGames
+        games={finished}
+        projections={finishedProjections}
+        edgeThreshold={finishedConfig?.edgeThreshold ?? 0.05}
+      />
     </Shell>
   );
 }

@@ -418,6 +418,27 @@ export function orderByEdge<G extends { gameId: number }>(
   return [...priced.sort((a, b) => edgeOf(b)! - edgeOf(a)!), ...unpriced];
 }
 
+/**
+ * Whether the side the games table showed (the model's edge side, as
+ * `marketEdge` picks it) won against the final score. For the completed games
+ * section (client, 2026-10-08: "so we could go back and look"): the row as it
+ * stood at kickoff, since `run_game_model` never re-projects a started game.
+ */
+export function tableSideResult(
+  market: PricedMarket,
+  kind: "spreads" | "totals",
+  homePoints: number,
+  awayPoints: number,
+): "win" | "loss" | "push" {
+  const { side } = marketEdge(market);
+  const raw =
+    kind === "spreads"
+      ? homePoints - awayPoints + market.line
+      : homePoints + awayPoints - market.line;
+  const margin = side === "first" ? raw : -raw;
+  return margin > 0 ? "win" : margin < 0 ? "loss" : "push";
+}
+
 /** "Over 51.5" / "Under 51.5". */
 export function totalSideLabel(line: number, side: "first" | "second"): string {
   return `${side === "first" ? "Over" : "Under"} ${formatPoints(line)}`;

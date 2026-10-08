@@ -89,8 +89,9 @@ export async function getGameOddsSummaries(
 // =============================================================================
 // One row per game per model version; a game with none has not been projected
 // yet (its week's team strength is built once the previous week is played).
-// `game_picks` is deliberately NOT read anywhere: the picks are a private
-// shadow test, and since migration 0078 the public key cannot read them.
+// `game_picks` is NOT read here. Since migration 0090 the public key can read
+// a pick only once its game has kicked off, and only the tracker does
+// (`lib/data/tracker.ts`, through `v_tracker_picks`).
 
 const MODEL_VERSION = "ratings-v1";
 

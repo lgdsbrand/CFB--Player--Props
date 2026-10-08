@@ -232,6 +232,21 @@ export function homeTiles(
       emptyReason:
         "A hit rate needs games already played and a line to grade them against. This fills in once the season is under way — a first entry needs four decided games behind it.",
     }),
+    tile({
+      key: "builder",
+      emoji: "🧾",
+      title: "Bet Builder",
+      blurb:
+        "Pick the odds you want to end on and how strong each pick must be; it builds the slip.",
+      href: at("/builder"),
+      // Book-priced rows: a slip can only be built from bets a book offers.
+      count: counts.bookLine,
+      countLabel: "priced props to build from",
+      caveat: null,
+      emptyReason:
+        `A slip is built from bets a book is offering, and no sportsbook has posted an ${SPORT_SHORT[sport]} player prop for this slate yet.` +
+        postingHabit(sport),
+    }),
   ];
 }
 

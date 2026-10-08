@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { scopedHref } from "@/lib/core/board-params";
 import { formatAmericanOdds, formatKickoff, formatMoney } from "@/lib/core/format";
 import { hasKickedOff } from "@/lib/core/kickoff";
 import {
@@ -20,7 +21,7 @@ import {
   type SlipLeg,
 } from "@/lib/core/slip";
 import { fetchLegOffers } from "@/components/slip/offers";
-import { slip, useSlip } from "@/components/slip/slip-store";
+import { OPEN_EVENT, slip, useSlip } from "@/components/slip/slip-store";
 
 /** What a $10 parlay would pay, as the example stake. */
 const EXAMPLE_STAKE = 10;
@@ -65,6 +66,12 @@ export function SlipDock() {
   }, [open, keys]);
 
   useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener(OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_EVENT, onOpen);
+  }, []);
+
+  useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => event.key === "Escape" && setOpen(false);
     window.addEventListener("keydown", onKey);
@@ -104,6 +111,18 @@ export function SlipDock() {
     >
       <div className="border-border-subtle flex items-center gap-3 border-b px-4 py-3">
         <h2 className="section-header">{`🧾 Bet slip (${legs.length})`}</h2>
+        {/* The builder for the league being viewed. The dock lives in the root
+            layout and has no sport of its own, so it reads the address. */}
+        <a
+          href="/builder"
+          onClick={(event) => {
+            const sport = new URLSearchParams(window.location.search).get("sport");
+            if (sport === "nfl") event.currentTarget.href = scopedHref("/builder", { sport });
+          }}
+          className="text-accent-cyan hover:text-ink text-xs font-semibold transition-colors"
+        >
+          ⚡ Build one
+        </a>
         {legs.length > 0 ? (
           <button
             type="button"

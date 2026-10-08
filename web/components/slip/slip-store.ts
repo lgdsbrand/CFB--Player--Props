@@ -23,6 +23,7 @@ interface SlipSnapshot {
 const LEGS_KEY = "legends.slip.v1";
 const STATE_KEY = "legends.slip.state";
 const EMPTY: SlipSnapshot = { legs: [], state: null };
+export const OPEN_EVENT = "legends:slip-open";
 
 let snapshot: SlipSnapshot | null = null;
 const listeners = new Set<() => void>();
@@ -77,6 +78,14 @@ export const slip = {
   },
   clear() {
     write({ ...current(), legs: [] });
+  },
+  /** Swap the whole slip for these legs: the bet builder's "Use this slip". */
+  replace(legs: SlipLeg[]) {
+    write({ ...current(), legs: legs.reduce<SlipLeg[]>(addLeg, []) });
+  },
+  /** Ask the drawer to open; `SlipDock` listens. */
+  open() {
+    window.dispatchEvent(new Event(OPEN_EVENT));
   },
   setState(state: string | null) {
     write({ ...current(), state });

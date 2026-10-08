@@ -48,6 +48,9 @@ export function SiteHeader({
     { href: BOARD_PATH, label: "Props" },
     { href: "/games", label: "Games" },
     { href: "/cheat-sheets", label: "Sheets" },
+    // Beside the sheets: both answer "what should I bet", and the builder's
+    // slip lands in the same drawer. Checked at 390px (see the note below).
+    { href: "/builder", label: "Builder" },
     { href: "/no-vig", label: "No-Vig" },
     // SIXTH LINK, ADDED 2026-09-21. The comment below is not decoration: a
     // third link once pushed this row 0.7px past a 390px viewport and made

@@ -8,6 +8,7 @@ import {
   formatPoints,
   marketEdge,
   modelSpreadLabel,
+  projectedScore,
   spreadLabel,
   spreadSideLabel,
   totalSideLabel,
@@ -57,7 +58,7 @@ export function LinesTable({
         <p className="text-muted text-xs">
           Book lines are Pinnacle&rsquo;s, or DraftKings&rsquo; or
           FanDuel&rsquo;s where Pinnacle has none; the book is named under each
-          line. Ours are the game model&rsquo;s projected spread and total.{" "}
+          line. Ours are the game model&rsquo;s projected score, spread and total.{" "}
           <strong className="text-ink">Edge</strong>{" "}
           is the model&rsquo;s
           probability of the side shown minus the book&rsquo;s, with the vig
@@ -81,6 +82,7 @@ export function LinesTable({
             <thead>
               <tr className="border-border-subtle border-b">
                 <Th>Game</Th>
+                <Th>Proj. score</Th>
                 <Th>Book spread</Th>
                 <Th>Our spread</Th>
                 <Th>Spread edge</Th>
@@ -144,6 +146,7 @@ function LineRow({
   // `GameProjection.missingPriorSeason`).
   const model = projection && !projection.missingPriorSeason ? projection : null;
   const noPrior = projection?.missingPriorSeason === true;
+  const score = projectedScore(projection);
 
   // The favourite by Pinnacle's no-vig moneyline; consensus when Pinnacle is
   // absent, and labelled as such so the column never pretends to be sharp.
@@ -179,6 +182,24 @@ function LineRow({
           </span>
           <span className="text-dim text-[0.6875rem]">{formatKickoff(game.startDate)}</span>
         </Link>
+      </td>
+
+      <td className="py-2.5 pr-3">
+        {score ? (
+          // Away over home, the order of the chips in the Game column.
+          <span className="flex flex-col text-xs font-bold whitespace-nowrap tabular-nums">
+            <span>
+              <span className="text-muted">{away}</span>{" "}
+              <span className="text-ink">{score.away.toFixed(1)}</span>
+            </span>
+            <span>
+              <span className="text-muted">{home}</span>{" "}
+              <span className="text-ink">{score.home.toFixed(1)}</span>
+            </span>
+          </span>
+        ) : (
+          <span className="text-dim text-xs">—</span>
+        )}
       </td>
 
       <td className="py-2.5 pr-3">

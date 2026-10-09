@@ -10,12 +10,17 @@
  * probability, 5% edge). v2 is the calibrated table edge at 2%, from
  * 2026-10-08. The client asked to count from the model as it is now; a new
  * version does that without hiding the old one, which stays one tab away.
+ *
+ * RULE PLAYS ARE A THIRD ENGINE, `rules` (2026-10-09, migration 0091): the
+ * client's line-gap rules. They get a card of their own on the v2 page (the
+ * user's choice) and are never pooled into v2's record.
  */
 
 import { slateDayKey } from "./slate-days.ts";
 import { spreadSideLabel, totalSideLabel } from "./game-lines.ts";
+import { isTopTier, reasonLabel, RULES_SUMMARY } from "./rule-plays.ts";
 
-export type Engine = "v1" | "v2";
+export type Engine = "v1" | "v2" | "rules";
 export const ENGINES: readonly Engine[] = ["v2", "v1"];
 export const DEFAULT_ENGINE: Engine = "v2";
 
@@ -23,6 +28,7 @@ export const DEFAULT_ENGINE: Engine = "v2";
 export const ENGINE_SINCE: Record<Engine, string> = {
   v1: "Sep 24, 2026",
   v2: "Oct 8, 2026",
+  rules: "Oct 9, 2026",
 };
 
 export type TrackerResult = "win" | "loss" | "push" | "pending";
@@ -38,6 +44,11 @@ export interface TrackerPick {
   price: number;
   modelProb: number;
   edge: number | null;
+  /** Rule plays: our fair spread (home side) or total, and its gap to the line. */
+  modelLine: number | null;
+  gap: number | null;
+  /** Rule moneylines: the model's own win %, which fired the rule. */
+  rawProb: number | null;
   sportsbookName: string | null;
   season: number;
   week: number;
@@ -128,7 +139,7 @@ export function record(picks: TrackerPick[]): Record_ {
   };
 }
 
-export type CardKey = "spreads" | "totals" | "edge" | "h2h";
+export type CardKey = "spreads" | "totals" | "edge" | "h2h" | "rules";
 
 export interface Card {
   key: CardKey;
@@ -138,6 +149,8 @@ export interface Card {
   /** What qualifies, in one line. */
   rule: string;
   record: Record_;
+  /** Rule plays: the record of each rule inside the card's own. */
+  breakdown?: { label: string; record: Record_ }[];
 }
 
 /**
@@ -152,7 +165,8 @@ export function isEdgePlay(p: TrackerPick): boolean {
 
 /** Which picks a card counts; the page's list filters by the same rule. */
 export function cardFilter(key: CardKey): (p: TrackerPick) => boolean {
-  return key === "edge" ? isEdgePlay : (p) => p.market === key;
+  if (key === "rules") return (p) => p.engine === "rules";
+  return key === "edge" ? isEdgePlay : (p) => p.engine !== "rules" && p.market === key;
 }
 
 /**
@@ -161,7 +175,8 @@ export function cardFilter(key: CardKey): (p: TrackerPick) => boolean {
  * are valid: v2 has no moneyline card.
  */
 export function resolveCardKey(raw: string | undefined, engine: Engine): CardKey | null {
-  const valid: CardKey[] = engine === "v1" ? ["spreads", "totals", "edge", "h2h"] : ["spreads", "totals", "edge"];
+  const valid: CardKey[] =
+    engine === "v1" ? ["spreads", "totals", "edge", "h2h"] : ["spreads", "totals", "edge", "rules"];
   return valid.includes(raw as CardKey) ? (raw as CardKey) : null;
 }
 
@@ -206,6 +221,34 @@ export function cards(picks: TrackerPick[], engine: Engine): Card[] {
     });
   }
   return out;
+}
+
+/**
+ * The rule plays' card (client, 2026-10-09), from `rules` picks only: one
+ * record across his three rules, then each rule and the totals 7+ tier.
+ */
+export function ruleCard(picks: TrackerPick[]): Card {
+  const rules = picks.filter((p) => p.engine === "rules");
+  const of = (filter: (p: TrackerPick) => boolean) => record(rules.filter(filter));
+  return {
+    key: "rules",
+    title: "Rule plays",
+    tag: "RULES",
+    emoji: "🔥",
+    rule: RULES_SUMMARY,
+    record: record(rules),
+    breakdown: [
+      { label: "Spread 4+", record: of((p) => p.market === "spreads") },
+      { label: "Total 6+", record: of((p) => p.market === "totals") },
+      { label: "Total 7+", record: of(isTopTier) },
+      { label: "Moneyline", record: of((p) => p.market === "h2h") },
+    ],
+  };
+}
+
+/** A rule play's reason, for the graded list: "Ours WKU -6.9 · 4.4 pts off". */
+export function ruleReason(p: TrackerPick): string | null {
+  return p.engine === "rules" ? reasonLabel(p) : null;
 }
 
 /** "LIB -14", "Over 52.5", "LIB ML". */

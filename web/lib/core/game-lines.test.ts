@@ -13,6 +13,7 @@ import {
   modelFavourite,
   modelSpreadLabel,
   orderByEdge,
+  projectedScore,
   sharpRetailGap,
   spreadLabel,
   spreadMoveToward,
@@ -284,4 +285,21 @@ test("the table's side is graded against the final score", () => {
   const total: PricedMarket = { bookKey: "pinnacle", bookName: "Pinnacle", line: 50, firstPrice: -105, secondPrice: -113, modelFirstProb: 0.50554 };
   assert.equal(tableSideResult(total, "totals", 26, 27), "win");
   assert.equal(tableSideResult(total, "totals", 25, 25), "push");
+});
+
+test("projected score splits the margin and total back into points", () => {
+  const range = (mean: number) => ({ mean, p10: mean, p90: mean });
+  const full = (margin: number, total: number) => ({
+    periods: {
+      full: { margin: range(margin), total: range(total) },
+      h1: { margin: range(0), total: range(0) },
+      q1: { margin: range(0), total: range(0) },
+    },
+    missingPriorSeason: false,
+  });
+  // WKU (home) vs Missouri State, 2026-10-08: margin 4.7, total 55.0.
+  assert.deepEqual(projectedScore(full(4.7, 55)), { home: 29.9, away: 25.2 });
+  assert.deepEqual(projectedScore(full(-10, 41)), { home: 15.5, away: 25.5 });
+  assert.equal(projectedScore({ ...full(3, 50), missingPriorSeason: true }), null);
+  assert.equal(projectedScore(null), null);
 });

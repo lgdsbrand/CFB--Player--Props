@@ -3,6 +3,7 @@ import Link from "next/link";
 import { TeamChip } from "@/components/board/team-chip";
 import { favourite, softestMatchup, type PositionMatchup } from "@/lib/core/game-view";
 import { formatCount, formatKickoff, formatVenue } from "@/lib/core/format";
+import { projectedScore, type GameProjection } from "@/lib/core/game-lines";
 import type { GameConditions, GameSummary } from "@/lib/core/types";
 import { conditionsSummary } from "@/lib/core/weather-view";
 
@@ -15,20 +16,23 @@ import { conditionsSummary } from "@/lib/core/weather-view";
  * playing, what the book thinks, and the one matchup worth opening the game
  * for. Everything else is a caption.
  *
- * The spread and total are the BOOK'S numbers, from CFBD. Nothing on this card
- * is a model opinion about the game itself; CLAUDE.md §10 keeps game-outcome
- * prediction out of scope.
+ * The spread and total are the BOOK'S numbers, from CFBD. The one model number
+ * is the projected score beside each team (client, 2026-10-09), from the game
+ * model's projection (CLAUDE.md §11); the edges stay on the Lines view.
  */
 export function GameCard({
   game,
   matchups,
   conditions = null,
+  projection = null,
 }: {
   game: GameSummary;
   matchups: PositionMatchup[];
   conditions?: GameConditions | null;
+  projection?: GameProjection | null;
 }) {
   const line = favourite(game);
+  const score = projectedScore(projection);
   const softest = softestMatchup(matchups);
   const venue = formatVenue({
     name: game.venueName,
@@ -67,6 +71,9 @@ export function GameCard({
       </div>
 
       <div className="flex flex-col gap-1.5">
+        {score ? (
+          <span className="label-caption -mb-1 self-end">Proj. score</span>
+        ) : null}
         <TeamLine
           rank={game.awayPollRank}
           abbreviation={game.awayAbbreviation}
@@ -74,6 +81,7 @@ export function GameCard({
           color={game.awayColor}
           altColor={game.awayAltColor}
           favoured={line?.isHome === false}
+          projected={score?.away ?? null}
         />
         <TeamLine
           rank={game.homePollRank}
@@ -82,6 +90,7 @@ export function GameCard({
           color={game.homeColor}
           altColor={game.homeAltColor}
           favoured={line?.isHome === true}
+          projected={score?.home ?? null}
           atHome
         />
       </div>
@@ -142,6 +151,7 @@ function TeamLine({
   color,
   altColor,
   favoured,
+  projected,
   atHome = false,
 }: {
   rank: number | null;
@@ -150,6 +160,7 @@ function TeamLine({
   color: string | null;
   altColor: string | null;
   favoured: boolean;
+  projected: number | null;
   atHome?: boolean;
 }) {
   return (
@@ -170,6 +181,11 @@ function TeamLine({
         <span className="label-caption text-positive shrink-0">Fav</span>
       ) : null}
       {atHome ? <span className="label-caption text-dim shrink-0">Home</span> : null}
+      {projected !== null ? (
+        <span className="text-ink w-10 shrink-0 text-right text-base font-extrabold tabular-nums">
+          {projected.toFixed(1)}
+        </span>
+      ) : null}
     </div>
   );
 }

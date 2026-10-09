@@ -17,10 +17,16 @@ G4 of the game model (CLAUDE.md §11). Each run:
      writes a `game_picks` row where the RAW edge clears 5%. Those rows
      are the SHADOW TEST: frozen at kickoff by the database, readable by no
      visitor (migration 0078), graded by `grade_game_picks`.
+  4. applies the client's line-gap rules (engine `rules`, core/game_picks.py,
+     migration 0091) to spreads, totals and moneylines, frozen the same way
+     but public before kickoff: they are the site's rule plays.
 
 THE MARKET STILL NEVER FEEDS THE MODEL. Prices are read in step 3, after the
 projection is fixed, to decide whether it disagrees with a book by enough to
-record. Nothing in steps 1-2 reads `game_odds` or `game_lines`.
+record. Nothing in steps 1-2 reads `game_odds` or `game_lines`. The one
+exception is the rule plays' moneyline, whose win % is pulled toward the
+book's price after the projection is written (`blend_win_prob`, user decision
+2026-10-09); the projection and the fair line never see a price.
 
 A GAME WHOSE WEEK HAS NO TEAM STRENGTH IS NOT PROJECTED. Next week's rows
 appear only when this week's games are in (`build_team_strength` runs daily
@@ -56,11 +62,13 @@ from worker.core.game_model import (
 )
 from worker.core.game_picks import (
     PRICED_COLUMNS,
+    RULE_MARKETS,
     Pick,
     Quote,
     choose_quote,
     evaluate,
     evaluate_calibrated,
+    evaluate_rules,
     is_new,
     priced_columns,
 )
@@ -83,7 +91,8 @@ PERIOD = "full"
 # 22 and the book's own prices 17 (ROI -60.9%), while spreads on the same
 # opinions went 29-34-1. G3 had already shown the model's win probability loses
 # to the vig-free moneyline (Brier 0.1834 vs 0.1765). The fair win % stays on
-# the game page as a projection, not a pick.
+# the game page as a projection, not a pick. Rule plays are the exception
+# (RULE_MARKETS): their moneyline is blended toward the book first.
 PICK_MARKETS = ("spreads", "totals")
 
 
@@ -104,8 +113,9 @@ class ModelRunReport:
         age = "none" if self.odds_age_hours is None else f"{self.odds_age_hours:.1f}h"
         by_market = {
             f"{e} {m}": sum(p.market == m and p.engine == e for p in self.picks)
-            for e in ("v1", "v2")
-            for m in PICK_MARKETS
+            for e, markets in (("v1", PICK_MARKETS), ("v2", PICK_MARKETS),
+                               ("rules", RULE_MARKETS))
+            for m in markets
         }
         return "\n".join([
             f"trained on        {self.trained_games} games (k = {self.shrink_k})",
@@ -238,15 +248,17 @@ def write(projections: list[dict], picks: list[Pick]) -> int:
                 """
                 insert into game_picks
                   (game_id, period, market, side, line, price, sportsbook_id,
-                   model_prob, model_version, engine, edge)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   model_prob, model_version, engine, edge, model_line, gap, raw_prob)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 [
                     (p.game_id, PERIOD, p.market, p.side, p.line, p.price,
                      p.sportsbook_id, round(p.model_prob, 5), MODEL_VERSION,
                      p.engine,
-                     # Recorded for v2 only: its edge-plays tier reads it.
-                     round(p.edge, 5) if p.engine == "v2" else None)
+                     # Not for v1, whose tier reads model_prob (migration 0090).
+                     None if p.engine == "v1" else round(p.edge, 5),
+                     p.model_line, p.gap,
+                     None if p.raw_prob is None else round(p.raw_prob, 5))
                     for p in picks
                 ],
             )
@@ -305,6 +317,16 @@ def run(*, season: int, sport: str = "cfb", dry_run: bool = False,
         quotes = load_quotes(game_ids)
         report.priced = len(quotes)
         standing = standing_sides(game_ids)
+        # Rule plays are public before kickoff, so none on a game whose model
+        # numbers the site hides (a team new to FBS, migration 0083).
+        rules_apply = [not row["missing_prior_season"] for row in projections]
+
+        def consider(pick: Pick) -> None:
+            report.picks.append(pick)
+            if is_new(pick, standing.get((pick.engine, pick.game_id, pick.market))):
+                new_picks.append(pick)
+            else:
+                report.picks_standing += 1
         for i, game_id in enumerate(game_ids):
             for market in PICK_MARKETS:
                 quote = choose_quote(quotes.get(game_id, []), market)
@@ -319,14 +341,25 @@ def run(*, season: int, sport: str = "cfb", dry_run: bool = False,
                     float(dist["p_home_win"][i]),
                 )
                 # Both engines, each against its own standing pick.
-                for pick in (evaluate(*args), evaluate_calibrated(*args)):
-                    if pick is None:
-                        continue
-                    report.picks.append(pick)
-                    if is_new(pick, standing.get((pick.engine, game_id, market))):
-                        new_picks.append(pick)
-                    else:
-                        report.picks_standing += 1
+                candidates = [evaluate(*args), evaluate_calibrated(*args)]
+                if rules_apply[i]:
+                    candidates.append(evaluate_rules(
+                        game_id, quote, float(projections[i]["margin_mean"]),
+                        float(projections[i]["total_mean"]), *args[2:],
+                    ))
+                for pick in candidates:
+                    if pick is not None:
+                        consider(pick)
+            # The moneyline is a rule play only: v1 and v2 make none.
+            quote = choose_quote(quotes.get(game_id, []), "h2h")
+            if rules_apply[i] and quote is not None:
+                pick = evaluate_rules(
+                    game_id, quote, float(projections[i]["margin_mean"]),
+                    float(projections[i]["total_mean"]), dist["margin"][i],
+                    dist["total"][i], float(dist["p_home_win"][i]),
+                )
+                if pick is not None:
+                    consider(pick)
 
     if not dry_run:
         write(projections, new_picks)

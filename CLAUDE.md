@@ -360,6 +360,27 @@ for "a better way" if there is one.
   against measures the book against itself (see the header of
   `worker/worker/adapters/cfbd/ingest_lines.py`). Adding a market feature needs
   an explicit, written decision, not an import.
+
+  > **2026-10-09 — written decision: the rule plays' moneyline is pulled
+  > toward the book.** The client asked for daily/weekly plays on his rules
+  > (spread 4+ points off the line, total 6+, moneyline 60%+ at -150 or
+  > better), graded on a tracker card of their own (engine `rules`,
+  > migration 0091). Backtested first: on its own the model's win % was
+  > overconfident exactly where that rule fires (said 68%, won 52%; 7-16 in
+  > 2026), a selection effect no slope can fix. The user instructed the fix
+  > "by pulling the model toward the book's price, bypass the rule". The
+  > win % rule plays record, show and grade is therefore
+  > `sigmoid(0.073·logit(model) + 1.045·logit(book no-vig))`
+  > (`ML_BLEND_WEIGHTS`, `worker/core/game_picks.py`), fitted on 2023-2025
+  > closing moneylines by `moneyline_blend_weights`. The book carries almost
+  > all the weight, so requiring the blend itself to reach 60% fired about
+  > twice a season. The user asked for more plays without the overconfidence
+  > returning, so the rule FIRES on the model's own 60%+ on a favourite priced
+  > -150 to -101 (plus money, where the model lost badly, is out) and the
+  > BLEND is what is shown and graded: 2023-2025 walk-forward, 36 plays a
+  > season, 64-45, 58.7% won against 55.6% shown, +3.2%. This is the only
+  > exception: the projection, the fair line, the table's edges and the v1/v2
+  > picks never read a price. Refit each offseason with `run_game_backtest`.
 - **A distribution, not a point.** Project the joint distribution of the two
   scores, then derive win probability, cover probability and total probability
   from it, including 1Q/1H. Every market is a probability per pick, as in §1.

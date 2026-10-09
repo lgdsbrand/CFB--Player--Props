@@ -5,6 +5,7 @@ import { CompletedGames } from "@/components/games/completed-games";
 import { EvNow } from "@/components/games/ev-now";
 import { GameCard } from "@/components/games/game-card";
 import { LinesTable } from "@/components/games/lines-table";
+import { RulePlays } from "@/components/games/rule-plays";
 import { LiveStrip } from "@/components/live/live-strip";
 import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
@@ -12,6 +13,7 @@ import { WeekStrip } from "@/components/week-strip";
 import {
   boardHref,
   parseBoardParams,
+  scopedHref,
   type RawParams,
 } from "@/lib/core/board-params";
 import { offenseOnBoard } from "@/lib/core/board-scope";
@@ -20,6 +22,7 @@ import { EV_HIGHLIGHT } from "@/lib/core/ev";
 import { formatCount } from "@/lib/core/format";
 import { LIVE_SPORTS } from "@/lib/core/live";
 import { orderByEdge } from "@/lib/core/game-lines";
+import { playsFor } from "@/lib/core/rule-plays";
 import { gameMatchups } from "@/lib/core/game-view";
 import {
   findSlateDay,
@@ -33,6 +36,7 @@ import { getEvWagers } from "@/lib/data/ev";
 import { getLiveScores } from "@/lib/data/live";
 import { getGameOddsSummaries, getGameProjections } from "@/lib/data/game-odds";
 import { getSlateGames } from "@/lib/data/games";
+import { getRulePlays } from "@/lib/data/rule-plays";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
 import { getTeamDirectory } from "@/lib/data/teams";
 import { hasKickedOff, kickoffCutoff, playedCount, upcomingGames } from "@/lib/core/kickoff";
@@ -101,12 +105,16 @@ export default async function Games({
     );
   }
 
-  const [games, ratings, conditions] = await Promise.all([
+  const [games, ratings, conditions, rulePlays] = await Promise.all([
     getSlateGames(active.season, active.week, sport),
     // Pinned to the week on screen, never "the latest": a rating from a later
     // cutoff knows results the reader is being asked to look ahead at.
     getDefenseRatings(active.season, active.week, sport),
     getSlateConditions(active.season, active.week),
+    // RULE PLAYS (client, 2026-10-09): the whole week's, whatever the day and
+    // conference filters, since they are a short list of their own. College
+    // only, where the game model runs.
+    sport === "cfb" ? getRulePlays(sport, active.season, active.week) : Promise.resolve([]),
   ]);
 
   const teamDirectory = await getTeamDirectory(
@@ -168,10 +176,12 @@ export default async function Games({
   // Started now so it runs beside the reads below rather than after them.
   const hasLive = LIVE_SPORTS.includes(sport);
   const livePromise = hasLive ? getLiveScores(shownIds) : Promise.resolve([]);
+  // Projections in both views: the cards carry the projected score.
+  const projectionsPromise = getGameProjections(shownIds);
   const [odds, projections, config, evWagers] = showLines
     ? await Promise.all([
         getGameOddsSummaries(shownIds),
-        getGameProjections(shownIds),
+        projectionsPromise,
         getAppConfig(),
         // Only what the list shows. `shown` keeps games that kicked off
         // earlier today (the slate-day cutoff); their prices are history.
@@ -180,7 +190,7 @@ export default async function Games({
           EV_HIGHLIGHT,
         ),
       ])
-    : [new Map(), new Map(), null, []];
+    : [new Map(), await projectionsPromise, null, []];
 
   // COMPLETED GAMES (client, 2026-10-08): this week's finals, in the same
   // conference scope as the slate, at the bottom of the page in either view.
@@ -231,6 +241,15 @@ export default async function Games({
       </div>
 
       <WeekStrip weeks={weeks} active={active} basePath={GAMES_PATH} sport={sport} />
+
+      {sport === "cfb" ? (
+        <RulePlays
+          today={playsFor(rulePlays, "today")}
+          week={playsFor(rulePlays, "week")}
+          trackerHref={scopedHref("/tracker", { sport }, { market: "rules" })}
+          startedIds={rulePlays.filter((p) => hasKickedOff(p.startDate)).map((p) => p.id)}
+        />
+      ) : null}
 
       <DayStrip
         days={days}
@@ -329,7 +348,7 @@ export default async function Games({
         .{" "}
         {showLines
           ? "Each game's model numbers and edges are set against one book's line, named in the table."
-          : "Spreads and totals are the book\u2019s consensus, not a model output."}
+          : "Spreads and totals are the book\u2019s consensus; the projected score is the game model\u2019s."}
       </p>
 
       {hasLive && shown.length > 0 ? (
@@ -389,6 +408,7 @@ export default async function Games({
               game={game}
               matchups={gameMatchups(game, ratings)}
               conditions={conditions.get(game.gameId) ?? null}
+              projection={projections.get(game.gameId) ?? null}
             />
           ))}
         </div>

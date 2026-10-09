@@ -165,6 +165,50 @@ def calibration_slopes(frame: pl.DataFrame) -> dict[str, float]:
     }
 
 
+def _implied(price: np.ndarray) -> np.ndarray:
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(price < 0, -price / (-price + 100.0), 100.0 / (price + 100.0))
+
+
+def valid_moneylines(frame: pl.DataFrame) -> np.ndarray:
+    """Games whose closing moneyline is a real two-way price.
+
+    CFBD's moneylines are a median taken per side across providers, and some
+    are not prices at all: missing, or pairs like +1550 / +130 that cannot
+    both be real. Graded on those, a moneyline rule showed +46% ROI. Kept: both
+    sides present and at least 100 in size, an overround of 1.00-1.12, and a
+    sign that agrees with the spread (no plus-money favourite of 3+ points).
+    """
+    home, away = _num(frame, "mkt_home_ml"), _num(frame, "mkt_away_ml")
+    spread = _num(frame, "mkt_spread")
+    over = _implied(home) + _implied(away)
+    with np.errstate(invalid="ignore"):
+        return (
+            ~np.isnan(home) & ~np.isnan(away) & ~np.isnan(_num(frame, "margin"))
+            & (np.abs(home) >= 100) & (np.abs(away) >= 100)
+            & (over > 1.0) & (over < 1.12)
+            & ~((spread < -3) & (home > 0)) & ~((spread > 3) & (away > 0))
+        )
+
+
+def moneyline_blend_weights(frame: pl.DataFrame) -> tuple[float, float]:
+    """(model, book) weights of ML_BLEND_WEIGHTS in core/game_picks.py.
+
+    Logistic regression of the home win on the two log-odds, the model's win
+    probability and the vig-free closing moneyline, no intercept, on games
+    with a valid moneyline. Printed by run_game_backtest, never written back.
+    """
+    m = valid_moneylines(frame)
+    home, away = _num(frame, "mkt_home_ml")[m], _num(frame, "mkt_away_ml")[m]
+    p_book = _implied(home) / (_implied(home) + _implied(away))
+    p_model = np.clip(_num(frame, "p_home_win")[m], 1e-4, 1 - 1e-4)
+    p_book = np.clip(p_book, 1e-4, 1 - 1e-4)
+    x = np.c_[np.log(p_model / (1 - p_model)), np.log(p_book / (1 - p_book))]
+    won = (_num(frame, "margin")[m] > 0).astype(int)
+    fit = LogisticRegression(fit_intercept=False, C=np.inf).fit(x, won)
+    return float(fit.coef_[0, 0]), float(fit.coef_[0, 1])
+
+
 def summarise(frame: pl.DataFrame) -> dict:
     f = {c: _num(frame, c) for c in frame.columns if c not in ("phase",)}
     margin, total = f["margin"], f["total"]

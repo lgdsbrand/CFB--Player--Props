@@ -16,7 +16,12 @@ import sys
 import polars as pl
 
 from worker.config import REPO_ROOT, ConfigError, get_settings
-from worker.core.game_backtest import calibration_slopes, summarise_runs, walk_forward
+from worker.core.game_backtest import (
+    calibration_slopes,
+    moneyline_blend_weights,
+    summarise_runs,
+    walk_forward,
+)
 from worker.core.game_data import load_games
 from worker.core.game_report import render
 from worker.db import get_config_value
@@ -63,6 +68,11 @@ def main(argv: list[str] | None = None) -> int:
     log.info(
         "Calibration slopes on %s: %s", args.test_seasons,
         {m: round(s, 4) for m, s in calibration_slopes(ratings).items()},
+    )
+    # The rule plays' moneyline blend (ML_BLEND_WEIGHTS), same footing.
+    log.info(
+        "Moneyline blend weights (model, book) on %s: %s", args.test_seasons,
+        tuple(round(w, 3) for w in moneyline_blend_weights(ratings)),
     )
 
     REPORT_PATH.write_text(

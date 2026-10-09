@@ -20,6 +20,8 @@ import {
   record,
   resolveCardKey,
   resolvePeriod,
+  ruleCard,
+  ruleReason,
   type Card,
   type CardKey,
   type Engine,
@@ -39,6 +41,10 @@ import { getTrackerPicks } from "@/lib/data/tracker";
  *
  * V2 ONLY. The client does not want v1 on the page (2026-10-08). Its picks
  * are still made and graded privately (`grade_game_picks --engine v1`).
+ *
+ * PLUS THE RULE PLAYS' CARD (2026-10-09): the client's line-gap rules, a
+ * separate engine with a card of its own. Never in the overall record above
+ * the cards, which is v2's.
  */
 const ENGINE: Engine = "v2";
 
@@ -51,12 +57,14 @@ const CARD_TINT: Record<CardKey, string> = {
   totals: "border-accent-cyan/35 from-accent-cyan/10",
   edge: "border-target/40 from-target/15",
   h2h: "border-positive/35 from-positive/10",
+  rules: "border-accent-indigo/40 from-accent-cyan/10 via-accent-indigo/10",
 };
 const BAR_TINT: Record<CardKey, string> = {
   spreads: "bg-accent-indigo",
   totals: "bg-accent-cyan",
   edge: "bg-target",
   h2h: "bg-positive",
+  rules: "bg-gradient-to-r from-accent-cyan to-accent-indigo",
 };
 
 export default async function TrackerPage({
@@ -96,11 +104,15 @@ export default async function TrackerPage({
     );
   }
 
-  const picks = await getTrackerPicks(sport, engine);
-  const shown = inPeriod(picks, period);
+  const picks = await getTrackerPicks(sport, [engine, "rules"]);
+  // One period cut for both, so "Week" is the same week on every card.
+  const inScope = inPeriod(picks, period);
+  const shown = inScope.filter((p) => p.engine === engine);
+  const shownRules = inScope.filter((p) => p.engine === "rules");
   const overall = record(shown);
-  const marketCards = cards(shown, engine);
-  const listed = market ? shown.filter(cardFilter(market)) : shown;
+  const marketCards = [...cards(shown, engine), ruleCard(shownRules)];
+  const listed =
+    market === "rules" ? shownRules : market ? shown.filter(cardFilter(market)) : shown;
   const href = (changes: { period?: Period; market?: CardKey | null }) => {
     const nextPeriod = changes.period ?? period;
     const nextMarket = changes.market === undefined ? market : changes.market;
@@ -162,7 +174,7 @@ export default async function TrackerPage({
         </div>
       )}
 
-      {shown.length > 0 ? (
+      {inScope.length > 0 ? (
         <section className="panel flex flex-col">
           <div className="border-border-subtle flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-3">
             <h2 className="section-header">✅ Graded picks</h2>
@@ -204,7 +216,8 @@ export default async function TrackerPage({
 
       <p className="text-dim text-center text-[0.6875rem] uppercase tracking-label">
         Picks locked before kickoff · shown once the game starts · graded the morning after · units on
-        1-unit stakes at the price taken · Engine {engine.toUpperCase()} since {ENGINE_SINCE[engine]}
+        1-unit stakes at the price taken · Engine {engine.toUpperCase()} since {ENGINE_SINCE[engine]} ·
+        rule plays since {ENGINE_SINCE.rules}, listed ahead of the games on Analyze Games
       </p>
     </Shell>
   );
@@ -275,6 +288,19 @@ function MarketCard({ card, active, href }: { card: Card; active: boolean; href:
         </span>
       </div>
       <RecordLine r={r} size="md" />
+      {card.breakdown ? (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
+          {card.breakdown.map((b) => (
+            <div key={b.label} className="flex flex-col">
+              <dt className="label-caption">{b.label}</dt>
+              <dd className="text-ink text-sm font-bold tabular-nums">
+                {b.record.wins}-{b.record.losses}
+                {b.record.pushes > 0 ? `-${b.record.pushes}` : ""}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
       <div className="bg-panel-inset h-2 overflow-hidden rounded-full" aria-hidden>
         <div
           className={`h-full rounded-full ${BAR_TINT[card.key]}`}
@@ -318,6 +344,7 @@ const RESULT_STYLE: Record<TrackerPick["result"], string> = {
 };
 
 function PickRow({ p }: { p: TrackerPick }) {
+  const reason = ruleReason(p);
   const final =
     p.homePoints !== null && p.awayPoints !== null ? `${p.away} ${p.awayPoints} · ${p.home} ${p.homePoints}` : null;
   return (
@@ -336,6 +363,7 @@ function PickRow({ p }: { p: TrackerPick }) {
           {p.market === "totals" && final
             ? ` (${formatPoints((p.homePoints ?? 0) + (p.awayPoints ?? 0))} total)`
             : ""}
+          {reason ? ` · ${reason}` : ""}
         </span>
       </div>
       <span

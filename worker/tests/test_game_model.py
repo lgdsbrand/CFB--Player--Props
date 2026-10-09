@@ -152,3 +152,34 @@ def test_a_team_with_no_prior_season_in_the_data_is_flagged():
         "completed": [True] * MIN_PRIOR_GAMES,
     })])
     assert missing_prior_season(full, upcoming.head(1), 2026).tolist() == [False]
+
+
+def test_the_moneyline_blend_trusts_the_informative_side_and_drops_junk_prices():
+    import polars as pl
+
+    from worker.core.game_backtest import moneyline_blend_weights, valid_moneylines
+
+    rng = np.random.default_rng(7)
+    n = 4000
+    p_true = rng.uniform(0.2, 0.8, n)
+    won = rng.uniform(size=n) < p_true
+    # The book's price IS the truth; the model is noise around a coin flip.
+    fav = p_true >= 0.5
+    home_ml = np.where(fav, -100 * p_true / (1 - p_true), 100 * (1 - p_true) / p_true) - 5
+    away_ml = np.where(fav, 100 * p_true / (1 - p_true), -100 * (1 - p_true) / p_true) - 5
+    frame = pl.DataFrame({
+        "p_home_win": rng.uniform(0.3, 0.7, n),
+        "margin": np.where(won, 7.0, -7.0),
+        "mkt_home_ml": home_ml, "mkt_away_ml": away_ml,
+        "mkt_spread": np.where(fav, -3.0, 3.0),
+    })
+    w_model, w_book = moneyline_blend_weights(frame)
+    assert abs(w_model) < 0.2 and 0.8 < w_book < 1.2
+
+    junk = pl.DataFrame({
+        "mkt_home_ml": [1550.0, None, -150.0, 140.0],
+        "mkt_away_ml": [130.0, -110.0, 130.0, -160.0],
+        "mkt_spread": [3.0, 1.0, -3.0, -7.0],  # last: a plus-money 7-point favourite
+        "margin": [1.0, 1.0, 1.0, 1.0],
+    })
+    assert valid_moneylines(junk).tolist() == [False, False, True, False]

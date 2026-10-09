@@ -488,3 +488,21 @@ export function modelFavourite(
 ): { team: string; p: number } {
   return pHomeWin >= 0.5 ? { team: home, p: pHomeWin } : { team: away, p: 1 - pHomeWin };
 }
+
+/**
+ * The model's projected score (client, 2026-10-09: "our projected score isn't
+ * displayed"). Not a second model: the expected margin and total already
+ * stored, split back into the two teams' points, home = (total + margin) / 2.
+ * Null for a game whose model numbers are hidden (a team new to FBS).
+ */
+export function projectedScore(
+  projection: Pick<GameProjection, "periods" | "missingPriorSeason"> | null | undefined,
+): { home: number; away: number } | null {
+  if (!projection || projection.missingPriorSeason) return null;
+  const { margin, total } = projection.periods.full;
+  if (!Number.isFinite(margin.mean) || !Number.isFinite(total.mean)) return null;
+  return {
+    home: Math.round(((total.mean + margin.mean) / 2) * 10) / 10,
+    away: Math.round(((total.mean - margin.mean) / 2) * 10) / 10,
+  };
+}

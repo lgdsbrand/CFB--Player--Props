@@ -258,3 +258,104 @@ def test_v2_grade_reports_its_own_edge_tier():
     }
     assert "W-L-P 1-1-0" in lines["edge 3%+"]
     assert "totals 64%+" not in lines
+
+
+# --- Rule plays: the client's line-gap rules (migration 0091) ----------------
+
+def test_rule_thresholds_are_the_clients():
+    from worker.core.game_picks import (
+        RULE_ML_MIN_PROB,
+        RULE_ML_WORST_PRICE,
+        RULE_SPREAD_GAP,
+        RULE_TOTAL_GAP,
+        RULE_TOTAL_TOP_GAP,
+    )
+
+    assert (RULE_SPREAD_GAP, RULE_TOTAL_GAP, RULE_TOTAL_TOP_GAP) == (4.0, 6.0, 7.0)
+    assert (RULE_ML_MIN_PROB, RULE_ML_WORST_PRICE) == (0.60, -150)
+
+
+def test_a_spread_rule_play_takes_the_side_our_line_favours():
+    from worker.core.game_picks import evaluate_rules
+
+    margins = np.array([7.0] * 6 + [-3.0] * 4)
+    # Book: home -2.5. Ours: home by 6.9, a fair -6.9, 4.4 points away: home.
+    q = _q("pinnacle", "spreads", -2.5, home_price=-108, away_price=-112)
+    pick = evaluate_rules(1, q, 6.9, 50.0, margins, np.zeros(10), 0.6)
+    assert pick is not None and pick.engine == "rules"
+    assert (pick.side, pick.price, pick.model_line, pick.gap) == ("home", -108, -6.9, 4.4)
+    assert abs(pick.model_prob - calibrate(0.6, "spreads")) < 1e-12
+    # Ours home by 6.4: 3.9 points away, no play.
+    assert evaluate_rules(1, q, 6.4, 50.0, margins, np.zeros(10), 0.6) is None
+    # Ours AWAY by 2.0 against home -2.5: 4.5 points the other way, away.
+    away = evaluate_rules(1, q, -2.0, 50.0, margins, np.zeros(10), 0.6)
+    assert (away.side, away.price, away.model_line, away.gap) == ("away", -112, 2.0, 4.5)
+
+
+def test_a_total_rule_play_needs_six_points_either_way():
+    from worker.core.game_picks import evaluate_rules
+
+    q = _q("pinnacle", "totals", 52.5, over_price=-110, under_price=-110)
+    totals = np.full(10, 45.0)
+    under = evaluate_rules(1, q, 0.0, 45.5, np.zeros(10), totals, 0.5)
+    assert (under.side, under.gap, under.model_line) == ("under", 7.0, 45.5)
+    assert evaluate_rules(1, q, 0.0, 47.0, np.zeros(10), totals, 0.5) is None
+    over = evaluate_rules(1, q, 0.0, 58.5, np.zeros(10), totals, 0.5)
+    assert (over.side, over.gap) == ("over", 6.0)
+
+
+def test_the_moneyline_is_pulled_toward_the_book():
+    from worker.core.game_picks import ML_BLEND_WEIGHTS, blend_win_prob
+
+    assert ML_BLEND_WEIGHTS == (0.073, 1.045)
+    # The model at 80% against a book at 55%: the blend sits by the book.
+    p = blend_win_prob(0.80, 0.55)
+    assert 0.55 < p < 0.58
+    assert abs(blend_win_prob(0.5, 0.5) - 0.5) < 1e-12
+
+
+def test_a_moneyline_rule_play_fires_on_the_model_and_records_the_blend():
+    from worker.core.game_picks import RULE_ML_BEST_PRICE, blend_win_prob, evaluate_rules
+
+    assert RULE_ML_BEST_PRICE == -101
+    z = np.zeros(10)
+    # -140/+120: a favourite. The model's own 66% fires it; the blend is recorded.
+    q = _q("pinnacle", "h2h", None, home_price=-140, away_price=120)
+    pick = evaluate_rules(1, q, 5.0, 50.0, z, z, 0.66)
+    assert pick is not None and (pick.side, pick.price, pick.gap) == ("home", -140, None)
+    assert abs(pick.raw_prob - 0.66) < 1e-12
+    assert abs(pick.model_prob - blend_win_prob(0.66, devig(-140, 120))) < 1e-12
+    assert pick.model_prob < 0.60  # honest number, below the trigger
+    # The model under 60%: no play.
+    assert evaluate_rules(1, q, 2.0, 50.0, z, z, 0.58) is None
+    # The away side, when the model prefers it at a favourite's price.
+    away = evaluate_rules(1, _q("pinnacle", "h2h", None, home_price=110, away_price=-130),
+                          -5.0, 50.0, z, z, 0.30)
+    assert (away.side, away.price) == ("away", -130)
+    # Past -150, and plus money, are no play however sure the model is.
+    heavy = _q("pinnacle", "h2h", None, home_price=-400, away_price=320)
+    assert evaluate_rules(1, heavy, 20.0, 50.0, z, z, 0.99) is None
+    dog = _q("pinnacle", "h2h", None, home_price=130, away_price=-150)
+    assert evaluate_rules(1, dog, 5.0, 50.0, z, z, 0.70) is None
+
+
+def test_the_rules_grade_reports_totals_seven_plus():
+    from worker.core.game_grading import Graded
+    from worker.jobs.grade_game_picks import summarise
+
+    def g(market, result):
+        return Graded(market, "over", result, 100 / 110 if result == "win" else -1.0, None, None)
+
+    text = summarise([
+        (g("totals", "win"), 1.0, 0.55, 0.03, 7.5),
+        (g("totals", "loss"), 1.0, 0.55, 0.03, 6.2),
+        (g("spreads", "loss"), 1.0, 0.51, 0.01, 9.0),
+        (g("h2h", "win"), 1.0, 0.61, 0.02, None),
+    ], "rules")
+    lines = {
+        line.split(" picks ")[0].strip(): line
+        for line in text.splitlines() if " picks " in line
+    }
+    assert "W-L-P 1-1-0" in lines["totals"]
+    assert "W-L-P 1-0-0" in lines["totals 7+"]
+    assert "W-L-P 1-0-0" in lines["h2h"]

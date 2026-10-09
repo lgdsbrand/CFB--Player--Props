@@ -26,7 +26,7 @@ from collections import defaultdict
 
 from worker.config import ConfigError, get_settings
 from worker.core.game_grading import Graded, grade
-from worker.core.game_picks import V2_EDGE_PLAY
+from worker.core.game_picks import RULE_TOTAL_TOP_GAP, V2_EDGE_PLAY
 from worker.db import fetch_all, get_config_value
 from worker.logging_setup import configure_logging, get_logger
 
@@ -49,7 +49,7 @@ _SQL = """
 with graded as (
   select distinct on (p.game_id, p.market)
          p.id, p.game_id, p.market, p.side, p.line, p.price, p.sportsbook_id,
-         p.model_prob, p.edge, p.made_at, g.start_date, g.week,
+         p.model_prob, p.edge, p.gap, p.made_at, g.start_date, g.week,
          g.home_points - g.away_points as margin,
          g.home_points + g.away_points as total
     from game_picks p
@@ -84,22 +84,28 @@ def _mean(xs: list[float]) -> float:
 
 
 def summarise(
-    graded: list[tuple[Graded, float | None, float, float | None]],
+    graded: list[tuple],
     engine: str = "v1",
 ) -> str:
     """One block per market, then the engine's pre-registered tier.
 
     Each item is (graded pick, hours its close was captured before kickoff,
-    the model's probability for the side it took, the recorded edge). v1's tier
-    is totals at 64%+ raw probability; v2's is any pick at a 3%+ calibrated
-    edge (`V2_EDGE_PLAY`), fixed before the first v2 pick was graded.
+    the model's probability for the side it took, the recorded edge[, the
+    recorded gap]). v1's tier is totals at 64%+ raw probability; v2's is any
+    pick at a 3%+ calibrated edge (`V2_EDGE_PLAY`), fixed before the first v2
+    pick was graded; the rule plays' is totals 7+ points off the line
+    (`RULE_TOTAL_TOP_GAP`), fixed from the backtest before the first was made.
     """
-    tier = "totals 64%+" if engine == "v1" else "edge 3%+"
+    tier = {"v1": "totals 64%+", "v2": "edge 3%+", "rules": "totals 7+"}[engine]
     by_market: dict[str, list[tuple[Graded, float | None]]] = defaultdict(list)
-    for g, hours, model_prob, edge in graded:
+    for g, hours, model_prob, edge, *rest in graded:
+        gap = rest[0] if rest else None
         by_market[g.market].append((g, hours))
         if engine == "v1":
             if g.market == "totals" and model_prob >= TOTALS_HIGH_CONFIDENCE:
+                by_market[tier].append((g, hours))
+        elif engine == "rules":
+            if g.market == "totals" and gap is not None and gap >= RULE_TOTAL_TOP_GAP:
                 by_market[tier].append((g, hours))
         elif edge is not None and edge >= V2_EDGE_PLAY:
             by_market[tier].append((g, hours))
@@ -170,6 +176,7 @@ def run(
             hours,
             float(r["model_prob"]),
             None if r["edge"] is None else float(r["edge"]),
+            None if r["gap"] is None else float(r["gap"]),
         ))
     return summarise(graded, engine)
 
@@ -180,8 +187,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--season", type=int, help="default: app_config.current_season")
     parser.add_argument("--weeks", type=int, nargs="+")
     parser.add_argument(
-        "--engine", default="v1", choices=("v1", "v2"),
-        help="v1: raw 5%% shadow picks since week 4; v2: calibrated 2%% picks from 2026-10-08.",
+        "--engine", default="v1", choices=("v1", "v2", "rules"),
+        help="v1: raw 5%% shadow picks since week 4; v2: calibrated 2%% picks from 2026-10-08; "
+             "rules: the client's line-gap rule plays from 2026-10-09.",
     )
     args = parser.parse_args(argv)
 

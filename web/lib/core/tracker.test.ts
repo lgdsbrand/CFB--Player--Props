@@ -11,6 +11,8 @@ import {
   pickLabel,
   record,
   resolveCardKey,
+  ruleCard,
+  ruleReason,
   resolveEngine,
   resolvePeriod,
   type TrackerPick,
@@ -28,6 +30,9 @@ function pick(overrides: Partial<TrackerPick> = {}): TrackerPick {
     price: -110,
     modelProb: 0.53,
     edge: 0.025,
+    modelLine: null,
+    gap: null,
+    rawProb: null,
     sportsbookName: "Pinnacle",
     season: 2026,
     week: 6,
@@ -127,7 +132,29 @@ test("resolveCardKey accepts only the cards the engine shows", () => {
   assert.equal(resolveCardKey("spreads", "v2"), "spreads");
   assert.equal(resolveCardKey("edge", "v2"), "edge");
   assert.equal(resolveCardKey("h2h", "v2"), null);
+  assert.equal(resolveCardKey("rules", "v2"), "rules");
+  assert.equal(resolveCardKey("rules", "v1"), null);
   assert.equal(resolveCardKey("h2h", "v1"), "h2h");
   assert.equal(resolveCardKey(undefined, "v2"), null);
   assert.equal(resolveCardKey("bogus", "v2"), null);
+});
+
+test("rule plays have their own card, never inside v2's", () => {
+  const v2 = pick({ market: "totals", result: "win" });
+  const rules = [
+    pick({ engine: "rules", market: "spreads", result: "loss", units: -1, modelLine: -6.9, gap: 4.4 }),
+    pick({ engine: "rules", market: "totals", side: "under", line: 52.5, result: "win", modelLine: 45.5, gap: 7 }),
+    pick({ engine: "rules", market: "totals", side: "over", line: 50, result: "win", modelLine: 56.2, gap: 6.2 }),
+    pick({ engine: "rules", market: "h2h", line: null, result: "pending", units: null }),
+  ];
+  const card = ruleCard([v2, ...rules]);
+  assert.equal(card.key, "rules");
+  assert.deepEqual([card.record.wins, card.record.losses, card.record.pending], [2, 1, 1]);
+  const by = Object.fromEntries((card.breakdown ?? []).map((b) => [b.label, [b.record.wins, b.record.losses]]));
+  assert.deepEqual(by, { "Spread 4+": [0, 1], "Total 6+": [2, 0], "Total 7+": [1, 0], Moneyline: [0, 0] });
+  // The v2 cards' filters leave rule plays out, and the rules filter takes only them.
+  assert.equal([v2, ...rules].filter(cardFilter("totals")).length, 1);
+  assert.equal([v2, ...rules].filter(cardFilter("rules")).length, 4);
+  assert.equal(ruleReason(rules[0]), "Ours LIB -6.9 · 4.4 pts off");
+  assert.equal(ruleReason(v2), null);
 });

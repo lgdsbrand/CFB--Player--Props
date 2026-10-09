@@ -6,6 +6,7 @@ import {
   marketEdge,
   modelFavourite,
   modelSpreadLabel,
+  projectedScore,
   spreadSideLabel,
   totalRangeLabel,
   totalSideLabel,
@@ -108,6 +109,17 @@ export function ModelLinePanel({
           </table>
 
           <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+            {(() => {
+              const score = projectedScore(projection);
+              return score ? (
+                <span className="flex flex-col">
+                  <span className="label-caption">Projected score</span>
+                  <span className="text-ink text-sm font-extrabold whitespace-nowrap tabular-nums">
+                    {away} {score.away.toFixed(1)} · {home} {score.home.toFixed(1)}
+                  </span>
+                </span>
+              ) : null;
+            })()}
             <span className="flex flex-col">
               <span className="label-caption">Win chance</span>
               <span className="text-ink text-sm font-extrabold tabular-nums">

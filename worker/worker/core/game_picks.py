@@ -79,8 +79,16 @@ class Pick:
     sportsbook_key: str
     model_prob: float
     book_prob: float
-    # Which pick rule made it (migration 0090): v1 raw at 5%, v2 calibrated at 2%.
+    # Which pick rule made it (migration 0090): v1 raw at 5%, v2 calibrated at 2%,
+    # rules the client's line-gap rules (migration 0091).
     engine: str = "v1"
+    # Rule plays only (migration 0091): our number in the line's own terms (the
+    # home team's fair spread, or the fair total) and its distance from the line.
+    model_line: float | None = None
+    gap: float | None = None
+    # Rule moneylines only: the model's own win % that fired the rule, beside
+    # the blended one recorded as model_prob.
+    raw_prob: float | None = None
 
     @property
     def edge(self) -> float:
@@ -299,6 +307,143 @@ def evaluate_calibrated(
         model_prob=float(np.clip(prob, _PROB_FLOOR, 1 - _PROB_FLOOR)),
         book_prob=book,
         engine="v2",
+    )
+
+
+# RULE PLAYS (client 2026-10-09: "4 points or more either way" on spreads,
+# "6-7 points or more" on totals, moneylines "60 something % or better and odds
+# -150 or better"). A third engine, `rules`, graded on its own tracker card and
+# public before kickoff (migration 0091): these are meant to be seen.
+#
+# Backtested before any was made (2023-2025 walk-forward plus 2026 to date,
+# closing lines): spreads 4+ were 50.2% then 45.1%, a coin flip; totals 6+
+# 56.7% then 56.2%; totals 7+ 57.9% then 60.0% and up in every season, so 7+
+# is the pre-registered top tier, graded inside and beside totals.
+RULE_SPREAD_GAP = 4.0
+RULE_TOTAL_GAP = 6.0
+RULE_TOTAL_TOP_GAP = 7.0
+RULE_ML_MIN_PROB = 0.60
+RULE_ML_WORST_PRICE = -150
+# Favourites only: -150 to -101. See the moneyline note below.
+RULE_ML_BEST_PRICE = -101
+RULE_MARKETS = ("spreads", "totals", "h2h")
+
+# THE MONEYLINE IS PULLED TOWARD THE BOOK (user decision 2026-10-09, an explicit
+# exception to "the market never feeds the model", CLAUDE.md §11). On its own
+# the model's win % is calibrated over all games (slope 1.06) yet badly
+# overconfident exactly where the rule fires: where it disagrees with the
+# book, it said 68% and won 52% (2023-2025), and 7-16 in 2026. The fix is a
+# logistic blend of the two log-odds, no intercept,
+#
+#     p = sigmoid(w_model * logit(p_model) + w_book * logit(p_book_novig)),
+#
+# fitted by `moneyline_blend_weights` (core/game_backtest.py) on 2023-2025.
+# The fit puts nearly all the weight on the book, which is the finding: the
+# model adds little to a moneyline. Held out it matched the book's own
+# accuracy (2026 Brier 0.1157 vs 0.1164). Only rule plays use it; the fair
+# line never sees a price.
+#
+# WHAT FIRES AND WHAT IS SHOWN ARE TWO NUMBERS (user, 2026-10-09: fire more
+# often "without ruining the overconfidence again"). Requiring the BLEND to
+# reach 60% at -150 or better fired ~2 games a season, because an honest win %
+# sits on the book's and -150 is itself ~59%. So the rule fires on the
+# MODEL'S OWN 60%+ (the client's rule as he states it) on a FAVOURITE priced
+# -150 to -101, and the probability recorded, shown and graded is the BLEND.
+# Plus money is out: there the model was badly wrong (25-37 in 2023-2025,
+# 4-13 in 2026). Walk-forward, 2023-2025: 109 plays (36 a season), 64-45,
+# 58.7% won against 55.6% shown, +3.2% at the closing price; 2026 to date 3-3.
+ML_BLEND_WEIGHTS: tuple[float, float] = (0.073, 1.045)
+
+
+def _logit(p: float) -> float:
+    q = float(np.clip(p, _PROB_FLOOR, 1 - _PROB_FLOOR))
+    return float(np.log(q / (1 - q)))
+
+
+def blend_win_prob(p_model_home: float, p_book_home: float) -> float:
+    """The home team's win probability, the model's pulled toward the book's."""
+    w_model, w_book = ML_BLEND_WEIGHTS
+    z = w_model * _logit(p_model_home) + w_book * _logit(p_book_home)
+    return float(1 / (1 + np.exp(-z)))
+
+
+def evaluate_rules(
+    game_id: int,
+    quote: Quote,
+    margin_mean: float,
+    total_mean: float,
+    margin_samples: np.ndarray,
+    total_samples: np.ndarray,
+    p_home_win: float,
+) -> Pick | None:
+    """A rule play against this quote, if the client's rule for its market fires.
+
+    Spreads and totals compare POINTS: the fair line the games table shows
+    against the book's line, so a play is exactly a row where the two columns
+    sit that far apart. The probability recorded is the calibrated one the
+    table's edge uses. Moneylines fire on the model's own win % and a
+    favourite's price, and record the blended win % (see ML_BLEND_WEIGHTS).
+    """
+    prices = quote.two_way()
+    if prices is None:
+        return None
+    p_book_first = devig(*prices)
+
+    raw_prob = None
+    if quote.market == "h2h":
+        p_home = blend_win_prob(p_home_win, p_book_first)
+        # The side the MODEL prefers, at its own probability.
+        if p_home_win >= 0.5:
+            side, raw_prob, prob, book, price = (
+                "home", p_home_win, p_home, p_book_first, prices[0])
+        else:
+            side, raw_prob, prob, book, price = (
+                "away", 1 - p_home_win, 1 - p_home, 1 - p_book_first, prices[1])
+        if raw_prob < RULE_ML_MIN_PROB or not (
+            RULE_ML_WORST_PRICE <= price <= RULE_ML_BEST_PRICE
+        ):
+            return None
+        model_line = gap = None
+    elif quote.market in ("spreads", "totals") and quote.line is not None:
+        if quote.market == "spreads":
+            # Both on the home team's side: a fair spread of -6.9 is home by 6.9.
+            model_line = round(-margin_mean, 1)
+            first_is_ours = model_line < quote.line  # we make home the bigger favourite
+            needed = RULE_SPREAD_GAP
+        else:
+            model_line = round(total_mean, 1)
+            first_is_ours = model_line > quote.line  # over
+            needed = RULE_TOTAL_GAP
+        gap = round(abs(model_line - quote.line), 1)
+        if gap < needed:
+            return None
+        p_raw = first_side_probability(quote, margin_samples, total_samples, p_home_win)
+        p_first = calibrate(p_raw if p_raw is not None else 0.5, quote.market)
+        first, second = ("over", "under") if quote.market == "totals" else ("home", "away")
+        if first_is_ours:
+            side, prob, book, price = first, p_first, p_book_first, prices[0]
+        else:
+            side, prob, book, price = second, 1 - p_first, 1 - p_book_first, prices[1]
+    else:
+        return None
+
+    return Pick(
+        game_id=game_id,
+        market=quote.market,
+        side=side,
+        line=quote.line,
+        price=int(price),
+        sportsbook_id=quote.sportsbook_id,
+        sportsbook_key=quote.sportsbook_key,
+        model_prob=float(np.clip(prob, _PROB_FLOOR, 1 - _PROB_FLOOR)),
+        book_prob=book,
+        engine="rules",
+        model_line=model_line,
+        gap=gap,
+        raw_prob=(
+            None if raw_prob is None
+            else float(np.clip(raw_prob, _PROB_FLOOR, 1 - _PROB_FLOOR))
+        ),
     )
 
 

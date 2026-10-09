@@ -2,9 +2,9 @@
  * The tracker read: `v_tracker_picks` (migration 0090), every graded or
  * in-progress pick of one sport, both engines.
  *
- * The view exposes a pick only once its game has kicked off (the
- * `game_picks_public_after_kickoff` policy), so nothing here can leak a pick
- * still to play. A season is ~100 picks a week per engine; paged so a full
+ * The view lists a pick only once its game has kicked off (its own
+ * `start_date <= now()`, and for v1/v2 the `game_picks_public_after_kickoff`
+ * policy too), so nothing here can leak a v1/v2 pick still to play. A season is ~100 picks a week per engine; paged so a full
  * season is never silently capped at PostgREST's 1,000 rows.
  */
 
@@ -14,14 +14,14 @@ import { type DbRow, MAX_ROWS_PER_REQUEST, num, unwrap } from "@/lib/data/query"
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 const COLUMNS =
-  "id, engine, game_id, market, side, line, price, model_prob, edge, " +
+  "id, engine, game_id, market, side, line, price, model_prob, raw_prob, edge, model_line, gap, " +
   "sportsbook_name, season, week, start_date, home_points, away_points, " +
   "home_school, home_abbreviation, away_school, away_abbreviation, result, units";
 
 /** Twenty pages: far past a full season of both engines. */
 const MAX_PAGES = 20;
 
-export async function getTrackerPicks(sport: Sport, engine: Engine): Promise<TrackerPick[]> {
+export async function getTrackerPicks(sport: Sport, engines: Engine[]): Promise<TrackerPick[]> {
   const supabase = createServerSupabaseClient();
   const rows: DbRow[] = [];
   for (let page = 0; page < MAX_PAGES; page += 1) {
@@ -31,7 +31,7 @@ export async function getTrackerPicks(sport: Sport, engine: Engine): Promise<Tra
         .from("v_tracker_picks")
         .select(COLUMNS)
         .eq("sport", sport)
-        .eq("engine", engine)
+        .in("engine", engines)
         .eq("period", "full")
         .order("id", { ascending: true })
         .range(from, from + MAX_ROWS_PER_REQUEST - 1),
@@ -54,6 +54,9 @@ function toPick(row: DbRow): TrackerPick {
     price: Number(row.price),
     modelProb: Number(row.model_prob),
     edge: num(row.edge),
+    modelLine: num(row.model_line),
+    gap: num(row.gap),
+    rawProb: num(row.raw_prob),
     sportsbookName: (row.sportsbook_name as string | null) ?? null,
     season: Number(row.season),
     week: Number(row.week),

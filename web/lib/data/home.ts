@@ -74,7 +74,17 @@ export async function getHomeCounts(
     .or("is_binary.eq.false,hit_side.eq.over")
     .or(upcomingOnly(kickoffCutoff));
 
-  const [props, calls, edges, developmentLine, bookLine, sheet] = await Promise.all(
+  // The tracker tile: graded picks, both engines the page shows. Across the
+  // whole history, not this week, because that is what the page opens on.
+  const tracked = supabase
+    .from("v_tracker_picks")
+    .select("id", { count: "exact", head: true })
+    .eq("sport", sport)
+    .eq("period", "full")
+    .in("engine", ["v2", "rules"])
+    .neq("result", "pending");
+
+  const [props, calls, edges, developmentLine, bookLine, sheet, graded] = await Promise.all(
     [
       base(),
       // The population "best plays" ORDERS, not a threshold within it. A
@@ -89,6 +99,7 @@ export async function getHomeCounts(
       // that does not exist yet.
       base().eq("has_book_line", true).neq("sportsbook_key", SYNTHETIC_BOOK_KEY),
       cheatSheet,
+      tracked,
     ],
   );
 
@@ -99,6 +110,7 @@ export async function getHomeCounts(
     [developmentLine, "development line"],
     [bookLine, "book line"],
     [sheet, "cheat sheet"],
+    [graded, "tracker"],
   ] as const) {
     if (result.error) {
       throw new Error(`Home count failed (${label}): ${result.error.message}`);
@@ -113,5 +125,6 @@ export async function getHomeCounts(
     developmentLine: developmentLine.count ?? 0,
     bookLine: bookLine.count ?? 0,
     cheatSheet: sheet.count ?? 0,
+    tracked: graded.count ?? 0,
   };
 }

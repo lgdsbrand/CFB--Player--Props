@@ -88,6 +88,11 @@ export type HomeCounts = {
    * than of the software.
    */
   cheatSheet: number;
+  /**
+   * Graded picks on the tracker: Engine V2 and the rule plays, games played.
+   * Zero on the NFL side, where the game model does not run.
+   */
+  tracked: number;
 };
 
 export type HomeTile = {
@@ -246,6 +251,21 @@ export function homeTiles(
       emptyReason:
         `A slip is built from bets a book is offering, and no sportsbook has posted an ${SPORT_SHORT[sport]} player prop for this slate yet.` +
         postingHabit(sport),
+    }),
+    tile({
+      key: "tracker",
+      emoji: "📈",
+      title: "Tracker",
+      blurb:
+        "Every game-model pick and rule play, locked before kickoff and graded after: record, win rate and units.",
+      href: at("/tracker"),
+      count: counts.tracked,
+      countLabel: "picks graded",
+      caveat: null,
+      emptyReason:
+        sport === "cfb"
+          ? "Picks show here once their games have been played and graded, the morning after."
+          : "The game model covers college football; the tracker is on the NCAAF side.",
     }),
   ];
 }

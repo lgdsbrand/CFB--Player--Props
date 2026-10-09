@@ -114,8 +114,22 @@ PLAN: tuple[TableSpec, ...] = (
                             "free from CFBD, unlike player_prop_lines below."),
     TableSpec("team_poll_rankings", "Backs the Top 25 filter. Point-in-time by "
                                     "construction; re-ingestable free from CFBD."),
+    # The tables from 0084-0089 below are all children of teams, games or
+    # players, so they must be in the PLAN even where the next cron would
+    # rebuild them: truncate_all empties every planned table in one statement,
+    # and Postgres refuses to truncate a parent whose child is left out.
+    TableSpec("coaches", "Head coaches (0084), for the game page's coach "
+                         "records. Re-ingestable free from CFBD, weekly."),
+    TableSpec("team_coaches", "Each team's current head coach (0084)."),
+    TableSpec("coach_seasons", "Coach records by season (0084)."),
+    TableSpec("live_scores", "Scores of college games in progress (0088). "
+                             "Overwritten by every poll; a handful of rows."),
     TableSpec("players", "Parent of every per-player table."),
     TableSpec("player_team_seasons", "Player-to-team mapping; the board joins through it."),
+    TableSpec("depth_charts", "NFL depth charts per team per week (0086). "
+                              "Rebuilt twice a day from nflverse."),
+    TableSpec("player_injuries", "NFL injury reports (0086). Rebuilt twice a "
+                                 "day from Sleeper."),
     TableSpec("markets", "Migration-seeded and identical, but moved so the two "
                          "databases are byte-comparable."),
     TableSpec("market_positions", "Which markets each position group shows."),
@@ -150,6 +164,12 @@ PLAN: tuple[TableSpec, ...] = (
     TableSpec("game_odds", "IRREPLACEABLE in practice. Captured game-odds "
                            "history, sharp books included; the historical "
                            "endpoint re-sells it at 10x the live price."),
+    TableSpec("game_ev_wagers", "Price-based +EV wagers (0087), rewritten by "
+                                "every game-odds capture."),
+    TableSpec("game_offers", "Each book's current game-line offer and bet link "
+                             "(0089), for the bet slip. Replaced per capture."),
+    TableSpec("prop_offers", "Each book's current prop offer and bet link "
+                             "(0089). Replaced per capture."),
     # IN THE PLAN although its rows cannot be COPYed once their game has kicked
     # off: the freeze trigger fires on insert. It has to be here anyway —
     # truncate_all needs every child of `games` in its one statement — and the

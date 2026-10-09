@@ -109,6 +109,9 @@ def _run(monkeypatch, *, now, held=()):
     monkeypatch.setattr(
         job, "write_changed", lambda conn, oriented, now, report: written.extend(oriented)
     )
+    # The bet slip's current offers (migration 0089) are a second write in the
+    # same run; nothing here is about them, and the fake connection has no cursor.
+    monkeypatch.setattr(job, "write_game_offers", lambda *args, **kwargs: None)
     report = job.run_periods(season=2026, adapter=adapter, now=now)
     return adapter, report, written
 

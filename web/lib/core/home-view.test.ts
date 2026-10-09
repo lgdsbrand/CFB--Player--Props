@@ -31,6 +31,7 @@ function counts(overrides: Partial<HomeCounts> = {}): HomeCounts {
     bookLine: 715,
     // 2025 week 12 on production, the fullest week in the database.
     cheatSheet: 405,
+    tracked: 120,
     ...overrides,
   };
 }
@@ -47,6 +48,7 @@ function openingWeekend(): HomeCounts {
     // Zero by arithmetic rather than by accident: no 2026 game has been played,
     // so there is no history to grade against any line.
     cheatSheet: 0,
+    tracked: 0,
   };
 }
 
@@ -205,4 +207,15 @@ test("with a mix, the note reports how many are still placeholders", () => {
     /Top Edges is Best Plays/i,
     "that claim is only true while nothing is priced by a book",
   );
+});
+
+test("the tracker tile links once something is graded, and not before", () => {
+  const live = find(counts(), "tracker");
+  assert.match(live.href!, /^\/tracker\?/);
+  assert.equal(live.countLabel, "picks graded");
+  const empty = find(openingWeekend(), "tracker");
+  assert.equal(empty.href, null);
+  assert.match(empty.unavailable!, /graded/);
+  const nfl = homeTiles(openingWeekend(), NFL).find((t) => t.key === "tracker")!;
+  assert.match(nfl.unavailable!, /college football/);
 });

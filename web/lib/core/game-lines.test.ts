@@ -15,6 +15,7 @@ import {
   orderByEdge,
   projectedScore,
   sharpRetailGap,
+  tableSide,
   spreadLabel,
   spreadMoveToward,
   spreadSideLabel,
@@ -236,14 +237,16 @@ test("a total side reads Over or Under the line", () => {
 });
 
 test("edge order puts the biggest edge first and unpriced games last, in kickoff order", () => {
-  const projection = (gameId: number, spread: PricedMarket | null): GameProjection => ({
+  // `margin` puts our number on the same side as the edge, as live rows are
+  // (the book line is home -10 throughout).
+  const projection = (gameId: number, spread: PricedMarket | null, margin = 0): GameProjection => ({
     gameId,
     modelVersion: "ratings-v1",
     evidencePhase: "later",
     pHomeWin: 0.5,
     madeAt: "2026-10-06T23:30:00Z",
     periods: {
-      full: { margin: { mean: 0, p10: 0, p90: 0 }, total: { mean: 0, p10: 0, p90: 0 } },
+      full: { margin: { mean: margin, p10: 0, p90: 0 }, total: { mean: 0, p10: 0, p90: 0 } },
       h1: { margin: { mean: 0, p10: 0, p90: 0 }, total: { mean: 0, p10: 0, p90: 0 } },
       q1: { margin: { mean: 0, p10: 0, p90: 0 }, total: { mean: 0, p10: 0, p90: 0 } },
     },
@@ -254,13 +257,13 @@ test("edge order puts the biggest edge first and unpriced games last, in kickoff
   // Kickoff order 1..5. Even prices, so each edge is |p - 0.5|.
   const games = [1, 2, 3, 4, 5].map((gameId) => ({ gameId }));
   const projections = new Map([
-    [1, projection(1, priced({ firstPrice: -110, secondPrice: -110, modelFirstProb: 0.52 }))],
+    [1, projection(1, priced({ firstPrice: -110, secondPrice: -110, modelFirstProb: 0.52 }), 12)],
     [2, projection(2, null)],
-    [3, projection(3, priced({ firstPrice: -110, secondPrice: -110, modelFirstProb: 0.3 }))],
-    [5, projection(5, priced({ firstPrice: -110, secondPrice: -110, modelFirstProb: 0.6 }))],
+    [3, projection(3, priced({ firstPrice: -110, secondPrice: -110, modelFirstProb: 0.3 }), 4)],
+    [5, projection(5, priced({ firstPrice: -110, secondPrice: -110, modelFirstProb: 0.6 }), 15)],
     // The largest edge of all, but flagged (a team new to FBS): not shown, so
     // it sorts with the unpriced games instead of heading the table.
-    [4, projection(4, priced({ firstPrice: -110, secondPrice: -110, modelFirstProb: 0.95 }))],
+    [4, projection(4, priced({ firstPrice: -110, secondPrice: -110, modelFirstProb: 0.95 }), 20)],
   ]);
   assert.deepEqual(
     orderByEdge(games, projections, "spread_edge").map((g) => g.gameId),
@@ -274,17 +277,33 @@ test("edge order puts the biggest edge first and unpriced games last, in kickoff
   assert.equal(orderByEdge(games, projections, undefined), games);
 });
 
-test("the table's side is graded against the final score", () => {
-  // Wed 10-07: FIU -6.5 at -112/-104, model 49.9% home -> the table showed
-  // NMSU +6.5. FIU won 22-3, so that side lost.
+test("the table's side follows our number against the line, not the juice", () => {
+  // Thu 10-08: UTSA -7.5 at -103/-113, ours UTSA -1.6 (margin 1.6), calibrated
+  // 49.0% home against a no-vig 48.9%. The juice made UTSA the edge side
+  // (+0.1%); our number says USF +7.5, where the edge is -0.1%.
+  const utsa: PricedMarket = { bookKey: "pinnacle", bookName: "Pinnacle", line: -7.5, firstPrice: -103, secondPrice: -113, modelFirstProb: 0.49 };
+  const side = tableSide(utsa, "spreads", 1.6);
+  assert.equal(side.side, "second");
+  assert.equal(side.gap, 5.9);
+  assert.equal(side.pass, false);
+  assert.ok(side.edge < 0 && side.edge > -0.005);
+  // USF lost 24-31 by 7: +7.5 covered.
+  assert.equal(tableSideResult(utsa, "spreads", 1.6, 31, 24), "win");
+});
+
+test("the table's side is graded against the final score, and a near-tie is a pass", () => {
+  // Wed 10-07: FIU -6.5, ours FIU -6.4. Within a point: a pass, in no tally.
   const fiu: PricedMarket = { bookKey: "pinnacle", bookName: "Pinnacle", line: -6.5, firstPrice: -112, secondPrice: -104, modelFirstProb: 0.49909 };
-  assert.equal(tableSideResult(fiu, "spreads", 22, 3), "loss");
-  // KENN +2.5, model 50.5% home: KENN lost 27-26, covered.
+  assert.equal(tableSideResult(fiu, "spreads", 6.4, 22, 3), "pass");
+  // KENN +2.5, ours KENN -1.6 (margin 1.6): KENN lost 27-26, covered.
   const kenn: PricedMarket = { bookKey: "pinnacle", bookName: "Pinnacle", line: 2.5, firstPrice: 101, secondPrice: -117, modelFirstProb: 0.50484 };
-  assert.equal(tableSideResult(kenn, "spreads", 26, 27), "win");
+  assert.equal(tableSideResult(kenn, "spreads", 1.6, 26, 27), "win");
+  // Total 50, ours 51.4: the over.
   const total: PricedMarket = { bookKey: "pinnacle", bookName: "Pinnacle", line: 50, firstPrice: -105, secondPrice: -113, modelFirstProb: 0.50554 };
-  assert.equal(tableSideResult(total, "totals", 26, 27), "win");
-  assert.equal(tableSideResult(total, "totals", 25, 25), "push");
+  assert.equal(tableSideResult(total, "totals", 51.4, 26, 27), "win");
+  assert.equal(tableSideResult(total, "totals", 51.4, 25, 25), "push");
+  assert.equal(tableSideResult(total, "totals", 47.0, 26, 27), "loss"); // under 50, total 53
+  assert.equal(tableSide(total, "totals", 50.5).pass, true);
 });
 
 test("projected score splits the margin and total back into points", () => {

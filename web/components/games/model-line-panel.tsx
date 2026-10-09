@@ -3,11 +3,11 @@ import {
   MODEL_PERIOD_LABELS,
   formatFair,
   marginRangeLabel,
-  marketEdge,
   modelFavourite,
   modelSpreadLabel,
   projectedScore,
   spreadSideLabel,
+  tableSide,
   totalRangeLabel,
   totalSideLabel,
   type GameProjection,
@@ -131,12 +131,16 @@ export function ModelLinePanel({
             </span>
             <Edge
               label="Spread edge"
+              kind="spreads"
+              model={projection.periods.full.margin.mean}
               market={projection.spread}
               side={(side, line) => spreadSideLabel(line, side, home, away)}
               edgeThreshold={edgeThreshold}
             />
             <Edge
               label="Total edge"
+              kind="totals"
+              model={projection.periods.full.total.mean}
               market={projection.total}
               side={(side, line) => totalSideLabel(line, side)}
               edgeThreshold={edgeThreshold}
@@ -154,19 +158,26 @@ export function ModelLinePanel({
   );
 }
 
-/** "+16.2%" over "TROY -10.0 · Pinnacle", or a dash when no book priced it. */
+/**
+ * "+16.2%" over "TROY -10.0 · Pinnacle", or a dash when no book priced it.
+ * The side is where our number sits against the line (`tableSide`).
+ */
 function Edge({
   label,
+  kind,
+  model,
   market,
   side,
   edgeThreshold,
 }: {
   label: string;
+  kind: "spreads" | "totals";
+  model: number;
   market: PricedMarket | null;
   side: (side: "first" | "second", line: number) => string;
   edgeThreshold: number;
 }) {
-  const edge = market ? marketEdge(market) : null;
+  const edge = market ? tableSide(market, kind, model) : null;
   return (
     <span className="flex flex-col">
       <span className="label-caption">{label}</span>
@@ -183,6 +194,7 @@ function Edge({
           <span className="text-dim text-[0.6875rem] whitespace-nowrap">
             {side(edge.side, market.line)}
             {market.bookName ? ` · ${market.bookName}` : ""}
+            {edge.pass ? " · pass" : ""}
           </span>
         </>
       ) : (

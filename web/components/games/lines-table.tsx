@@ -6,11 +6,11 @@ import {
   MISSING_PRIOR_NOTE,
   formatFair,
   formatPoints,
-  marketEdge,
   modelSpreadLabel,
   projectedScore,
   spreadLabel,
   spreadSideLabel,
+  tableSide,
   totalSideLabel,
   type GameOddsSummary,
   type GameProjection,
@@ -59,11 +59,12 @@ export function LinesTable({
           Book lines are Pinnacle&rsquo;s, or DraftKings&rsquo; or
           FanDuel&rsquo;s where Pinnacle has none; the book is named under each
           line. Ours are the game model&rsquo;s projected score, spread and total.{" "}
+          The side shown is where our number sits against the book&rsquo;s line.{" "}
           <strong className="text-ink">Edge</strong>{" "}
           is the model&rsquo;s
-          probability of the side shown minus the book&rsquo;s, with the vig
+          probability of that side minus the book&rsquo;s, with the vig
           removed from the book&rsquo;s two prices; {Math.round(edgeThreshold * 100)}%{" "}
-          or more is highlighted. Edges are calibrated against past seasons, so
+          or more is highlighted. Within a point of the book&rsquo;s line is a pass. Edges are calibrated against past seasons, so
           a wide gap between the two lines can still be a small edge. Win % is Pinnacle&rsquo;s moneyline with the
           vig removed. Sharp and retail prices for each game are on its page.
           A game with a team new to FBS shows the book only: the model has no
@@ -231,6 +232,8 @@ function LineRow({
       <td className="py-2.5 pr-3">
         <EdgeCell
           market={model ? spread : null}
+          kind="spreads"
+          model={model ? model.periods.full.margin.mean : null}
           label={(side, line) => spreadSideLabel(line, side, home, away)}
           edgeThreshold={edgeThreshold}
         />
@@ -256,6 +259,8 @@ function LineRow({
       <td className="py-2.5 pr-3">
         <EdgeCell
           market={model ? total : null}
+          kind="totals"
+          model={model ? model.periods.full.total.mean : null}
           label={(side, line) => totalSideLabel(line, side)}
           edgeThreshold={edgeThreshold}
         />
@@ -275,20 +280,26 @@ function LineRow({
 }
 
 /**
- * The edge on the side the model prefers, with that side named under it.
+ * The edge on the side our number points to (`tableSide`), with that side
+ * named under it, and "pass" when our number is within a point of the line.
  * Highlighted at the edge threshold, as on the props board.
  */
 export function EdgeCell({
   market,
+  kind,
+  model,
   label,
   edgeThreshold,
 }: {
   market: PricedMarket | null;
+  kind: "spreads" | "totals";
+  /** The projection's margin (spreads) or total; null shows a dash. */
+  model: number | null;
   label: (side: "first" | "second", line: number) => string;
   edgeThreshold: number;
 }) {
-  if (!market) return <span className="text-dim text-xs">—</span>;
-  const { side, edge } = marketEdge(market);
+  if (!market || model === null) return <span className="text-dim text-xs">—</span>;
+  const { side, edge, pass } = tableSide(market, kind, model);
   return (
     <span className="flex flex-col gap-0.5">
       <span
@@ -301,6 +312,7 @@ export function EdgeCell({
       </span>
       <span className="text-dim text-[0.6875rem] whitespace-nowrap">
         {label(side, market.line)}
+        {pass ? " · pass" : ""}
       </span>
     </span>
   );

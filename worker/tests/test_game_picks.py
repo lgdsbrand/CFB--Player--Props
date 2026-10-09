@@ -359,3 +359,25 @@ def test_the_rules_grade_reports_totals_seven_plus():
     assert "W-L-P 1-1-0" in lines["totals"]
     assert "W-L-P 1-0-0" in lines["totals 7+"]
     assert "W-L-P 1-0-0" in lines["h2h"]
+
+
+def test_v2_never_picks_against_our_own_line():
+    # Totals: raw 70% over at 50 -> a v2 over at ~5 points of edge. With our
+    # fair total at 48 (under), the pick is refused; at 53 it stands.
+    totals = np.array([60.0] * 7 + [40.0] * 3)
+    q = _q("pinnacle", "totals", 50.0, over_price=-110, under_price=-110)
+    assert evaluate_calibrated(1, q, np.zeros(10), totals, 0.5, total_mean=48.0) is None
+    assert evaluate_calibrated(1, q, np.zeros(10), totals, 0.5, total_mean=53.0).side == "over"
+    # No means: unchanged behaviour.
+    assert evaluate_calibrated(1, q, np.zeros(10), totals, 0.5) is not None
+
+
+def test_agrees_with_our_line_reads_spreads_from_the_home_side():
+    from worker.core.game_picks import agrees_with_our_line
+
+    q = _q("pinnacle", "spreads", -7.5, home_price=-103, away_price=-113)
+    # UTSA -7.5, ours UTSA -1.6 (margin 1.6): our line says the away side.
+    assert agrees_with_our_line(q, "away", 1.6, None)
+    assert not agrees_with_our_line(q, "home", 1.6, None)
+    assert agrees_with_our_line(q, "home", 9.0, None)
+    assert agrees_with_our_line(q, "home", 7.5, None)  # equal: no contradiction

@@ -399,6 +399,59 @@ export function spreadSideLabel(
  * different facts, and sorting them together would scatter unpriced games
  * among the small edges. The sort is stable, so ties keep kickoff order.
  */
+/**
+ * Within this many points of the book's line, the model has no real opinion:
+ * the table shows the edge but completed games grade it "Pass", in neither
+ * tally (client, 2026-10-09: FIU -6.4 against -6.5).
+ */
+export const PASS_GAP = 1;
+
+export type TableSide = {
+  side: "first" | "second";
+  /** Calibrated edge of THAT side; slightly negative when the juice outweighs it. */
+  edge: number;
+  /** The model's calibrated probability of that side. */
+  modelProb: number;
+  /** Points between our number and the book's line. */
+  gap: number;
+  /** Our number within PASS_GAP of the line. */
+  pass: boolean;
+};
+
+/**
+ * The side the games table shows: where OUR NUMBER sits against the book's
+ * line (client, 2026-10-09). Book UTSA -7.5, ours UTSA -1.6 is USF +7.5.
+ *
+ * It used to be the side `marketEdge` favours, which compares probabilities.
+ * The spread calibration flattens those to about 50%, so on a close call the
+ * juice decided the side: at -103 UTSA / -113 USF the table said UTSA -7.5
+ * +0.1% while our line said USF, on 26 of 76 priced games this season. The
+ * edge is still the calibrated one (CLAUDE.md §6), now of the side the lines
+ * name, so the two columns can no longer contradict each other.
+ *
+ * `model` is the margin (home minus away) for a spread, the total for a total.
+ * Equal numbers fall back to the edge's side; the gap is then 0, a pass.
+ */
+export function tableSide(
+  market: PricedMarket,
+  kind: "spreads" | "totals",
+  model: number,
+): TableSide {
+  const ours = kind === "spreads" ? -model : model;
+  const gap = Math.round(Math.abs(ours - market.line) * 10) / 10;
+  const firstByLines = kind === "spreads" ? ours < market.line : ours > market.line;
+  const side = gap === 0 ? marketEdge(market).side : firstByLines ? "first" : "second";
+  const book = devigFirst(market.firstPrice, market.secondPrice);
+  const edge = side === "first" ? market.modelFirstProb - book : book - market.modelFirstProb;
+  const modelProb = side === "first" ? market.modelFirstProb : 1 - market.modelFirstProb;
+  return { side, edge, modelProb, gap, pass: gap < PASS_GAP };
+}
+
+/** The model number `tableSide` reads, from a projection. */
+export function modelNumber(projection: GameProjection, kind: "spreads" | "totals"): number {
+  return kind === "spreads" ? projection.periods.full.margin.mean : projection.periods.full.total.mean;
+}
+
 export function orderByEdge<G extends { gameId: number }>(
   games: G[],
   projections: Map<number, GameProjection>,
@@ -410,8 +463,9 @@ export function orderByEdge<G extends { gameId: number }>(
     // Not shown, so not ranked: a hidden edge sorted to the top would leave
     // the table's first row reading "—".
     if (projection?.missingPriorSeason) return null;
-    const market = order === "spread_edge" ? projection?.spread : projection?.total;
-    return market ? marketEdge(market).edge : null;
+    const kind = order === "spread_edge" ? "spreads" : "totals";
+    const market = kind === "spreads" ? projection?.spread : projection?.total;
+    return market && projection ? tableSide(market, kind, modelNumber(projection, kind)).edge : null;
   };
   const priced = games.filter((game) => edgeOf(game) !== null);
   const unpriced = games.filter((game) => edgeOf(game) === null);
@@ -419,18 +473,21 @@ export function orderByEdge<G extends { gameId: number }>(
 }
 
 /**
- * Whether the side the games table showed (the model's edge side, as
- * `marketEdge` picks it) won against the final score. For the completed games
- * section (client, 2026-10-08: "so we could go back and look"): the row as it
- * stood at kickoff, since `run_game_model` never re-projects a started game.
+ * Whether the side the games table showed (`tableSide`: where our number sits
+ * against the line) won against the final score, or "pass" when our number
+ * was within PASS_GAP of the line. For the completed games section (client,
+ * 2026-10-08: "so we could go back and look"): the row as it stood at kickoff,
+ * since `run_game_model` never re-projects a started game.
  */
 export function tableSideResult(
   market: PricedMarket,
   kind: "spreads" | "totals",
+  model: number,
   homePoints: number,
   awayPoints: number,
-): "win" | "loss" | "push" {
-  const { side } = marketEdge(market);
+): "win" | "loss" | "push" | "pass" {
+  const { side, pass } = tableSide(market, kind, model);
+  if (pass) return "pass";
   const raw =
     kind === "spreads"
       ? homePoints - awayPoints + market.line

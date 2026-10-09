@@ -4,6 +4,7 @@ import { Cell, EdgeCell } from "@/components/games/lines-table";
 import { formatDateShort } from "@/lib/core/format";
 import {
   formatPoints,
+  modelNumber,
   modelSpreadLabel,
   spreadLabel,
   spreadSideLabel,
@@ -23,8 +24,9 @@ import type { GameSummary } from "@/lib/core/types";
  * Each row is the games table as it stood at kickoff: `run_game_model` never
  * re-projects a started game, so the stored line, model numbers and edge are
  * the last ones shown before the game. Beside them, the final score and
- * whether the side the table showed won. The model's frozen picks, graded,
- * are on the tracker.
+ * whether the side our number pointed to won (`tableSide`), or "Pass" when
+ * our number was within a point of the book's, counted in neither tally
+ * (client, 2026-10-09). The model's frozen picks, graded, are on the tracker.
  */
 export function CompletedGames({
   games,
@@ -37,15 +39,19 @@ export function CompletedGames({
 }) {
   if (games.length === 0) return null;
   const tally = { spreads: [0, 0], totals: [0, 0] };
+  let passes = 0;
   for (const game of games) {
     const projection = projections.get(game.gameId);
     if (!projection || projection.missingPriorSeason) continue;
     for (const kind of ["spreads", "totals"] as const) {
       const market = kind === "spreads" ? projection.spread : projection.total;
       if (!market) continue;
-      const result = tableSideResult(market, kind, game.homePoints!, game.awayPoints!);
+      const result = tableSideResult(
+        market, kind, modelNumber(projection, kind), game.homePoints!, game.awayPoints!,
+      );
       if (result === "win") tally[kind][0] += 1;
       if (result === "loss") tally[kind][1] += 1;
+      if (result === "pass") passes += 1;
     }
   }
 
@@ -54,7 +60,8 @@ export function CompletedGames({
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 [&::-webkit-details-marker]:hidden">
         <h2 className="section-header">✅ Completed games ({games.length})</h2>
         <span className="text-muted text-xs tabular-nums">
-          {`Our side ${tally.spreads[0]}-${tally.spreads[1]} ATS · ${tally.totals[0]}-${tally.totals[1]} O/U`}
+          {`Our side ${tally.spreads[0]}-${tally.spreads[1]} ATS · ${tally.totals[0]}-${tally.totals[1]} O/U` +
+            (passes > 0 ? ` · ${passes} pass` : "")}
         </span>
         <span className="text-accent-cyan ml-auto text-xs font-bold uppercase tracking-label">
           <span className="group-open:hidden">Show ▾</span>
@@ -86,8 +93,9 @@ export function CompletedGames({
           </tbody>
         </table>
         <p className="text-dim mt-2 text-[0.6875rem]">
-          Lines, model numbers and edges as they stood at kickoff. Result is whether the side shown under
-          the edge won. The model&rsquo;s locked picks are graded on the{" "}
+          Lines, model numbers and edges as they stood at kickoff. Result is whether the side our number
+          pointed to won; within a point of the book&rsquo;s line is a pass, counted in neither record. The
+          model&rsquo;s locked picks are graded on the{" "}
           <Link href={scopedHref("/tracker", { sport: "cfb" })} className="text-accent-cyan hover:underline">
             tracker
           </Link>
@@ -113,7 +121,9 @@ function Row({
   const spread = model?.spread ?? null;
   const total = model?.total ?? null;
   const result = (market: PricedMarket | null, kind: "spreads" | "totals") =>
-    market ? tableSideResult(market, kind, game.homePoints!, game.awayPoints!) : null;
+    market && model
+      ? tableSideResult(market, kind, modelNumber(model, kind), game.homePoints!, game.awayPoints!)
+      : null;
 
   return (
     <tr className="border-border-subtle/60 border-b last:border-0">
@@ -137,6 +147,8 @@ function Row({
       <td className="py-2.5 pr-3">
         <EdgeCell
           market={spread}
+          kind="spreads"
+          model={model ? modelNumber(model, "spreads") : null}
           label={(side, line) => spreadSideLabel(line, side, home, away)}
           edgeThreshold={edgeThreshold}
         />
@@ -153,6 +165,8 @@ function Row({
       <td className="py-2.5 pr-3">
         <EdgeCell
           market={total}
+          kind="totals"
+          model={model ? modelNumber(model, "totals") : null}
           label={(side, line) => totalSideLabel(line, side)}
           edgeThreshold={edgeThreshold}
         />
@@ -164,8 +178,18 @@ function Row({
   );
 }
 
-function ResultBadge({ result }: { result: "win" | "loss" | "push" | null }) {
+function ResultBadge({ result }: { result: "win" | "loss" | "push" | "pass" | null }) {
   if (result === null) return <span className="text-dim text-xs">—</span>;
+  if (result === "pass") {
+    return (
+      <span
+        title="Our number was within a point of the book's: no lean, counted in neither record."
+        className="border-border-subtle text-dim rounded-full border px-2 py-0.5 text-[0.625rem] font-extrabold uppercase tracking-label"
+      >
+        Pass
+      </span>
+    );
+  }
   const style =
     result === "win"
       ? "border-positive/40 bg-positive/10 text-positive"

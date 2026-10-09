@@ -273,12 +273,21 @@ def evaluate_calibrated(
     total_samples: np.ndarray,
     p_home_win: float,
     threshold: float = V2_EDGE_THRESHOLD,
+    *,
+    margin_mean: float | None = None,
+    total_mean: float | None = None,
 ) -> Pick | None:
     """An engine-v2 pick: `evaluate` on the calibrated probability.
 
     The same quote and the same arithmetic the games table's edge uses
     (`priced_columns`), so a v2 pick is exactly a table edge that cleared the
     threshold when the pick was made.
+
+    NEVER AGAINST OUR OWN LINE (2026-10-09). The table names the side where
+    our fair number sits against the book's line (web `tableSide`). With the
+    spread calibration flattening probabilities to ~50%, the juice alone can
+    favour the other side; given the projection's means, a pick on the side
+    our number points away from is refused. None of the first 52 did.
     """
     if quote.market not in V2_MARKETS:
         return None
@@ -295,6 +304,8 @@ def evaluate_calibrated(
     elif (1 - p_model) - (1 - p_book) >= threshold:
         side, prob, book, price = second, 1 - p_model, 1 - p_book, prices[1]
     else:
+        return None
+    if not agrees_with_our_line(quote, side, margin_mean, total_mean):
         return None
     return Pick(
         game_id=game_id,
@@ -445,6 +456,27 @@ def evaluate_rules(
             else float(np.clip(raw_prob, _PROB_FLOOR, 1 - _PROB_FLOOR))
         ),
     )
+
+
+def agrees_with_our_line(
+    quote: Quote, side: str, margin_mean: float | None, total_mean: float | None
+) -> bool:
+    """False only when our fair number points to the OTHER side of the line.
+
+    Equal numbers, or no means given, are no contradiction.
+    """
+    if quote.line is None:
+        return True
+    if quote.market == "spreads" and margin_mean is not None:
+        ours = -margin_mean
+        if ours == quote.line:
+            return True
+        return side == ("home" if ours < quote.line else "away")
+    if quote.market == "totals" and total_mean is not None:
+        if total_mean == quote.line:
+            return True
+        return side == ("over" if total_mean > quote.line else "under")
+    return True
 
 
 def is_new(pick: Pick, standing_side: str | None) -> bool:

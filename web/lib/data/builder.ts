@@ -22,7 +22,7 @@
 import type { PostgrestError } from "@supabase/supabase-js";
 
 import type { BuilderCandidate } from "@/lib/core/builder";
-import { marketEdge, type PricedMarket } from "@/lib/core/game-lines";
+import { modelNumber, tableSide, type PricedMarket } from "@/lib/core/game-lines";
 import { SLIP_HIDDEN_BOOKS, type GameLeg, type PropLeg } from "@/lib/core/slip";
 import type { Sport } from "@/lib/core/sport";
 import type { GameSummary } from "@/lib/core/types";
@@ -264,7 +264,10 @@ async function gameLineCandidates(
     for (const market of ["spreads", "totals"] as const) {
       const pm: PricedMarket | null = market === "spreads" ? projection.spread : projection.total;
       if (!pm) continue;
-      const pick = marketEdge(pm);
+      // The table's side (where our number sits against the line); a pass,
+      // within a point of the book, is no bet to build from.
+      const pick = tableSide(pm, market, modelNumber(projection, market));
+      if (pick.pass) continue;
       const side =
         market === "spreads"
           ? pick.side === "first" ? "home" : "away"

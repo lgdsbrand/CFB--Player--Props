@@ -341,7 +341,11 @@ def run(*, season: int, sport: str = "cfb", dry_run: bool = False,
                     float(dist["p_home_win"][i]),
                 )
                 # Both engines, each against its own standing pick.
-                candidates = [evaluate(*args), evaluate_calibrated(*args)]
+                means = {
+                    "margin_mean": float(projections[i]["margin_mean"]),
+                    "total_mean": float(projections[i]["total_mean"]),
+                }
+                candidates = [evaluate(*args), evaluate_calibrated(*args, **means)]
                 if rules_apply[i]:
                     candidates.append(evaluate_rules(
                         game_id, quote, float(projections[i]["margin_mean"]),

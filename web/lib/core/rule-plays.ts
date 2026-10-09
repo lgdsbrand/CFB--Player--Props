@@ -47,7 +47,7 @@ export interface RulePlay {
 
 /** The rules, in the client's terms, for every place that names them. */
 export const RULES_SUMMARY =
-  "Spread 4+ pts off the line · Total 6+ pts · Moneyline: model 60%+ on a favourite at -150 to -101";
+  "Spread 4+ pts off the line · Total 6+ pts · Moneyline: model 60%+ on a favorite at -150 to -101";
 
 /** The pre-registered top tier: totals 7+ points off (RULE_TOTAL_TOP_GAP). */
 export const TOP_TIER_GAP = 7;

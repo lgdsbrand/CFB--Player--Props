@@ -51,6 +51,8 @@ export function SiteHeader({
     // Beside the sheets: both answer "what should I bet", and the builder's
     // slip lands in the same drawer. Checked at 390px (see the note below).
     { href: "/builder", label: "Builder" },
+    // The slip checker (client, 2026-10-12): the same slip, checked leg by leg.
+    { href: "/slip-check", label: "Check" },
     // The game model's graded picks (client, 2026-10-08).
     { href: "/tracker", label: "Tracker" },
     { href: "/no-vig", label: "No-Vig" },

@@ -49,10 +49,12 @@ export function GameCard({
   // The share button sits BESIDE the card's link, not inside it: a button in
   // an <a> is invalid HTML, and its preview dialog's taps would follow the link.
   return (
-    <div className="relative flex">
+    // `min-w-0` on both: as a grid item the wrapper would otherwise grow to its
+    // content's width and push the page 14px wider than a 390px phone.
+    <div className="relative flex min-w-0">
       <Link
         href={`/games/${game.gameId}`}
-        className="panel hover:border-border-strong flex flex-1 flex-col gap-3 p-4 transition-colors"
+        className="panel hover:border-border-strong flex min-w-0 flex-1 flex-col gap-3 p-4 transition-colors"
       >
         <div className="flex items-baseline justify-between gap-2">
           <span className="label-caption min-w-0 truncate">

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -14,6 +15,7 @@ import { StartersPanel } from "@/components/games/starters-panel";
 import { TeamComparisonPanel } from "@/components/games/team-comparison-panel";
 import { WeatherPanel } from "@/components/games/weather-panel";
 import { NotConfigured } from "@/components/not-configured";
+import { ShareButton } from "@/components/share/share-button";
 import { SiteHeader } from "@/components/site-header";
 import {
   boardHref,
@@ -28,6 +30,7 @@ import { currentCoach, summarizeCoach } from "@/lib/core/coach";
 import { favourite, gameMatchups } from "@/lib/core/game-view";
 import { hasKickedOff } from "@/lib/core/kickoff";
 import { LIVE_SPORTS } from "@/lib/core/live";
+import { shareGameFileName, shareGameTitle } from "@/lib/core/share-game";
 import { rankStrength } from "@/lib/core/team-strength";
 import { getCoaches } from "@/lib/data/coaches";
 import { getTeamStrength } from "@/lib/data/team-strength";
@@ -61,6 +64,28 @@ import { getGameConditions } from "@/lib/data/weather";
  * The header still counts the game's props and calls, from `v_slate_games`,
  * so a reader knows what is behind the button before pressing it.
  */
+
+/**
+ * A pasted game link previews as its share graphic (client, 2026-10-12) on X,
+ * iMessage, Discord and the rest. The title is the matchup.
+ */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ gameId: string }>;
+}): Promise<Metadata> {
+  const gameId = Number.parseInt((await params).gameId, 10);
+  if (!isSupabaseConfigured() || !Number.isFinite(gameId)) return {};
+  const game = await getGame(gameId);
+  if (!game) return {};
+  const title = `${shareGameTitle(game)} · Legends Sports`;
+  const image = { url: `/games/${gameId}/share-image`, width: 1080, height: 1350, alt: shareGameTitle(game) };
+  return {
+    title,
+    openGraph: { title, images: [image] },
+    twitter: { card: "summary_large_image", title, images: [image] },
+  };
+}
 
 export default async function GamePage({
   params,
@@ -230,15 +255,23 @@ export default async function GamePage({
 
         {/* A game with no props gets no button. A link that opens an empty
             board reads as a broken board, not as "nothing here yet". */}
-        {game.projections > 0 ? (
-          <Link href={boardLink} className="cta w-fit px-3 py-2">
-            See this game&rsquo;s props on the board →
-          </Link>
-        ) : (
-          <p className="text-muted text-xs">
-            No props for this game yet.
-          </p>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {game.projections > 0 ? (
+            <Link href={boardLink} className="cta w-fit px-3 py-2">
+              See this game&rsquo;s props on the board →
+            </Link>
+          ) : (
+            <p className="text-muted text-xs">
+              No props for this game yet.
+            </p>
+          )}
+          <ShareButton
+            imagePath={`/games/${gameId}/share-image`}
+            pagePath={`/games/${gameId}`}
+            fileName={shareGameFileName(game)}
+            title={shareGameTitle(game)}
+          />
+        </div>
 
         {/* Stated on the page, not just in a comment: whose numbers these
             are. These are CFBD's consensus; the game model's numbers and its

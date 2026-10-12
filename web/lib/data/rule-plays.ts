@@ -39,6 +39,21 @@ export async function getRulePlays(sport: Sport, season: number, week: number): 
   }
 }
 
+/** One game's rule plays, for its share graphic. Same failure rule as above. */
+export async function getGameRulePlays(gameId: number): Promise<RulePlay[]> {
+  const supabase = createServerSupabaseClient();
+  try {
+    const rows = unwrap<DbRow[]>(
+      await supabase.from("v_rule_plays").select(COLUMNS).eq("game_id", gameId).order("id"),
+      "v_rule_plays",
+    );
+    return rows.map(toPlay);
+  } catch (error) {
+    console.error("Rule plays read failed; showing none.", error);
+    return [];
+  }
+}
+
 function toPlay(row: DbRow): RulePlay {
   return {
     id: Number(row.id),

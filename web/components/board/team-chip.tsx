@@ -57,7 +57,7 @@ export function TeamChip({
  * white would vanish on Wyoming or Oregon's yellows. The alt colour is only
  * used when it is itself legible, since plenty of teams pair two dark shades.
  */
-function readableOn(background: string, alt: string | null): string {
+export function readableOn(background: string, alt: string | null): string {
   const light = luminance(background) > 0.55;
   if (alt) {
     const altLight = luminance(alt) > 0.55;

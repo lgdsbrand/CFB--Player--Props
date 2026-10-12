@@ -77,6 +77,23 @@ function orUndefined(value: string): string | undefined {
   return value === "" ? undefined : value;
 }
 
+/**
+ * Small steps near 50%, because that is where the published confidence lives.
+ * The per-market calibration (CLAUDE.md §6, 2026-10-08) shrinks every prop
+ * toward 50%: on the college week 6 board 1,909 rows had a confidence and 214
+ * cleared 52%, 87 cleared 54%, 35 cleared 56%, 16 cleared 58% and 5 cleared
+ * 60%. The old 65%/70%/80% steps emptied the board.
+ */
+const CONFIDENCE_CHOICES = ["0.52", "0.54", "0.56", "0.58", "0.6"];
+
+/** The steps, plus the URL's own value if an older link carries another. */
+function confidenceChoices(current: string): string[] {
+  if (current === "" || CONFIDENCE_CHOICES.includes(current)) {
+    return CONFIDENCE_CHOICES;
+  }
+  return [...CONFIDENCE_CHOICES, current].sort((a, b) => Number(a) - Number(b));
+}
+
 function numberOrUndefined(value: string): number | undefined {
   if (value === "") return undefined;
   const parsed = Number(value);
@@ -276,7 +293,7 @@ export function FilterFields({
       </Field>
 
       {/* Removed, not disabled, on a board whose markets publish no confidence
-          — see `showsCalls`. A dropdown offering 55% through 80% where every
+          — see `showsCalls`. A dropdown offering 52% through 60% where every
           row's confidence is NULL would empty the board at the first choice. */}
       {showsCalls ? (
         <Field label="Min confidence">
@@ -286,11 +303,11 @@ export function FilterFields({
             onChange={(value) => setChoice({ conf: value })}
           >
             <option value="">Any</option>
-            <option value="0.55">55%</option>
-            <option value="0.6">60%</option>
-            <option value="0.65">65%</option>
-            <option value="0.7">70%</option>
-            <option value="0.8">80%</option>
+            {confidenceChoices(fields.conf).map((value) => (
+              <option key={value} value={value}>
+                {Math.round(Number(value) * 100)}%
+              </option>
+            ))}
           </Select>
         </Field>
       ) : null}

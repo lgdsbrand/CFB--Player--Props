@@ -23,6 +23,7 @@ import {
   type SlipLeg,
 } from "@/lib/core/slip";
 import { ShareButton } from "@/components/share/share-button";
+import { SaveSlipButton } from "@/components/slip/save-slip-button";
 import { fetchLegOffers } from "@/components/slip/offers";
 import { OPEN_EVENT, slip, useSlip } from "@/components/slip/slip-store";
 
@@ -107,6 +108,8 @@ export function SlipDock() {
   const shareBook = parlays[0]?.bookKey ?? atLine[0]?.[0]?.bookKey ?? null;
   const shareBookName = parlays[0]?.bookName ?? atLine[0]?.[0]?.bookName ?? "";
   const shareKeys = encodeSlipKeys(live);
+  const sameGame = hasSameGameLegs(live);
+  const savePrices = live.map((_, i) => atLine[i]?.find((o) => o.bookKey === shareBook)?.price ?? null);
   // The dock has no sport of its own; the page it sits on says which league.
   const viewSport = resolveSport(new URLSearchParams(window.location.search).get("sport") ?? undefined);
   const stateMatters = Object.values(offers).some(
@@ -184,23 +187,37 @@ export function SlipDock() {
           <ParlayPanel
             parlays={parlays}
             loading={!allLoaded}
-            sameGame={hasSameGameLegs(live)}
+            sameGame={sameGame}
             state={state}
           />
         ) : null}
 
-        {shareBook && live.length > 0 ? (
+        {allLoaded && live.length > 0 ? (
           <div className="flex flex-wrap items-center gap-2">
-            <ShareButton
+            {/* Saved at the book the share uses: the best parlay's. */}
+            <SaveSlipButton
               compact
-              imagePath={scopedHref("/slip-check/image", {}, { book: shareBook, legs: shareKeys })}
-              pagePath={scopedHref("/slip-check", { sport: viewSport }, { slip: shareKeys })}
-              fileName="bet-slip.png"
-              title={`Bet slip · ${live.length} leg${live.length === 1 ? "" : "s"}`}
+              legs={live}
+              bookKey={shareBook}
+              bookName={shareBook ? shareBookName : null}
+              prices={savePrices}
+              price={live.length === 1 ? savePrices[0] : sameGame ? null : (parlays[0]?.american ?? null)}
+              savedHref={scopedHref("/slip-check", { sport: viewSport }, { view: "saved" })}
             />
-            <span className="text-dim text-[0.6875rem]">
-              Shared with the model&rsquo;s check, at {shareBookName}&rsquo;s prices.
-            </span>
+            {shareBook ? (
+              <>
+                <ShareButton
+                  compact
+                  imagePath={scopedHref("/slip-check/image", {}, { book: shareBook, legs: shareKeys })}
+                  pagePath={scopedHref("/slip-check", { sport: viewSport }, { slip: shareKeys })}
+                  fileName="bet-slip.png"
+                  title={`Bet slip · ${live.length} leg${live.length === 1 ? "" : "s"}`}
+                />
+                <span className="text-dim text-[0.6875rem]">
+                  Shared with the model&rsquo;s check, at {shareBookName}&rsquo;s prices.
+                </span>
+              </>
+            ) : null}
           </div>
         ) : null}
       </div>

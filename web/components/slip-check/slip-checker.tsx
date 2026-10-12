@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { ShareButton } from "@/components/share/share-button";
+import { SaveSlipButton } from "@/components/slip/save-slip-button";
 import { slip, useSlip } from "@/components/slip/slip-store";
 import { scopedHref } from "@/lib/core/board-params";
 import { formatAmericanOdds, formatEdge, formatKickoff } from "@/lib/core/format";
@@ -55,12 +56,15 @@ export function SlipChecker({
   season,
   week,
   sharedKeys,
+  savedHref,
 }: {
   sport: Sport;
   season: number;
   week: number;
   /** Leg keys from a shared link (`?slip=`), offered for loading. */
   sharedKeys: string[];
+  /** The My slips tab. */
+  savedHref: string;
 }) {
   const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
   const [chosenBook, setChosenBook] = useState("");
@@ -270,6 +274,14 @@ export function SlipChecker({
               ))}
             </ul>
             <div className="flex flex-wrap items-center gap-2">
+              <SaveSlipButton
+                legs={check.legs.map((l) => l.leg)}
+                bookKey={book || null}
+                bookName={bookName || null}
+                prices={check.legs.map((l) => l.price)}
+                price={check.legs.length === 1 ? check.legs[0].price : check.bookPrice}
+                savedHref={savedHref}
+              />
               <ShareButton
                 imagePath={imagePath}
                 pagePath={sharePage}

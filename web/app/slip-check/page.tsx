@@ -1,8 +1,11 @@
+import Link from "next/link";
+
 import { NotConfigured } from "@/components/not-configured";
 import { SiteHeader } from "@/components/site-header";
+import { SavedSlips } from "@/components/slip-check/saved-slips";
 import { SlipChecker } from "@/components/slip-check/slip-checker";
 import { WeekStrip } from "@/components/week-strip";
-import { parseBoardParams, type RawParams } from "@/lib/core/board-params";
+import { parseBoardParams, scopedHref, type RawParams } from "@/lib/core/board-params";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { decodeSlipKeys } from "@/lib/core/slip-check";
 import { DEFAULT_SPORT, resolveSport, SPORT_LABEL, type Sport } from "@/lib/core/sport";
@@ -17,6 +20,9 @@ export const metadata = {
  * The slip checker (client, 2026-10-12, after nhlpropking.com/bet-slip-check).
  * The page only chooses the week; the catalogue is read by the client from
  * `/slip-check/catalogue`. See `lib/core/slip-check.ts` for the numbers.
+ *
+ * `?view=saved` is the My slips tab: slips saved in this browser, tracked
+ * (`lib/core/slip-track.ts`). It reads no week; the list is the browser's.
  */
 export default async function SlipCheckPage({
   searchParams,
@@ -33,6 +39,19 @@ export default async function SlipCheckPage({
 
   const raw = await searchParams;
   const sport = resolveSport(raw.sport);
+  const checkHref = scopedHref("/slip-check", { sport });
+  const savedHref = scopedHref("/slip-check", { sport }, { view: "saved" });
+
+  if (raw.view === "saved") {
+    return (
+      <Shell sport={sport}>
+        <Intro sport={sport} />
+        <Tabs active="saved" checkHref={checkHref} savedHref={savedHref} />
+        <SavedSlips checkHref={checkHref} />
+      </Shell>
+    );
+  }
+
   const params = parseBoardParams(raw, { edgesOnlyDefault: false });
   const weeks = await getSlateWeeks(sport);
   const active = findWeek(weeks, params.season, params.week);
@@ -40,14 +59,8 @@ export default async function SlipCheckPage({
 
   return (
     <Shell sport={sport}>
-      <div className="flex flex-col gap-1">
-        <span className="label-caption">Legends Sports · {SPORT_LABEL[sport]}</span>
-        <h1 className="text-2xl font-extrabold tracking-tight">Slip Check</h1>
-        <p className="text-muted text-sm">
-          Pick your book, add your legs, and see what the model makes of each one and of the whole
-          slip.
-        </p>
-      </div>
+      <Intro sport={sport} />
+      <Tabs active="check" checkHref={checkHref} savedHref={savedHref} />
 
       {active ? (
         <>
@@ -58,6 +71,7 @@ export default async function SlipCheckPage({
             season={active.season}
             week={active.week}
             sharedKeys={shared}
+            savedHref={savedHref}
           />
         </>
       ) : (
@@ -84,5 +98,44 @@ function Shell({
         {children}
       </main>
     </>
+  );
+}
+
+function Intro({ sport }: { sport: Sport }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="label-caption">Legends Sports · {SPORT_LABEL[sport]}</span>
+      <h1 className="text-2xl font-extrabold tracking-tight">Slip Check</h1>
+      <p className="text-muted text-sm">
+        Pick your book, add your legs, and see what the model makes of each one and of the whole
+        slip. Save it to follow it live.
+      </p>
+    </div>
+  );
+}
+
+function Tabs({
+  active,
+  checkHref,
+  savedHref,
+}: {
+  active: "check" | "saved";
+  checkHref: string;
+  savedHref: string;
+}) {
+  const tab = (on: boolean) =>
+    "rounded-full border px-3.5 py-1.5 text-xs font-extrabold tracking-[0.12em] uppercase transition-colors " +
+    (on
+      ? "border-accent-cyan/60 bg-accent-cyan/10 text-ink"
+      : "border-border-subtle text-muted hover:text-ink hover:border-border-strong");
+  return (
+    <nav aria-label="Slip Check" className="flex gap-2">
+      <Link href={checkHref} className={tab(active === "check")} aria-current={active === "check" ? "page" : undefined}>
+        Check a slip
+      </Link>
+      <Link href={savedHref} className={tab(active === "saved")} aria-current={active === "saved" ? "page" : undefined}>
+        My slips
+      </Link>
+    </nav>
   );
 }

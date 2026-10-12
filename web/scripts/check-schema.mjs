@@ -281,6 +281,13 @@ const EXPECTED = {
   games: [
     "id", "season", "week", "start_date", "neutral_site", "home_team_id",
     "away_team_id", "sport", "home_points", "away_points", "completed",
+    "home_line_scores", "away_line_scores",
+  ],
+  // Saved slips' prop legs, settled from the box score (/slip-check/track).
+  player_game_stats: [
+    "game_id", "player_id", "pass_attempts", "pass_completions", "pass_yards",
+    "pass_tds", "rush_attempts", "rush_yards", "receptions", "rec_yards",
+    "offensive_tds", "q1_pass_yards", "q1_rush_yards", "q1_rec_yards",
   ],
   // Conference membership is season-scoped because realignment moves teams
   // between the seasons this project covers, so the weekly-targets directory

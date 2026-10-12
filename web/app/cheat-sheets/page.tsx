@@ -4,6 +4,7 @@ import { SheetGamePicker } from "@/components/cheat-sheet/sheet-game-picker";
 import { SheetRow } from "@/components/cheat-sheet/sheet-row";
 import { NavSelect } from "@/components/nav-select";
 import { NotConfigured } from "@/components/not-configured";
+import { ShareButton } from "@/components/share/share-button";
 import { SiteHeader } from "@/components/site-header";
 import { WeekStrip } from "@/components/week-strip";
 import {
@@ -174,14 +175,18 @@ export default async function CheatSheets({
   // college one (found 2026-09-11 beside a reported week-strip bug).
   const scope = { sport, season: active.season, week: active.week };
   // `null` clears a filter; `undefined` keeps whatever the URL carries.
-  const href = (changes: {
-    window?: number;
-    position?: PositionGroup | null;
-    side?: BetSide | null;
-    tier?: CheatTierKey | null;
-    market?: string | null;
-    games?: number[] | null;
-  }) => {
+  // `path` lets the share image ask for exactly this sheet.
+  const href = (
+    changes: {
+      window?: number;
+      position?: PositionGroup | null;
+      side?: BetSide | null;
+      tier?: CheatTierKey | null;
+      market?: string | null;
+      games?: number[] | null;
+    },
+    path = "/cheat-sheets",
+  ) => {
     const nextWindow = changes.window ?? windowSize;
     const nextPosition =
       changes.position === undefined ? params.position : changes.position;
@@ -198,7 +203,7 @@ export default async function CheatSheets({
         ? keptMarket
         : undefined;
     const nextGames = changes.games === undefined ? pickedGames : changes.games;
-    return scopedHref("/cheat-sheets", scope, {
+    return scopedHref(path, scope, {
       window: nextWindow !== DEFAULT_CHEAT_WINDOW ? nextWindow : undefined,
       position: nextPosition,
       side: nextSide,
@@ -241,6 +246,18 @@ export default async function CheatSheets({
             label="100%"
           />
         </div>
+
+        {/* The sheet as a graphic to post (client, 2026-10-12), for exactly
+            the filters on screen: the image route reads the same params. */}
+        {empty ? null : (
+          <ShareButton
+            compact
+            imagePath={href({}, "/cheat-sheets/share-image")}
+            pagePath={href({})}
+            fileName={`cheat-sheet-week-${active.week}.png`}
+            title={`${SPORT_LABEL[sport]} cheat sheet · Week ${active.week}`}
+          />
+        )}
 
         <div className="flex items-center gap-2">
           <span className="label-caption">Window</span>

@@ -96,7 +96,8 @@ export interface ShareGameView {
 export const SHARE_BOOK_ORDER = ["draftkings", "fanduel", "betmgm", "pinnacle", "betrivers"];
 export const SHARE_MAX_BOOKS = 3;
 
-const SPORT_LABEL: Record<string, string> = { cfb: "NCAAF", nfl: "NFL" };
+/** The short league names a share graphic prints. */
+export const SHARE_SPORT_LABEL: Record<string, string> = { cfb: "NCAAF", nfl: "NFL" };
 
 export function shareGameView({
   game,
@@ -121,7 +122,7 @@ export function shareGameView({
   const model = projection && !projection.missingPriorSeason ? projection : null;
 
   return {
-    sportLabel: SPORT_LABEL[game.sport] ?? game.sport.toUpperCase(),
+    sportLabel: SHARE_SPORT_LABEL[game.sport] ?? game.sport.toUpperCase(),
     weekLabel: `Week ${game.week}`,
     kickoff,
     neutralSite: game.neutralSite,

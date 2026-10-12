@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import { scopedHref } from "@/lib/core/board-params";
 import { formatAmericanOdds, formatKickoff, formatMoney } from "@/lib/core/format";
 import { hasKickedOff } from "@/lib/core/kickoff";
+import { encodeSlipKeys } from "@/lib/core/slip-check";
+import { resolveSport } from "@/lib/core/sport";
 import {
   hasSameGameLegs,
   isExchangeOffer,
@@ -20,6 +22,7 @@ import {
   type Offer,
   type SlipLeg,
 } from "@/lib/core/slip";
+import { ShareButton } from "@/components/share/share-button";
 import { fetchLegOffers } from "@/components/slip/offers";
 import { OPEN_EVENT, slip, useSlip } from "@/components/slip/slip-store";
 
@@ -99,6 +102,13 @@ export function SlipDock() {
   });
   const allLoaded = atLine.every((list) => list !== null);
   const parlays = allLoaded ? parlayByBook(atLine as Offer[][]) : [];
+  // Shared as a checked slip (client, 2026-10-12), priced at the book with the
+  // best parlay, or for one leg the book with its best price.
+  const shareBook = parlays[0]?.bookKey ?? atLine[0]?.[0]?.bookKey ?? null;
+  const shareBookName = parlays[0]?.bookName ?? atLine[0]?.[0]?.bookName ?? "";
+  const shareKeys = encodeSlipKeys(live);
+  // The dock has no sport of its own; the page it sits on says which league.
+  const viewSport = resolveSport(new URLSearchParams(window.location.search).get("sport") ?? undefined);
   const stateMatters = Object.values(offers).some(
     (loaded) => Array.isArray(loaded) && loaded.some(needsState),
   );
@@ -177,6 +187,21 @@ export function SlipDock() {
             sameGame={hasSameGameLegs(live)}
             state={state}
           />
+        ) : null}
+
+        {shareBook && live.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <ShareButton
+              compact
+              imagePath={scopedHref("/slip-check/image", {}, { book: shareBook, legs: shareKeys })}
+              pagePath={scopedHref("/slip-check", { sport: viewSport }, { slip: shareKeys })}
+              fileName="bet-slip.png"
+              title={`Bet slip · ${live.length} leg${live.length === 1 ? "" : "s"}`}
+            />
+            <span className="text-dim text-[0.6875rem]">
+              Shared with the model&rsquo;s check, at {shareBookName}&rsquo;s prices.
+            </span>
+          </div>
         ) : null}
       </div>
     </div>

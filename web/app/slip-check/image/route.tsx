@@ -4,8 +4,9 @@ import type { NextRequest } from "next/server";
 import { SlipCheckImage } from "@/components/share/slip-check-image";
 import { SHARE_HEIGHT, SHARE_WIDTH } from "@/components/share/share-theme";
 import { isSupabaseConfigured } from "@/lib/core/env";
-import { checkSlip, decodeSlipKeys, indexCatalogue } from "@/lib/core/slip-check";
+import { checkSlip, decodeSlipKeys, indexCatalogue, parseLegKey } from "@/lib/core/slip-check";
 import { resolveSport, SPORT_LABEL } from "@/lib/core/sport";
+import { getGame } from "@/lib/data/games";
 import { getCheckCatalogue } from "@/lib/data/slip-check";
 import { shareFonts } from "@/lib/og/fonts";
 
@@ -18,17 +19,27 @@ import { shareFonts } from "@/lib/og/fonts";
 export async function GET(request: NextRequest) {
   if (!isSupabaseConfigured()) return new Response("Not configured", { status: 503 });
   const params = request.nextUrl.searchParams;
-  const season = Number.parseInt(params.get("season") ?? "", 10);
-  const week = Number.parseInt(params.get("week") ?? "", 10);
   const book = params.get("book") ?? "";
   const keys = decodeSlipKeys(params.get("legs"));
-  if (!Number.isFinite(season) || !Number.isFinite(week) || !/^[a-z0-9_]+$/.test(book) || keys.length === 0) {
-    return new Response("season, week, book and legs are required", { status: 400 });
+  if (!/^[a-z0-9_]+$/.test(book) || keys.length === 0) {
+    return new Response("book and legs are required", { status: 400 });
   }
-  const sport = resolveSport(params.get("sport") ?? undefined);
+  // The bet slip drawer does not know the week or the league it is on, so
+  // without them they come from the first leg's game.
+  let season = Number.parseInt(params.get("season") ?? "", 10);
+  let week = Number.parseInt(params.get("week") ?? "", 10);
+  let sport = resolveSport(params.get("sport") ?? undefined);
+  if (!Number.isFinite(season) || !Number.isFinite(week)) {
+    const game = await getGame(parseLegKey(keys[0])!.gameId);
+    if (!game) return new Response("Unknown game", { status: 404 });
+    ({ season, week, sport } = game);
+  }
 
   const [catalogue, fonts] = await Promise.all([
-    getCheckCatalogue({ sport, season, week, now: new Date() }),
+    // One retry, for a cold read past the anonymous 3 s timeout.
+    getCheckCatalogue({ sport, season, week, now: new Date() }).catch(() =>
+      getCheckCatalogue({ sport, season, week, now: new Date() }),
+    ),
     shareFonts(),
   ]);
   const index = indexCatalogue(catalogue.entries);

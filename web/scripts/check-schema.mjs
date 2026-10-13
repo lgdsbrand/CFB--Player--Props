@@ -283,6 +283,12 @@ const EXPECTED = {
     "away_team_id", "sport", "home_points", "away_points", "completed",
     "home_line_scores", "away_line_scores",
   ],
+  // Saved slips' live prop progress, unofficial (migration 0092).
+  live_player_stats: [
+    "game_id", "player_id", "pass_attempts", "pass_completions", "pass_yards",
+    "pass_tds", "rush_attempts", "rush_yards", "receptions", "rec_yards",
+    "offensive_tds",
+  ],
   // Saved slips' prop legs, settled from the box score (/slip-check/track).
   player_game_stats: [
     "game_id", "player_id", "pass_attempts", "pass_completions", "pass_yards",

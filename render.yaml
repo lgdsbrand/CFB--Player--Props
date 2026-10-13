@@ -199,7 +199,10 @@ services:
   # in its window, with NO CFBD call and no pipeline_runs row. While a game is
   # on, ONE /scoreboard call covers the whole FBS week: ~360 calls on a
   # Saturday, ~3,500 a month against CFBD's 30,000. College only: NFL scores
-  # would be bought from the Odds API.
+  # would be bought from the Odds API. Then the players (migration 0092): each
+  # game in progress with book props has its play-by-play read at most every
+  # five minutes, one /live/plays call each, ~10,500 a month; it stops itself
+  # below 5,000 calls left in the month.
   - type: cron
     name: cfb-live-scores
     runtime: python

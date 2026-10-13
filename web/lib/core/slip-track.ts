@@ -121,6 +121,12 @@ export interface TrackFacts {
    * row exists without this stat, absent when there is no row.
    */
   stats: Record<string, number | null>;
+  /**
+   * The same key's UNOFFICIAL number while the game is on (college only,
+   * migration 0092), added up from the live play-by-play. Shown as progress,
+   * never settled from: the user's decision, 2026-10-12.
+   */
+  liveStats?: Record<string, number | null>;
 }
 
 /** Leg keys per `/slip-check/track` request; the page asks in batches. */
@@ -299,13 +305,28 @@ function trackPropLeg(leg: PropLeg, game: TrackGame | undefined, facts: TrackFac
 
   const startDate = leg.startDate ?? game?.startDate ?? null;
   const over = !!game?.final || game?.live?.status === "completed" || hoursSince(startDate, now) > GAME_HOURS;
-  if (over) return { state: "awaiting", detail: "Game over: player stats land the next morning" };
+  const unofficial = facts.liveStats?.[key];
+  const progress = unofficial === undefined || unofficial === null ? null : propProgress(leg, unofficial);
+  if (over) {
+    return progress
+      ? { state: "awaiting", detail: `Game over: ${progress.text}, unofficial · settles when the box score lands`, trend: progress.trend }
+      : { state: "awaiting", detail: "Game over: player stats land the next morning" };
+  }
   if (!kickedOff(startDate, now)) return { state: "pending", detail: "" };
   const live = game?.live;
-  return {
-    state: "live",
-    detail: `${live && live.status === "in_progress" ? `${liveStateLabel(live)} · ` : ""}In progress: settles when the box score lands`,
-  };
+  const clock = live && live.status === "in_progress" ? `${liveStateLabel(live)} · ` : "";
+  if (progress) return { state: "live", detail: `${clock}${progress.text} (unofficial)`, trend: progress.trend };
+  return { state: "live", detail: `${clock}In progress: settles when the box score lands` };
+}
+
+/** "54 Rec Yds so far, needs 8.5 more"; "Scored"; ahead or behind the leg. */
+function propProgress(leg: PropLeg, value: number): { text: string; trend: LegTrack["trend"] } {
+  const m = leg.side === "over" ? value - leg.line : leg.line - value;
+  const trend: LegTrack["trend"] = m > 0 ? "ahead" : m < 0 ? "behind" : "even";
+  if (leg.binary) return { text: value >= 1 ? "Scored" : "No touchdown yet", trend };
+  const so = `${num(value)} ${leg.market} so far`;
+  if (leg.side === "over") return { text: m > 0 ? `${so}, past ${num(leg.line)}` : `${so}, needs ${num(-m)} more`, trend };
+  return { text: m > 0 ? `${so}, ${num(m)} to spare` : `${so}, over ${num(leg.line)}`, trend };
 }
 
 // ---------------------------------------------------------------- the slip

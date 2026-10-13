@@ -7,6 +7,8 @@
  *   live_scores        the scoreboard now, college only (migration 0088).
  *   markets            which box-score column each prop market is graded on.
  *   player_game_stats  the box score, the morning after the game.
+ *   live_player_stats  unofficial numbers while a college game is on (0092),
+ *                      shown as progress and never settled from.
  */
 
 import { LIVE_COLUMNS, LIVE_SPORTS, toLiveScore } from "@/lib/core/live";
@@ -21,7 +23,7 @@ const nums = (v: unknown) => (Array.isArray(v) ? v.map(Number) : null);
 export async function getTrackFacts(refs: LegRef[], now: Date): Promise<TrackFacts> {
   const gameIds = [...new Set(refs.map((r) => r.gameId))];
   if (gameIds.length === 0) return { games: [], stats: {} };
-  const props = refs.filter((r) => r.kind === "prop");
+  const props = refs.filter((r): r is Extract<LegRef, { kind: "prop" }> => r.kind === "prop");
   const marketKeys = [...new Set(props.map((r) => r.marketKey))];
   const supabase = createServerSupabaseClient();
 
@@ -116,5 +118,37 @@ export async function getTrackFacts(refs: LegRef[], now: Date): Promise<TrackFac
     };
   });
 
-  return { games, stats };
+  return { games, stats, liveStats: await readLiveStats(props, statColumn, supabase) };
+}
+
+/** The live table's columns: a market graded on any other (first quarter) has no live number. */
+const LIVE_STAT_COLUMNS = new Set([
+  "pass_attempts", "pass_completions", "pass_yards", "pass_tds", "rush_attempts",
+  "rush_yards", "receptions", "rec_yards", "offensive_tds",
+]);
+
+/** Unofficial numbers for prop legs whose game is on (migration 0092). */
+async function readLiveStats(
+  props: Extract<LegRef, { kind: "prop" }>[],
+  statColumn: Map<string, string>,
+  supabase: ReturnType<typeof createServerSupabaseClient>,
+): Promise<TrackFacts["stats"]> {
+  const columns = [...new Set([...statColumn.values()].filter((c) => LIVE_STAT_COLUMNS.has(c)))];
+  if (props.length === 0 || columns.length === 0) return {};
+  const rows = unwrap<DbRow[]>(
+    await supabase
+      .from("live_player_stats")
+      .select(`game_id, player_id, ${columns.join(", ")}`)
+      .in("game_id", [...new Set(props.map((r) => r.gameId))])
+      .in("player_id", [...new Set(props.map((r) => r.playerId))]),
+    "live_player_stats",
+  );
+  const out: TrackFacts["stats"] = {};
+  for (const ref of props) {
+    const column = statColumn.get(ref.marketKey);
+    const row = rows.find((s) => Number(s.game_id) === ref.gameId && Number(s.player_id) === ref.playerId);
+    if (!row || !column || !LIVE_STAT_COLUMNS.has(column)) continue;
+    out[propStatKey(ref.gameId, ref.playerId, ref.marketKey)] = num(row[column]);
+  }
+  return out;
 }

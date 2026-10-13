@@ -126,6 +126,8 @@ PLAN: tuple[TableSpec, ...] = (
                              "Overwritten by every poll; a handful of rows."),
     TableSpec("players", "Parent of every per-player table."),
     TableSpec("player_team_seasons", "Player-to-team mapping; the board joins through it."),
+    TableSpec("live_player_stats", "Unofficial player stats of college games in "
+                                   "progress (0092). Replaced by every poll."),
     TableSpec("depth_charts", "NFL depth charts per team per week (0086). "
                               "Rebuilt twice a day from nflverse."),
     TableSpec("player_injuries", "NFL injury reports (0086). Rebuilt twice a "

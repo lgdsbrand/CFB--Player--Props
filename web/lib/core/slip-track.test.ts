@@ -172,3 +172,34 @@ test("saved slips: newest first, no duplicates, capped, junk dropped", () => {
   assert.deepEqual(parsed.map((s) => s.id), ["ok"]);
   assert.deepEqual(Object.keys(parsed[0].settled), ["x"]);
 });
+
+test("a live prop shows the unofficial number so far and never settles from it", () => {
+  const key = propStatKey(2, 10, "rush_yards");
+  const facts = (value: number): TrackFacts => ({ games: [], stats: {}, liveStats: { [key]: value } });
+  const g = game({ live: live({}) });
+
+  const behind = trackLeg(propLeg("over"), g, facts(54), DURING);
+  assert.equal(behind.state, "live");
+  assert.equal(behind.trend, "behind");
+  assert.equal(behind.detail, "3rd 08:42 · 54 Rush Yds so far, needs 8.5 more (unofficial)");
+
+  // Past the line is still live: only the box score settles a prop.
+  const past = trackLeg(propLeg("over"), g, facts(70), DURING);
+  assert.equal(past.state, "live");
+  assert.equal(past.trend, "ahead");
+  assert.match(past.detail, /70 Rush Yds so far, past 62\.5/);
+  assert.match(trackLeg(propLeg("under"), g, facts(54), DURING).detail, /8\.5 to spare/);
+
+  const atd = propLeg("over", 0.5, { marketKey: "anytime_td", binary: true, market: "Anytime TD" });
+  const scored = trackLeg(atd, g, { games: [], stats: {}, liveStats: { [propStatKey(2, 10, "anytime_td")]: 1 } }, DURING);
+  assert.equal(scored.state, "live");
+  assert.match(scored.detail, /Scored \(unofficial\)/);
+
+  const done = trackLeg(propLeg("over"), game({ live: live({ status: "completed" }) }), facts(70), DURING);
+  assert.equal(done.state, "awaiting");
+  assert.match(done.detail, /Game over: 70 Rush Yds so far, past 62\.5, unofficial/);
+
+  // The box score, once in, decides, whatever the live number said.
+  const box = { games: [], stats: { [key]: 61 }, liveStats: { [key]: 70 } };
+  assert.equal(trackLeg(propLeg("over"), g, box, NEXT_DAY).state, "lost");
+});

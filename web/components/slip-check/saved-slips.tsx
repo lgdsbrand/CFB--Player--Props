@@ -165,6 +165,7 @@ export function SavedSlips({ checkHref }: { checkHref: string }) {
           facts: {
             games: parts.flatMap((p) => p.games),
             stats: Object.assign({}, ...parts.map((p) => p.stats)),
+            liveStats: Object.assign({}, ...parts.map((p) => p.liveStats ?? {})),
           },
           at: new Date(),
         });
@@ -229,8 +230,10 @@ export function SavedSlips({ checkHref }: { checkHref: string }) {
         Saved slips are kept in this browser only, up to 50. College moneylines,
         spreads and totals follow the live scoreboard, updated every two
         minutes; first-quarter and first-half legs settle when that period ends.
-        Player props settle the morning after the game, when the box scores
-        arrive. NFL games have no live scores here, so NFL legs settle after the
+        College player props show the player&rsquo;s numbers so far, added up
+        from the live play-by-play every five minutes: unofficial, and now and
+        then a yard or two off. Every prop settles only from the box score, the
+        morning after the game. NFL games have no live scores here, so NFL legs settle after the
         final, and NFL first-quarter and first-half legs cannot be settled here
         at all. A leg marked Check book is one these numbers cannot decide; your
         book has the final word on every bet.

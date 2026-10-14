@@ -417,6 +417,25 @@ services:
     envVars:
       - fromGroup: cfb-props-worker
 
+  # The client's fantasy game model's inputs (migration 0093): team numbers,
+  # CBS projections, and each team's five starters. Its own service, not a step
+  # of the results chain above: CBS is an outside site, and a change on its
+  # pages must not stop the board's chain. 09:40 runs after that chain (depth
+  # charts and injuries in); 15:40 takes CBS's later revisions, and is the last
+  # run before a Thursday or Sunday kickoff. CBS KEEPS NO HISTORY, so the last
+  # successful run before kickoff is the week's only record. Eight small pages a
+  # run, no quota.
+  - type: cron
+    name: nfl-fantasy-inputs
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "40 9,15 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.nfl_fantasy_inputs --current
+    envVars:
+      - fromGroup: cfb-props-worker
+
   # Hourly at :20, OPEN-AND-CLOSE — the NFL twin of cfb-props-odds-refresh
   # above, whose comment explains the mode and why it replaced six-hourly
   # re-buys on 2026-10-03. :20 rather than :00 keeps the two sports' runs

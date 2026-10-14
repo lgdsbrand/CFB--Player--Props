@@ -132,6 +132,13 @@ PLAN: tuple[TableSpec, ...] = (
                               "Rebuilt twice a day from nflverse."),
     TableSpec("player_injuries", "NFL injury reports (0086). Rebuilt twice a "
                                  "day from Sleeper."),
+    TableSpec("fantasy_projections", "IRREPLACEABLE once a week is played. CBS "
+                                     "weekly projections (0093); CBS keeps no "
+                                     "history, so these rows are the only copy."),
+    TableSpec("fantasy_lineups", "The fantasy game model's starters per team per "
+                                 "week (0093), frozen at kickoff."),
+    TableSpec("fantasy_team_inputs", "The fantasy game model's team numbers (0093). "
+                                     "Rebuildable from nflverse in seconds a season."),
     TableSpec("markets", "Migration-seeded and identical, but moved so the two "
                          "databases are byte-comparable."),
     TableSpec("market_positions", "Which markets each position group shows."),

@@ -1081,6 +1081,47 @@ injury file runs a week behind (it had weeks 1-4 the day after week 5 ended).
 
 **Monitored:** 36h. No keys, no credits.
 
+#### `nfl_fantasy_inputs` — 09:40 and 15:40 UTC, its own cron (`nfl-fantasy-inputs`)
+
+```bash
+python -m worker.jobs.nfl_fantasy_inputs --current                    # what the cron runs
+python -m worker.jobs.nfl_fantasy_inputs --current --dry-run          # fetch and compute, write nothing
+python -m worker.jobs.nfl_fantasy_inputs --seasons 2025 --steps inputs  # rebuild a past season's team numbers
+```
+
+The inputs of the client's NFL **fantasy game model** (migration 0093), the
+Google Sheet that projects a score from five starters' fantasy projections plus
+team numbers. Three steps, in order:
+
+1. **`inputs`** → `fantasy_team_inputs`: per team, as of before each week,
+   3rd-down and red-zone rates both ways, plays per game and EPA (raw season to
+   date, from nflverse's play-by-play file, which has the drive numbers our
+   `plays` table lacks), plus our own Massey-style offense/defense/home-field
+   and an SRS in ESPN FPI's slot (`core/fantasy_inputs.py`). The whole season
+   is rebuilt each run.
+2. **`projections`** → `fantasy_projections`: CBS Sports' weekly PPR
+   projections (four position pages per week asked, `adapters/cbs/`) for each
+   team's next game, rewritten until kickoff and frozen after.
+3. **`lineups`** → `fantasy_lineups`: each team's QB, RB, WR1, WR2 and TE for
+   its next game: the available players with the highest CBS projection
+   (`core/fantasy_lineup.py`), the depth chart only when CBS lists no available
+   QB. Needs the day's depth charts and injuries, hence after the 08:20 chain.
+
+- **CBS KEEPS NO HISTORY.** A past week's URL answers 200 with the current
+  week's table. The job checks every page's title names the week asked and
+  fails otherwise; and because nothing can be re-fetched later, **a week with
+  no successful run before kickoff has no projections, ever.** The 15:40 run
+  is the last before a Thursday or Sunday kickoff.
+- **A page under its row floor fails the run** (QB 20, others 40) rather than
+  clearing teams. Fullbacks on the RB and TE pages are skipped and counted.
+- Players resolve through nflverse's roster by name on the team (387 of 393 on
+  2026-10-14); unresolved ones are kept by name.
+- A starter CBS does not list gets the sheet's default points (QB 17, RB 16,
+  WR 16, TE 12), marked `points_source = 'default'`.
+
+**Monitored:** 36h. No keys, no credits; eight ~0.8 MB pages and the
+play-by-play file a run.
+
 #### `build_usage_shares`
 
 ```bash

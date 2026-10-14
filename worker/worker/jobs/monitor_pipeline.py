@@ -373,6 +373,15 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
              "run leaves yesterday's report, and a cleared player still shows Out.",
     ),
     JobExpectation(
+        name="nfl_fantasy_inputs",
+        max_age_hours=36,
+        sport="nfl",
+        note="09:40 and 15:40 UTC, after the NFL results chain -- the fantasy game "
+             "model's CBS projections, starters and team numbers (migration 0093). "
+             "A warning, but a costly one: CBS keeps no history, so a week with "
+             "no successful run before kickoff has no projections, ever.",
+    ),
+    JobExpectation(
         name="build_usage_shares",
         max_age_hours=36,
         sport="nfl",

@@ -146,13 +146,13 @@ const SURFACES: [string, () => Rgb][] = [
 // ---------------------------------------------------------------------------
 
 test("the canvas is the client's measured background, not our approximation", () => {
-  // `:root { --mlb-dark: #0f172a }` on lgdsanalytics.vercel.app. CLAUDE.md §7's
-  // own #070B14 is explicitly labelled an approximation to be corrected from
-  // the live CSS; this asserts the correction stuck.
+  // His app root's `bg-slate-950` (frontend/src/App.jsx, re-measured from his
+  // source 2026-10-14), painted over the `--mlb-dark: #0f172a` this test held
+  // in August. CLAUDE.md §7's own #070B14 was only ever an approximation.
   assert.deepEqual(
     canvas(),
-    [0x0f, 0x17, 0x2a],
-    "canvas must be #0F172A — the value read from the live site",
+    [0x02, 0x06, 0x18],
+    "canvas must be #020618 (slate-950), his app root's background",
   );
 });
 
@@ -176,9 +176,16 @@ test("every surface is distinguishable from every other surface", () => {
   // board's inputs and selects are `bg-panel-inset` sitting directly on the
   // canvas, so an inset that merely equalled the canvas would erase every form
   // field on the page while leaving the nesting rules satisfied.
+  //
+  // EXCEPT INSET AGAINST CANVAS SINCE 2026-10-14. The client's page is
+  // slate-950, so close to black that nothing darker can reach 1.1:1 against it
+  // (the ceiling, inset at pure black, is ~1.04:1). A field on the canvas is
+  // edged by its border instead, which the border test below holds against
+  // every surface, the canvas included.
   for (const [nameA, a] of SURFACES) {
     for (const [nameB, b] of SURFACES) {
       if (nameA >= nameB) continue;
+      if (nameA === "canvas" && nameB === "panel-inset") continue;
       const ratio = contrast(a(), b());
       assert.ok(
         ratio >= 1.1,

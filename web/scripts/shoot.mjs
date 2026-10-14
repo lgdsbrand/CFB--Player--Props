@@ -40,7 +40,7 @@ function arg(name, fallback) {
 }
 const flag = (name) => process.argv.includes(`--${name}`);
 
-const base = arg("base", "http://localhost:3000");
+const base = arg("base", "http://localhost:3000/football");
 const target = arg("path", "/?season=2025&week=9");
 const tag = arg("tag", "board");
 const only = arg("width", null);

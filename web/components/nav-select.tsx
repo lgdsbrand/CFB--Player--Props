@@ -84,7 +84,7 @@ export function NavSelect({
       <noscript>
         <button
           type="submit"
-          className="border-border-subtle text-muted rounded-full border px-3 py-1 text-[0.625rem] font-bold uppercase tracking-label"
+          className="border-border-subtle text-muted rounded-lg border px-3 py-1 text-[0.625rem] font-black uppercase tracking-label"
         >
           Go
         </button>

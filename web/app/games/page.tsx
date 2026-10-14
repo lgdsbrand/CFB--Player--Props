@@ -440,9 +440,9 @@ function ConferencePill({
       href={href}
       aria-current={active ? "true" : undefined}
       className={
-        "rounded-full border px-2.5 py-1 text-[0.6875rem] font-bold uppercase tracking-label transition-colors " +
+        "rounded-lg border px-2.5 py-1 text-[0.6875rem] font-black uppercase tracking-label transition-colors " +
         (active
-          ? "border-accent-cyan/40 bg-accent-cyan/10 text-accent-cyan"
+          ? "border-blue-500/30 bg-blue-600/20 text-blue-400"
           : "border-border-subtle bg-panel text-muted hover:border-border-strong")
       }
     >

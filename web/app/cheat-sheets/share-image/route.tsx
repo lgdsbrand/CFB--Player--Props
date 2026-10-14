@@ -1,3 +1,4 @@
+import { shareSiteHost } from "@/lib/core/site";
 import { ImageResponse } from "next/og";
 import type { NextRequest } from "next/server";
 
@@ -77,7 +78,7 @@ export async function GET(request: NextRequest) {
     side: params.side,
   });
 
-  return new ImageResponse(<SheetShareImage view={view} site={request.nextUrl.host} />, {
+  return new ImageResponse(<SheetShareImage view={view} site={shareSiteHost(request.nextUrl.host)} />, {
     width: SHARE_WIDTH,
     height: SHARE_HEIGHT,
     fonts: fonts.length > 0 ? fonts : undefined,

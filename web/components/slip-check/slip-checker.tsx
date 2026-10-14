@@ -1,5 +1,6 @@
 "use client";
 
+import { withBasePath } from "@/lib/core/site";
 import { useEffect, useMemo, useState } from "react";
 
 import { ShareButton } from "@/components/share/share-button";
@@ -90,7 +91,7 @@ export function SlipChecker({
     let cancelled = false;
     const url = scopedHref("/slip-check/catalogue", { sport, season, week });
     const read = () =>
-      fetch(url).then((response) => {
+      fetch(withBasePath(url)).then((response) => {
         if (!response.ok) throw new Error(String(response.status));
         return response.json() as Promise<CheckCatalogue>;
       });

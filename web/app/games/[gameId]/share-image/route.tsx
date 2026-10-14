@@ -1,3 +1,4 @@
+import { shareSiteHost } from "@/lib/core/site";
 import { ImageResponse } from "next/og";
 
 import { GameShareImage, SHARE_HEIGHT, SHARE_WIDTH } from "@/components/share/game-share-image";
@@ -45,7 +46,7 @@ export async function GET(
     conditions,
   });
 
-  return new ImageResponse(<GameShareImage view={view} site={new URL(request.url).host} />, {
+  return new ImageResponse(<GameShareImage view={view} site={shareSiteHost(new URL(request.url).host)} />, {
     width: SHARE_WIDTH,
     height: SHARE_HEIGHT,
     fonts: fonts.length > 0 ? fonts : undefined,

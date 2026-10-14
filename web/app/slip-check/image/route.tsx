@@ -1,3 +1,4 @@
+import { shareSiteHost } from "@/lib/core/site";
 import { ImageResponse } from "next/og";
 import type { NextRequest } from "next/server";
 
@@ -55,7 +56,7 @@ export async function GET(request: NextRequest) {
       check={checkSlip(legs, index, book)}
       bookName={bookName}
       heading={`${SPORT_LABEL[sport].toUpperCase()} · WEEK ${week}`}
-      site={new URL(request.url).host}
+      site={shareSiteHost(new URL(request.url).host)}
     />,
     {
       width: SHARE_WIDTH,

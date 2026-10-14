@@ -1,5 +1,6 @@
 "use client";
 
+import { withBasePath } from "@/lib/core/site";
 import { useEffect, useMemo, useState } from "react";
 
 import { GamePicker } from "@/components/game-picker";
@@ -124,7 +125,7 @@ export function BetBuilder({
     let cancelled = false;
     const url = scopedHref("/builder/pool", { sport, season, week }, { window: settings.windowSize });
     const read = () =>
-      fetch(url).then((response) => {
+      fetch(withBasePath(url)).then((response) => {
         if (!response.ok) throw new Error(String(response.status));
         return response.json() as Promise<BuilderPool>;
       });

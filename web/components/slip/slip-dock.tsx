@@ -120,7 +120,7 @@ export function SlipDock() {
     <div
       role="dialog"
       aria-label="Bet slip"
-      className="panel fixed inset-x-2 bottom-2 z-50 flex max-h-[85vh] flex-col shadow-2xl shadow-black/60 sm:inset-x-auto sm:right-4 sm:bottom-4 sm:w-[24rem]"
+      className="panel bg-panel fixed inset-x-2 bottom-2 z-50 flex max-h-[85vh] flex-col shadow-2xl shadow-black/60 sm:inset-x-auto sm:right-4 sm:bottom-4 sm:w-[24rem]"
     >
       <div className="border-border-subtle flex items-center gap-3 border-b px-4 py-3">
         <h2 className="section-header">{`🧾 Bet slip (${legs.length})`}</h2>

@@ -248,7 +248,7 @@ Each step is quick; the waiting is all in step 0.
    every cron and every secret as `sync: false` so nothing is stored in the
    file. A test parses that file to prove every scheduled job has a staleness
    expectation and vice versa.
-7. **Verify from outside.** `/health` on the deployed site checks connectivity
+7. **Verify from outside.** `/football/health` on the deployed site checks connectivity
    and the RLS posture; `audit_data` runs 168 integrity checks and exits
    non-zero on any failure; `monitor_pipeline --dry-run` prints what it would
    alert on without sending anything.
@@ -307,3 +307,23 @@ Worth stating plainly so nobody discovers it in production.
 - 961 Python tests, 242 web tests, 192 data-integrity checks, all passing.
 - Nine scheduled jobs with monitoring that alerts when any of them stops
   producing — including the case where a job succeeds and writes nothing.
+
+
+## Served under the client's site (since 2026-10-14)
+
+The app is served at **https://lgdsanalytics.vercel.app/football**. Its own
+Vercel project (cfb-player-props) still builds and hosts it; the client's site
+(repo `lgdsbrand/mlb_predictor_engine_v2`, `frontend/vercel.json`) forwards
+`/football` and `/football/*` to `https://cfb-player-props.vercel.app/football/*`.
+
+- `basePath` is `/football` (`web/lib/core/site.ts`, a code constant: his Vercel
+  is Hobby, so nothing can be set in his dashboard). A URL built by hand must go
+  through `withBasePath`; `base-path.test.ts` refuses one that does not.
+- Every old address on cfb-player-props.vercel.app (anything outside `/football`)
+  redirects (`web/next.config.ts`). **Never add a redirect that matches
+  `/football/*` on this host:** his site forwards those requests here, so a
+  redirect would loop the reader between the two sites.
+- Entry points on his site: the NFL page's Player Props and Fantasy Model tabs,
+  and the CFB page's Player Props tab. His NFL and CFB pages are his own.
+- Local: `npm run dev` serves at `http://localhost:3000/football`;
+  `NEXT_PUBLIC_BASE_PATH=""` runs it at the root.

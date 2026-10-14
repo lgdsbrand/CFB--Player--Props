@@ -311,9 +311,9 @@ export function BoardControls({
         <Link
           href={boardHref(params, { rankedOnly: !params.rankedOnly })}
           className={
-            "rounded-full border px-3 py-1 text-[0.625rem] font-bold uppercase tracking-label transition-colors " +
+            "rounded-lg border px-3 py-1 text-[0.625rem] font-black uppercase tracking-label transition-colors " +
             (params.rankedOnly
-              ? "border-accent-cyan/50 bg-accent-cyan/15 text-accent-cyan"
+              ? "border-blue-500/30 bg-blue-600/20 text-blue-400"
               : "border-border-subtle text-muted hover:text-ink")
           }
           title="Only players whose own team is in the AP Top 25 entering this week"
@@ -325,7 +325,7 @@ export function BoardControls({
           <Link
             href={boardHref(params, { edgesOnly: !params.edgesOnly })}
             className={
-              "rounded-full border px-3 py-1 text-[0.625rem] font-bold uppercase tracking-label transition-colors " +
+              "rounded-lg border px-3 py-1 text-[0.625rem] font-black uppercase tracking-label transition-colors " +
               (params.edgesOnly
                 ? "border-target/50 bg-target/15 text-target"
                 : "border-border-subtle text-muted hover:text-ink")
@@ -426,7 +426,7 @@ function PillGroup({
         width — would render its first and last pill permanently half-faded,
         plus the rounded border behind them. The border is the affordance here.
       */}
-      <div className="border-border-subtle bg-panel no-scrollbar flex min-w-0 flex-nowrap gap-0.5 overflow-x-auto rounded-full border p-0.5">
+      <div className="border-border-subtle bg-panel no-scrollbar flex min-w-0 flex-nowrap gap-0.5 overflow-x-auto rounded-xl border p-0.5">
         {children}
       </div>
     </div>
@@ -452,9 +452,9 @@ function PillLink({
         // `shrink-0`: inside a nowrap scroller a flex child would otherwise be
         // compressed to fit, so "PASS YDS" would render squeezed rather than
         // scrolling out of view.
-        `shrink-0 whitespace-nowrap rounded-full font-bold uppercase tracking-label transition-colors ${PILL_TEXT[size]} ` +
+        `shrink-0 whitespace-nowrap rounded-lg font-black uppercase tracking-label transition-colors ${PILL_TEXT[size]} ` +
         (active
-          ? "bg-accent-cyan/15 text-accent-cyan"
+          ? "bg-blue-600/20 text-blue-400"
           : "text-muted hover:text-ink")
       }
     >

@@ -43,7 +43,7 @@ function arg(name, fallback) {
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 }
 
-const BASE = arg("base", "http://localhost:3000");
+const BASE = arg("base", "http://localhost:3000/football");
 const MAX_PAGES = Number(arg("max", "600"));
 // Visits per page SHAPE (path with ids masked + the set of query keys). The
 // board has thousands of filter combinations; two of each shape exercise the
@@ -53,7 +53,10 @@ const ONLY_SPORT = arg("sport", null);
 const INTERACT = !process.argv.includes("--no-interact");
 const OUT = path.resolve("screenshots", arg("out", "crawl-report.json"));
 
-const TOGGLE = { NCAAF: "cfb", NFL: "nfl" };
+// The sport switch is the NFL/CFB league switch at the end of the tab row
+// (2026-10-14, nav[aria-label=League]); NCAAF was the old toggle's label. The
+// client's sports row has NFL and CFB too, but those open HIS pages.
+const TOGGLE = { NCAAF: "cfb", CFB: "cfb", NFL: "nfl" };
 const SPORTS = ONLY_SPORT ? [ONLY_SPORT] : ["cfb", "nfl"];
 // Addresses a reader reaches WITHOUT clicking anything here: shared, bookmarked,
 // truncated or hand-edited links. `--edges` starts from these instead. Each must
@@ -176,19 +179,24 @@ async function inspect() {
   return page.evaluate(
     ({ EMPTY_PHRASES, ERROR_PHRASES }) => {
       const header = document.querySelector("header");
+      const sportOf = (a) => {
+        const letters = (a.textContent || "").replace(/[^A-Z]/g, "");
+        return a.closest("nav[aria-label='League']") && (letters === "NFL" || letters === "CFB")
+          ? letters
+          : null;
+      };
       const toggle = header
-        ? [...header.querySelectorAll("a[aria-current='true']")]
-            .map((a) => (a.textContent || "").trim())
-            .find((t) => t === "NCAAF" || t === "NFL") ?? null
+        ? [...header.querySelectorAll("a[aria-current='true']")].map(sportOf).find(Boolean) ?? null
         : null;
       const text = document.body.innerText || "";
       const links = [...document.querySelectorAll("a[href]")].map((a) => {
         const label = (a.textContent || "").trim().replace(/\s+/g, " ");
+        const sport = sportOf(a);
         return {
           href: a.href,
           text: label.slice(0, 60),
-          toggle: !!(a.closest("header") && (label === "NCAAF" || label === "NFL")),
-          label,
+          toggle: !!sport,
+          label: sport ?? label,
         };
       });
       return {

@@ -171,9 +171,9 @@ export function WeekStrip({
                 )}
                 aria-current={isActive ? "true" : undefined}
                 className={
-                  "rounded-full border px-2.5 py-1 text-[0.6875rem] font-bold tabular-nums transition-colors " +
+                  "rounded-lg border px-2.5 py-1 text-[0.6875rem] font-black tabular-nums transition-colors " +
                   (isActive
-                    ? "border-accent-cyan/40 bg-accent-cyan/10 text-accent-cyan"
+                    ? "border-blue-500/30 bg-blue-600/20 text-blue-400"
                     : "border-border-subtle bg-panel text-muted hover:border-border-strong")
                 }
               >
@@ -205,14 +205,14 @@ export function WeekStrip({
               className={
                 "flex min-w-30 shrink-0 flex-col gap-0.5 rounded-xl border px-3 py-2 transition-colors " +
                 (isActive
-                  ? "border-accent-cyan/40 bg-accent-cyan/10"
+                  ? "border-indigo-400/40 bg-gradient-to-br from-indigo-600/90 to-blue-600/90 shadow-[0_0_15px_rgba(99,102,241,0.35)]"
                   : "border-border-subtle bg-panel hover:border-border-strong")
               }
             >
               <span
                 className={
                   "text-[0.625rem] font-semibold uppercase tracking-label " +
-                  (isActive ? "text-accent-cyan" : "text-dim")
+                  (isActive ? "text-indigo-100" : "text-dim")
                 }
               >
                 {week.season} · Week {week.week}
@@ -223,7 +223,7 @@ export function WeekStrip({
               <span className="text-ink whitespace-nowrap text-sm font-bold">
                 {formatDateRange(week.firstKickoff, week.lastKickoff)}
               </span>
-              <span className="text-muted text-[0.6875rem]">
+              <span className={(isActive ? "text-indigo-100/80" : "text-muted") + " text-[0.6875rem]"}>
                 {week.games} games
               </span>
             </Link>

@@ -1,5 +1,6 @@
 "use client";
 
+import { withBasePath } from "@/lib/core/site";
 import { useEffect, useRef, useState } from "react";
 
 /**
@@ -52,7 +53,7 @@ export function ShareButton({
     if (state === "ready" || state === "loading") return;
     setState("loading");
     try {
-      const response = await fetch(imagePath);
+      const response = await fetch(withBasePath(imagePath));
       if (!response.ok) throw new Error(`image ${response.status}`);
       const blob = await response.blob();
       const next = new File([blob], fileName, { type: "image/png" });
@@ -66,7 +67,7 @@ export function ShareButton({
     }
   };
 
-  const pageUrl = () => new URL(pagePath, window.location.origin).toString();
+  const pageUrl = () => new URL(withBasePath(pagePath), window.location.origin).toString();
 
   const share = async () => {
     if (!file) return;

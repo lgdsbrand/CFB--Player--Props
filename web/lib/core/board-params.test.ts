@@ -345,6 +345,12 @@ test("a board link is recognised by its scope alone", () => {
   assert.equal(boardParamsPresent({ scope: "q1" }), true);
 });
 
+test("the NFL home page is not a board link; NFL with a board filter is", () => {
+  assert.equal(boardParamsPresent({ sport: "nfl" }), false);
+  assert.equal(boardParamsPresent({ sport: "nfl", week: "6" }), true);
+  assert.equal(boardParamsPresent({}), false);
+});
+
 test("sport survives a trip through the URL", () => {
   const href = boardHref(bare("nfl"), {});
   assert.match(href, /sport=nfl/);

@@ -1,3 +1,4 @@
+import { withBasePath } from "@/lib/core/site";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -83,7 +84,7 @@ export async function generateMetadata({
   const game = await getGame(gameId);
   if (!game) return {};
   const title = `${shareGameTitle(game)} · Legends Sports`;
-  const image = { url: `/games/${gameId}/share-image`, width: 1080, height: 1350, alt: shareGameTitle(game) };
+  const image = { url: withBasePath(`/games/${gameId}/share-image`), width: 1080, height: 1350, alt: shareGameTitle(game) };
   return {
     title,
     openGraph: { title, images: [image] },

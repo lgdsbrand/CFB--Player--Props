@@ -1,5 +1,6 @@
 "use client";
 
+import { withBasePath } from "@/lib/core/site";
 import Link from "next/link";
 import {
   useEffect,
@@ -153,7 +154,7 @@ export function SavedSlips({ checkHref }: { checkHref: string }) {
         const parts = await Promise.all(
           batches.map(async (keys) => {
             const response = await fetch(
-              scopedHref("/slip-check/track", {}, { legs: keys.join("~") }),
+              withBasePath(scopedHref("/slip-check/track", {}, { legs: keys.join("~") })),
             );
             if (!response.ok) throw new Error(String(response.status));
             return (await response.json()) as TrackFacts;

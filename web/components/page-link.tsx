@@ -28,7 +28,7 @@ export function PageLink({
   return (
     <Link
       href={href}
-      className="border-border-subtle text-muted hover:text-ink hover:border-border-strong rounded-full border px-3 py-1.5 text-[0.6875rem] font-bold uppercase tracking-label transition-colors"
+      className="border-border-subtle text-muted hover:text-ink hover:border-border-strong rounded-lg border px-3 py-1.5 text-[0.6875rem] font-black uppercase tracking-label transition-colors"
     >
       {children}
     </Link>

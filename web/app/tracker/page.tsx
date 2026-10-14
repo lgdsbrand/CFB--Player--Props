@@ -326,8 +326,8 @@ function FilterPill({ href, active, label }: { href: string; active: boolean; la
       scroll={false}
       aria-current={active ? "true" : undefined}
       className={
-        "rounded-full border px-2.5 py-1 text-[0.625rem] font-extrabold uppercase tracking-label transition-colors " +
-        (active ? "border-accent-cyan/50 bg-accent-cyan/10 text-accent-cyan" : "border-border-subtle text-muted hover:text-ink")
+        "rounded-lg border px-2.5 py-1 text-[0.625rem] font-black uppercase tracking-label transition-colors " +
+        (active ? "border-blue-500/30 bg-blue-600/20 text-blue-400" : "border-border-subtle text-muted hover:text-ink")
       }
     >
       {label}
@@ -366,7 +366,7 @@ function PickRow({ p }: { p: TrackerPick }) {
         </span>
       </div>
       <span
-        className={`rounded-full border px-2 py-0.5 text-[0.625rem] font-extrabold uppercase tracking-label ${RESULT_STYLE[p.result]}`}
+        className={`rounded-lg border px-2 py-0.5 text-[0.625rem] font-black uppercase tracking-label ${RESULT_STYLE[p.result]}`}
       >
         {p.result === "pending" ? "Pending" : p.result}
       </span>

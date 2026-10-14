@@ -106,14 +106,14 @@ function DayPill({
         // a narrow viewport compressing them instead of scrolling.
         "flex min-w-22 shrink-0 flex-col gap-0.5 rounded-xl border px-3 py-1.5 transition-colors " +
         (active
-          ? "border-accent-cyan/40 bg-accent-cyan/10"
+          ? "border-indigo-400/40 bg-gradient-to-br from-indigo-600/90 to-blue-600/90 shadow-[0_0_15px_rgba(99,102,241,0.35)]"
           : "border-border-subtle bg-panel hover:border-border-strong")
       }
     >
       <span
         className={
           "text-[0.625rem] font-semibold uppercase tracking-label " +
-          (active ? "text-accent-cyan" : "text-dim")
+          (active ? "text-indigo-100" : "text-dim")
         }
       >
         {caption}
@@ -123,7 +123,7 @@ function DayPill({
       <span className="text-ink whitespace-nowrap text-sm font-bold">
         {value}
       </span>
-      <span className="text-muted text-[0.6875rem]">{detail}</span>
+      <span className={(active ? "text-indigo-100/80" : "text-muted") + " text-[0.6875rem]"}>{detail}</span>
     </Link>
   );
 }

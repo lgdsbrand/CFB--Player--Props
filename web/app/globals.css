@@ -21,33 +21,41 @@
    The design is dark-only on purpose: it must sit natively alongside the
    client's existing MLB, tennis and WNBA engines, so there is no light mode and
    no prefers-color-scheme switching.
+
+   RE-MEASURED 2026-10-14 FROM HIS SOURCE, NOT HIS BUNDLE. With access to his
+   repo (lgdsbrand/mlb_predictor_engine_v2) the values below follow his MLB page
+   as he writes it in frontend/src/App.jsx, which had moved on since August and
+   is the look the client asked for ("his MLB look", via the user):
+
+     page    bg-slate-950, with blurred indigo/cyan/purple glows behind it
+     cards   bg-slate-900/40 backdrop-blur border-slate-800/80 rounded-2xl
+     insets  bg-slate-950/50 inside a card
+     titles  font-black uppercase tracking-widest
+     CTA     bg-gradient-to-r from-indigo-600 to-blue-600, rounded-xl
+
+   His `--mlb-dark` (#0f172a) is still on <body>, but his app's root paints
+   slate-950 over it, so slate-950 is what a reader sees.
    ============================================================================= */
 
 @theme {
   /* ---------------------------------------------------------------------------
      Surfaces.
 
-     THE CANVAS MOVED AND THE REST HAD TO BE RE-DERIVED, NOT RE-TYPED. Our
-     provisional canvas was #070B14; theirs is #0F172A — much lighter and bluer.
-     A straight token swap would have left `panel` (#0E1420) sitting DARKER than
-     the page behind it, inverting the one relationship §7 actually specifies:
-     panels lift, insets recess.
+     HIS CARDS ARE SEE-THROUGH; THESE TOKENS ARE NOT. `.panel` and
+     `.panel-inset` below paint his translucent fills exactly. The tokens are
+     the SOLID colour those fills come to over his page, because `bg-panel` is
+     also used ~80 times on its own for dropdowns, form fields and the slip
+     drawer, which float over content and must not let it show through.
 
-     The ramp is three steps of their slate scale, which is exactly the pairing
-     their own cards use (page slate-900, card slate-800):
-
-       canvas  slate-900   the page
-       panel   slate-800   lifted above it
-       inset   slate-950   recessed below its parent panel
-
-     The inset going BELOW the canvas rather than landing on it is deliberate.
-     `bg-panel-inset` is used for the board's form fields, which sit directly on
-     the canvas — an inset that merely equalled the canvas would make every
-     input and select disappear.
+       canvas  slate-950                       the page (his app root)
+       panel   slate-900                       his card colour, solid
+       inset   below the canvas                recessed: the board's form fields
+                                               sit on the canvas and must not
+                                               disappear into it
      --------------------------------------------------------------------------- */
-  --color-canvas: #0f172a; /* their --mlb-dark, verbatim */
-  --color-panel: oklch(27.9% 0.041 260.031); /* slate-800  #1d293d */
-  --color-panel-inset: oklch(12.9% 0.042 264.695); /* slate-950  #020618 */
+  --color-canvas: oklch(12.9% 0.042 264.695); /* slate-950  #020618 */
+  --color-panel: oklch(20.8% 0.042 265.755); /* slate-900: his card colour, solid (theme.test: must part from the canvas) */
+  --color-panel-inset: oklch(9.5% 0.035 264.695);
 
   /* Borders are SOLID slate, not white at low alpha.
 
@@ -57,8 +65,8 @@
      what they do: `border-slate-700` and `border-slate-600` are both in their
      bundle. An alpha border would have to be re-picked every time a surface
      changed, which is the thing that just bit us. */
-  --color-border-subtle: oklch(37.2% 0.044 257.287); /* slate-700  #314158 */
-  --color-border-strong: oklch(44.6% 0.043 257.281); /* slate-600  #45556c */
+  --color-border-subtle: oklch(30.5% 0.042 259.5); /* between his slate-800 and slate-700: slate-800 alone is 1.22:1 on a panel, under theme.test's 1.25 */
+  --color-border-strong: oklch(37.2% 0.044 257.287); /* slate-700: his hover border */
 
   /* Signature gradient — wordmark and key % values (CLAUDE.md §7) */
   --color-accent-cyan: oklch(78.9% 0.154 211.53); /* cyan-400    #00d3f2 */
@@ -89,11 +97,11 @@
        muted  slate-400  6.8 /  5.6   passes AA everywhere
        dim    slate-500  3.7 /  3.1   passes AA-large only — see `.label-caption`
      --------------------------------------------------------------------------- */
-  --color-ink: #ffffff; /* their body colour, verbatim */
+  --color-ink: oklch(96.7% 0.003 264.542); /* gray-100, his app root's text-gray-100 */
   --color-muted: oklch(70.4% 0.04 256.788); /* slate-400  #90a1b9 */
   --color-dim: oklch(55.4% 0.046 257.417); /* slate-500  #62748e */
 
-  --tracking-label: 0.12em;
+  --tracking-label: 0.1em; /* his tracking-widest */
 
   /* Their card radii are rounded-2xl (16px) outside, rounded-xl (12px) inside.
      CLAUDE.md's "~14px" was the eyeball estimate between the two. */
@@ -128,7 +136,7 @@
      prose at normal sizes, where 3.7:1 is defensible. */
   .label-caption {
     font-size: 0.625rem;
-    font-weight: 600;
+    font-weight: 900; /* his font-black */
     line-height: 1;
     text-transform: uppercase;
     letter-spacing: var(--tracking-label);
@@ -174,30 +182,40 @@
   /* Bold wide-tracked uppercase section header */
   .section-header {
     font-size: 0.8125rem;
-    font-weight: 700;
+    font-weight: 900; /* his font-black */
     text-transform: uppercase;
     letter-spacing: var(--tracking-label);
     color: var(--color-ink);
   }
 
+  /* His card: `bg-slate-900/40 backdrop-blur-md border border-slate-800/80
+     rounded-2xl shadow-lg`. Translucent, so the page's glows read through it.
+     A panel that FLOATS over content (the slip drawer) adds `bg-panel`, the
+     solid equivalent, which wins as a utility. */
   .panel {
-    background-color: var(--color-panel);
-    border: 1px solid var(--color-border-subtle);
+    background-color: color-mix(in oklab, oklch(20.8% 0.042 265.755) 40%, transparent);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in oklab, oklch(27.9% 0.041 260.031) 80%, transparent);
     border-radius: var(--radius-card);
+    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
   }
 
+  /* His inner card: `bg-slate-950/50` inside a card, rounded-xl. */
   .panel-inset {
-    background-color: var(--color-panel-inset);
-    border: 1px solid var(--color-border-subtle);
+    background-color: color-mix(in oklab, oklch(12.9% 0.042 264.695) 50%, transparent);
+    border: 1px solid color-mix(in oklab, oklch(27.9% 0.041 260.031) 80%, transparent);
     border-radius: calc(var(--radius-card) - 0.25rem);
   }
 
   /* Cyan → indigo gradient as text fill, for hero % values and the wordmark */
   .gradient-text {
+    /* His title gradient: from-cyan-400 via-indigo-400 to-purple-400. */
     background-image: linear-gradient(
       90deg,
-      var(--color-accent-cyan),
-      var(--color-accent-indigo)
+      oklch(78.9% 0.154 211.53),
+      oklch(67.3% 0.182 276.935),
+      oklch(71.4% 0.203 305.504)
     );
     -webkit-background-clip: text;
     background-clip: text;
@@ -205,6 +223,10 @@
   }
 
   /* Primary CTA.
+
+     SUPERSEDED 2026-10-14: his buttons are now the indigo-to-blue gradient
+     below (his App.jsx), so the flat blue described here is gone. Kept as the
+     record of why it was flat in August.
 
      FLAT BRAND BLUE, NOT THE GRADIENT, AND THAT IS A DELIBERATE DEPARTURE FROM
      CLAUDE.md §7. §7 lists "primary CTAs" as a third use of the cyan→indigo
@@ -220,28 +242,28 @@
     display: inline-flex;
     align-items: center;
     gap: 0.375rem;
-    border-radius: 0.5rem;
-    background-color: var(--color-brand);
+    border-radius: 0.75rem;
+    /* His primary button: from-indigo-600 to-blue-600, hover -500. */
+    background-image: linear-gradient(90deg, oklch(51.1% 0.262 276.966), oklch(54.6% 0.245 262.881));
     color: #ffffff;
     font-size: 0.6875rem;
-    font-weight: 800;
+    font-weight: 900;
     text-transform: uppercase;
     letter-spacing: var(--tracking-label);
-    transition: background-color 150ms ease;
+    transition: filter 150ms ease;
   }
-
   .cta:hover {
-    background-color: var(--color-brand-hover);
+    background-image: linear-gradient(90deg, oklch(58.5% 0.233 277.117), oklch(62.3% 0.214 259.815));
   }
 
   .pill {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
-    border-radius: 9999px;
+    border-radius: 0.375rem; /* his badges are rounded-md, not full pills */
     padding: 0.125rem 0.5rem;
     font-size: 0.625rem;
-    font-weight: 700;
+    font-weight: 900;
     text-transform: uppercase;
     letter-spacing: var(--tracking-label);
   }

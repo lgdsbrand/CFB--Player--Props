@@ -268,9 +268,16 @@ const BOARD_PARAM_KEYS = [
  *
  * A BARE `/` IS NOT A BOARD LINK. That is the home page, and it must not
  * bounce.
+ *
+ * NOR IS `/?sport=nfl` ALONE (2026-10-14). The sport only joined these keys
+ * with the NFL toggle, after the board had already moved to /props, so no link
+ * from before the move carries it alone. What did carry it was the NFL home
+ * page itself, which was forwarded to the board every time: the header's home
+ * tab, and the client's NFL menu entry once the app moved under his site. A
+ * link with the sport AND a board filter still forwards.
  */
 export function boardParamsPresent(raw: RawParams): boolean {
-  return BOARD_PARAM_KEYS.some((key) => first(raw[key]) !== undefined);
+  return BOARD_PARAM_KEYS.some((key) => key !== "sport" && first(raw[key]) !== undefined);
 }
 
 export const DEFAULT_HIT_RATE_WINDOW = 5;

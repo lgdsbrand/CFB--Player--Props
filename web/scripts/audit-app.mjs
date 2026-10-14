@@ -45,7 +45,7 @@ const arg = (n, d) => {
   const i = process.argv.indexOf(`--${n}`);
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : d;
 };
-const BASE = arg("base", "https://cfb-player-props.vercel.app");
+const BASE = arg("base", "https://lgdsanalytics.vercel.app/football");
 /** The BOARD. Not `/` -- that is the home page and only redirects here. */
 const REF = `${BASE}/props?season=2025&week=8`;
 /**

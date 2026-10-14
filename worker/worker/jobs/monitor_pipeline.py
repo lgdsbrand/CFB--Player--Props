@@ -187,6 +187,7 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
     JobExpectation(
         name="ingest_game_odds",
         max_age_hours=60,
+        sport_scoped=True,
         note="Sun/Tue/Thu/Fri 23:00 UTC plus three Saturday pulls — game odds "
              "for the game model (CLAUDE.md §11). The longest scheduled gap is "
              "48h (Sun->Tue, Tue->Thu). Not gated on odds_adapter: that switch "
@@ -291,7 +292,28 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
         note="hourly at :20 (--sport nfl), open-and-close — the NFL half of "
              "the metered odds spend, and a silent stop looks like a quiet market",
     ),
+    JobExpectation(
+        name="ingest_game_odds",
+        max_age_hours=3,
+        sport="nfl",
+        sport_scoped=True,
+        note="hourly at :20 (--sport nfl --close-window-minutes 90), chained "
+             "after the NFL props capture — game lines for the fantasy game "
+             "model. Most runs buy nothing but still log, so staleness means "
+             "the chain stopped. Scoped by sport since 2026-10-14, when the "
+             "NFL runs began: unscoped, these hourly runs would answer for a "
+             "dead college capture.",
+    ),
     # NFL jobs with names of their own, separable without any sport filter.
+    JobExpectation(
+        name="nfl_fantasy_picks",
+        max_age_hours=3,
+        sport="nfl",
+        note="hourly at :20, last in the NFL odds chain — the fantasy game "
+             "model's picks at the close (migration 0095). Most runs find no "
+             "game in the window and still log, so staleness means the chain "
+             "stopped and the week's picks are not being made.",
+    ),
     JobExpectation(
         name="nfl_ingest_reference",
         max_age_hours=36,

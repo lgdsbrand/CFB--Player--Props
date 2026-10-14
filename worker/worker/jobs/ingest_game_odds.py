@@ -3,6 +3,7 @@
     python -m worker.jobs.ingest_game_odds
     python -m worker.jobs.ingest_game_odds --dry-run
     python -m worker.jobs.ingest_game_odds --paid
+    python -m worker.jobs.ingest_game_odds --sport nfl --paid --close-window-minutes 90
 
 The game model's capture (CLAUDE.md §11, phase G1). ONE bulk call per run,
 billed per market per region and not per event: 3 markets x 3 regions is 9
@@ -22,6 +23,15 @@ ALSO WRITES THE +EV LIST (migration 0087), and only this run can. Because
 still posting a price; this run's quotes can. So after writing, the run
 computes each captured game's +EV wagers from exactly what it saw
 (core/ev.py) and replaces that game's `game_ev_wagers` rows.
+
+OPEN-AND-CLOSE MODE (`--close-window-minutes`, NFL since 2026-10-14). The
+college slate is bought on a fixed schedule because its kickoffs bunch on
+Saturday. The NFL is chained hourly onto its props service and buys only when
+the FREE event list says a buy is due (`buy_reason`): a game kicking off within
+the window that has not been captured inside it (its closing line), or a game
+in the next week never captured at all (its opener, at most twice a day).
+About one 9-credit buy per kickoff window, ~55 credits a week, and it follows
+real kickoff times, so the November clock change cannot move it.
 
 NEVER CAPTURES A GAME THAT HAS STARTED. The bulk endpoint returns in-play
 prices for live games, and one of those written after kickoff would become the
@@ -76,6 +86,12 @@ PERIODS = ("h1", "q1")
 # the book never offered.
 _MIRROR_TOLERANCE = 1e-6
 
+# Open-and-close mode: how far ahead a never-captured game asks for its
+# opener, and how long after any buy before an opener alone buys again. The
+# gap stops a game no book prices yet from buying 9 credits every hour.
+OPEN_HORIZON = timedelta(days=8)
+OPEN_GAP = timedelta(hours=12)
+
 
 @dataclass(frozen=True)
 class GameOddsRow:
@@ -124,9 +140,12 @@ class GameOddsReport:
     rows_unchanged: int = 0
     ev_wagers: int = 0
     rejected: Counter = field(default_factory=Counter)
+    # Open-and-close mode only: why this run bought, or why it did not.
+    decision: str | None = None
 
     def render(self) -> str:
         lines = [
+            *([f"decision         {self.decision}"] if self.decision else []),
             f"events seen      {self.events_seen}",
             f"  matched        {self.events_matched}",
             f"  started (skip) {self.events_started}",
@@ -313,6 +332,59 @@ def latest_prices(
         }
 
 
+def buy_reason(
+    upcoming: list[tuple[int, datetime]],
+    last_capture: dict[int, datetime],
+    ever_priced: set[int],
+    now: datetime,
+    window: timedelta,
+) -> str | None:
+    """Open-and-close mode: why this run should make the bulk call, or None.
+
+    `upcoming` is (game id, kickoff) for every listed game not yet started;
+    `last_capture` the last run that captured each game (its current offers'
+    stamp); `ever_priced` the games holding any full-game price at all.
+    """
+    for game_id, kickoff in upcoming:
+        if now < kickoff <= now + window:
+            seen = last_capture.get(game_id)
+            if seen is None or seen < kickoff - window:
+                return f"closing: game {game_id} kicks off {kickoff:%a %H:%M} UTC"
+    last_buy = max(last_capture.values(), default=None)
+    if last_buy is not None and last_buy > now - OPEN_GAP:
+        return None
+    for game_id, kickoff in upcoming:
+        if kickoff <= now + OPEN_HORIZON and game_id not in ever_priced:
+            return f"opening: game {game_id} has no price yet"
+    return None
+
+
+def capture_state(
+    conn: psycopg.Connection, game_ids: list[int]
+) -> tuple[dict[int, datetime], set[int]]:
+    """Each game's last full-game capture, and the games ever priced at all.
+
+    `game_offers` is replaced for every game a run captures, stamped with the
+    run's time, so its newest stamp is the last capture. `game_odds` keeps
+    only changes and cannot say that, but it does say a game was ever priced.
+    """
+    if not game_ids:
+        return {}, set()
+    with conn.cursor() as cur:
+        cur.execute(
+            "select game_id, max(captured_at) as at from game_offers "
+            "where game_id = any(%s) and period = %s group by game_id",
+            (game_ids, PERIOD),
+        )
+        last = {int(r["game_id"]): r["at"] for r in cur.fetchall()}
+        cur.execute(
+            "select distinct game_id from game_odds where game_id = any(%s) and period = %s",
+            (game_ids, PERIOD),
+        )
+        ever = {int(r["game_id"]) for r in cur.fetchall()}
+    return last, ever
+
+
 def run(
     *,
     season: int,
@@ -321,6 +393,7 @@ def run(
     dry_run: bool = False,
     now: datetime | None = None,
     adapter: TheOddsApiAdapter | None = None,
+    close_window_minutes: int | None = None,
 ) -> GameOddsReport:
     report = GameOddsReport()
     now = now or datetime.now(UTC)
@@ -339,6 +412,17 @@ def run(
             "ODDS_API_KEY_FREE" if using_free else "ODDS_API_KEY (shared paid pool)",
         )
         adapter = TheOddsApiAdapter(key, sport_key=sport_key_for(sport))
+
+    if close_window_minutes is not None:
+        report.decision = due_to_buy(
+            adapter, season, sport, now, timedelta(minutes=close_window_minutes), report
+        )
+        if report.decision is None:
+            report.decision = "nothing due, no call made"
+            log.info("Open-and-close: nothing due; the bulk call was not made.")
+            return report
+        log.info("Open-and-close: buying (%s).", report.decision)
+        report = GameOddsReport(decision=report.decision)
 
     log.info("Requesting %s across regions %s.", ",".join(GAME_MARKETS), GAME_REGIONS)
     events = adapter.fetch_game_odds()
@@ -391,6 +475,36 @@ def run(
 
     log.info("Provider quota: %s", adapter.quota.summary())
     return report
+
+
+def due_to_buy(
+    adapter: TheOddsApiAdapter,
+    season: int,
+    sport: str,
+    now: datetime,
+    window: timedelta,
+    report: GameOddsReport,
+) -> str | None:
+    """Read the free event list and the capture state; return `buy_reason`."""
+    events = adapter.list_events()
+    report.events_seen = len(events)
+    with connect() as conn:
+        resolver = load_teams(conn, sport=sport)
+        games = load_games(conn, season, None, sport=sport)
+        upcoming: list[tuple[int, datetime]] = []
+        for event in events:
+            hit = match_event_to_game(event, games, resolver)
+            if hit is None:
+                report.events_unmatched.append(f"{event.away_team} @ {event.home_team}")
+                continue
+            report.events_matched += 1
+            kickoff = event.commence_time or hit[0].get("start_date")
+            if kickoff is None or kickoff <= now:
+                report.events_started += 1
+                continue
+            upcoming.append((int(hit[0]["id"]), kickoff))
+        last, ever = capture_state(conn, sorted({g for g, _ in upcoming}))
+    return buy_reason(upcoming, last, ever, now, window)
 
 
 def write_changed(
@@ -652,8 +766,16 @@ def main(argv: list[str] | None = None) -> int:
         "--paid", action="store_true",
         help="Bill the shared paid pool instead of ODDS_API_KEY_FREE.",
     )
+    parser.add_argument(
+        "--close-window-minutes", type=int,
+        help="Open-and-close mode: buy only when a game kicks off within this "
+             "many minutes and was not captured inside them, or a game in the "
+             "next week has no price yet. Without it every run buys.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    if args.close_window_minutes is not None and args.close_window_minutes <= 0:
+        parser.error("--close-window-minutes must be positive")
 
     try:
         settings = get_settings()
@@ -676,7 +798,8 @@ def main(argv: list[str] | None = None) -> int:
         # 9 credits, because the point of it is to see the real matching.
         try:
             report = run(season=season, sport=args.sport,
-                         prefer_free=not args.paid, dry_run=True)
+                         prefer_free=not args.paid, dry_run=True,
+                         close_window_minutes=args.close_window_minutes)
         except Exception as exc:
             log.error("Dry run failed: %s", exc, exc_info=True)
             return 1
@@ -685,12 +808,18 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         with pipeline_run(
-            JOB_NAME, metadata={"season": season, "sport": args.sport, "paid": args.paid}
+            JOB_NAME,
+            metadata={
+                "season": season, "sport": args.sport, "paid": args.paid,
+                **({"close_window_minutes": args.close_window_minutes}
+                   if args.close_window_minutes is not None else {}),
+            },
         ) as run_id:
             report = run(
                 season=season,
                 sport=args.sport,
                 prefer_free=not args.paid,
+                close_window_minutes=args.close_window_minutes,
             )
             set_rows_written(run_id, report.rows_written)
             log.info("Game odds capture:\n%s", report.render())

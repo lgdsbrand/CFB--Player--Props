@@ -451,6 +451,20 @@ services:
   # obvious saving and is NOT done here, because `ingest_odds` has no
   # market-exclusion flag and adding one silently changes what the board can
   # display. See the anytime-TD decision, which is the client's to make.
+  #
+  # THEN THE NFL GAME LINES (moneyline, spread, total), for the client's
+  # fantasy game model's edges and grading (2026-10-14). Chained here because
+  # this service already holds the paid key, so nothing has to be added on
+  # Render. Open-and-close too: the free event list decides, and the 9-credit
+  # bulk call is made only for a game kicking off within 90 minutes that was
+  # not captured inside them (one buy per kickoff window), or for a game in the
+  # next week with no price yet. ~55 credits a week on the PAID pool, not the
+  # free key the college game odds and the Q1 capture share. `;`, not `&&`: a
+  # failed props capture must not cost the game lines their close.
+  #
+  # LAST, THE FANTASY MODEL'S PICKS (migration 0095): for each game in the same
+  # 90 minutes, his gap rule (spread 4+, total 6+) against the close just
+  # captured, once per game, market and version. No API calls.
   - type: cron
     name: nfl-props-odds-refresh
     runtime: python
@@ -458,7 +472,10 @@ services:
     rootDir: worker
     schedule: "20 * * * *"
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m worker.jobs.ingest_odds --sport nfl --event-limit 120 --close-window-minutes 60
+    startCommand: >-
+      python -m worker.jobs.ingest_odds --sport nfl --event-limit 120 --close-window-minutes 60;
+      python -m worker.jobs.ingest_game_odds --sport nfl --paid --close-window-minutes 90;
+      python -m worker.jobs.nfl_fantasy_picks --close-window-minutes 90
     envVars:
       - fromGroup: cfb-props-worker
 

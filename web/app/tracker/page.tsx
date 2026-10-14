@@ -22,6 +22,7 @@ import {
   resolvePeriod,
   ruleCard,
   ruleReason,
+  sheetCard,
   type Card,
   type CardKey,
   type Engine,
@@ -45,8 +46,13 @@ import { getTrackerPicks } from "@/lib/data/tracker";
  * PLUS THE RULE PLAYS' CARD (2026-10-09): the client's line-gap rules, a
  * separate engine with a card of its own. Never in the overall record above
  * the cards, which is v2's.
+ *
+ * THE NFL PAGE IS THE FANTASY MODEL'S (2026-10-14, migration 0095): the
+ * fixed version's record above, its spread and total cards, and the original
+ * sheet's card beside them. The college game model does not cover the NFL.
  */
 const ENGINE: Engine = "v2";
+const NFL_ENGINE: Engine = "fantasy";
 
 /** Break-even at -110: a win rate below this loses money at standard prices. */
 const BREAK_EVEN = 110 / 210;
@@ -58,6 +64,7 @@ const CARD_TINT: Record<CardKey, string> = {
   edge: "border-target/40 from-target/15",
   h2h: "border-positive/35 from-positive/10",
   rules: "border-accent-indigo/40 from-accent-cyan/10 via-accent-indigo/10",
+  sheet: "border-border-strong from-white/5",
 };
 const BAR_TINT: Record<CardKey, string> = {
   spreads: "bg-accent-indigo",
@@ -65,6 +72,7 @@ const BAR_TINT: Record<CardKey, string> = {
   edge: "bg-target",
   h2h: "bg-positive",
   rules: "bg-gradient-to-r from-accent-cyan to-accent-indigo",
+  sheet: "bg-muted",
 };
 
 export default async function TrackerPage({
@@ -82,37 +90,26 @@ export default async function TrackerPage({
   const raw = await searchParams;
   const sport = resolveSport(raw.sport);
   const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
-  const engine = ENGINE;
+  const engine = sport === "nfl" ? NFL_ENGINE : ENGINE;
+  // The engine with a card of its own beside the main one, never pooled.
+  const sideEngine: Engine = sport === "nfl" ? "fantasy_sheet" : "rules";
+  const sideKey: CardKey = sport === "nfl" ? "sheet" : "rules";
   const period = resolvePeriod(first(raw.period));
   // The card the graded-picks list is narrowed to; null is every pick.
   const market = resolveCardKey(first(raw.market), engine);
 
-  if (sport !== "cfb") {
-    return (
-      <Shell sport={sport}>
-        <Title engine={engine} />
-        <div className="panel p-6">
-          <p className="text-muted text-sm">
-            The game model covers college football.{" "}
-            <Link href={scopedHref("/tracker", { sport: "cfb" })} className="text-accent-cyan hover:underline">
-              Open the college tracker
-            </Link>
-            .
-          </p>
-        </div>
-      </Shell>
-    );
-  }
-
-  const picks = await getTrackerPicks(sport, [engine, "rules"]);
+  const picks = await getTrackerPicks(sport, [engine, sideEngine]);
   // One period cut for both, so "Week" is the same week on every card.
   const inScope = inPeriod(picks, period);
   const shown = inScope.filter((p) => p.engine === engine);
-  const shownRules = inScope.filter((p) => p.engine === "rules");
+  const shownSide = inScope.filter((p) => p.engine === sideEngine);
   const overall = record(shown);
-  const marketCards = [...cards(shown, engine), ruleCard(shownRules)];
+  const marketCards = [
+    ...cards(shown, engine),
+    sport === "nfl" ? sheetCard(shownSide) : ruleCard(shownSide),
+  ];
   const listed =
-    market === "rules" ? shownRules : market ? shown.filter(cardFilter(market)) : shown;
+    market === sideKey ? shownSide : market ? shown.filter(cardFilter(market)) : shown;
   const href = (changes: { period?: Period; market?: CardKey | null }) => {
     const nextPeriod = changes.period ?? period;
     const nextMarket = changes.market === undefined ? market : changes.market;
@@ -125,7 +122,7 @@ export default async function TrackerPage({
   return (
     <Shell sport={sport}>
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <Title engine={engine} />
+        <Title engine={engine} sport={sport} />
         <div className="flex flex-col items-end gap-2">
           <Tabs>
             {PERIODS.map((p) => (
@@ -216,8 +213,10 @@ export default async function TrackerPage({
 
       <p className="text-dim text-center text-[0.6875rem] uppercase tracking-label">
         Picks locked before kickoff · shown once the game starts · graded the morning after · units on
-        1-unit stakes at the price taken · Engine {engine.toUpperCase()} since {ENGINE_SINCE[engine]} ·
-        rule plays since {ENGINE_SINCE.rules}, listed ahead of the games on Analyze Games
+        1-unit stakes at the price taken · Engine {engine.toUpperCase()} since {ENGINE_SINCE[engine]} ·{" "}
+        {sport === "nfl"
+          ? "made at the closing line, spread 4+ and total 6+ points off it · the original sheet graded beside it"
+          : `rule plays since ${ENGINE_SINCE.rules}, listed ahead of the games on Analyze Games`}
       </p>
     </Shell>
   );
@@ -378,13 +377,16 @@ function PickRow({ p }: { p: TrackerPick }) {
   );
 }
 
-function Title({ engine }: { engine: Engine }) {
+function Title({ engine, sport }: { engine: Engine; sport: Sport }) {
   return (
     <div className="flex flex-col gap-1">
       <h1 className="text-3xl font-extrabold uppercase tracking-tight">
         Engine <span className="gradient-text">Snapshot</span>
       </h1>
-      <span className="label-caption">Performance history · {engine.toUpperCase()} · college game model</span>
+      <span className="label-caption">
+        Performance history · {engine.toUpperCase()} ·{" "}
+        {sport === "nfl" ? "NFL fantasy model" : "college game model"}
+      </span>
     </div>
   );
 }

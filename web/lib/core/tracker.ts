@@ -14,13 +14,19 @@
  * RULE PLAYS ARE A THIRD ENGINE, `rules` (2026-10-09, migration 0091): the
  * client's line-gap rules. They get a card of their own on the v2 page (the
  * user's choice) and are never pooled into v2's record.
+ *
+ * THE NFL HAS ITS OWN ENGINES, `fantasy` and `fantasy_sheet` (2026-10-14,
+ * migration 0095): the client's fantasy game model, fixed and as his sheet has
+ * it, on his gap rule at the closing line. The NFL tracker leads with the fixed
+ * one and gives the original a card of its own, never pooled.
  */
 
 import { slateDayKey } from "./slate-days.ts";
 import { spreadSideLabel, totalSideLabel } from "./game-lines.ts";
+import { SPREAD_GAP as FANTASY_SPREAD_GAP, TOTAL_GAP as FANTASY_TOTAL_GAP } from "./fantasy-view.ts";
 import { isTopTier, reasonLabel, RULES_SUMMARY } from "./rule-plays.ts";
 
-export type Engine = "v1" | "v2" | "rules";
+export type Engine = "v1" | "v2" | "rules" | "fantasy" | "fantasy_sheet";
 export const ENGINES: readonly Engine[] = ["v2", "v1"];
 export const DEFAULT_ENGINE: Engine = "v2";
 
@@ -29,6 +35,8 @@ export const ENGINE_SINCE: Record<Engine, string> = {
   v1: "Sep 24, 2026",
   v2: "Oct 8, 2026",
   rules: "Oct 9, 2026",
+  fantasy: "Oct 15, 2026",
+  fantasy_sheet: "Oct 15, 2026",
 };
 
 export type TrackerResult = "win" | "loss" | "push" | "pending";
@@ -139,7 +147,7 @@ export function record(picks: TrackerPick[]): Record_ {
   };
 }
 
-export type CardKey = "spreads" | "totals" | "edge" | "h2h" | "rules";
+export type CardKey = "spreads" | "totals" | "edge" | "h2h" | "rules" | "sheet";
 
 export interface Card {
   key: CardKey;
@@ -166,7 +174,10 @@ export function isEdgePlay(p: TrackerPick): boolean {
 /** Which picks a card counts; the page's list filters by the same rule. */
 export function cardFilter(key: CardKey): (p: TrackerPick) => boolean {
   if (key === "rules") return (p) => p.engine === "rules";
-  return key === "edge" ? isEdgePlay : (p) => p.engine !== "rules" && p.market === key;
+  if (key === "sheet") return (p) => p.engine === "fantasy_sheet";
+  return key === "edge"
+    ? isEdgePlay
+    : (p) => p.engine !== "rules" && p.engine !== "fantasy_sheet" && p.market === key;
 }
 
 /**
@@ -176,12 +187,37 @@ export function cardFilter(key: CardKey): (p: TrackerPick) => boolean {
  */
 export function resolveCardKey(raw: string | undefined, engine: Engine): CardKey | null {
   const valid: CardKey[] =
-    engine === "v1" ? ["spreads", "totals", "edge", "h2h"] : ["spreads", "totals", "edge", "rules"];
+    engine === "v1"
+      ? ["spreads", "totals", "edge", "h2h"]
+      : engine === "fantasy"
+        ? ["spreads", "totals", "sheet"]
+        : ["spreads", "totals", "edge", "rules"];
   return valid.includes(raw as CardKey) ? (raw as CardKey) : null;
 }
 
 export function cards(picks: TrackerPick[], engine: Engine): Card[] {
   const of = (filter: (p: TrackerPick) => boolean) => record(picks.filter(filter));
+  if (engine === "fantasy") {
+    // His gap rule only: no edge tier, no moneyline.
+    return [
+      {
+        key: "spreads",
+        title: "Spread",
+        tag: "ATS",
+        emoji: "📊",
+        rule: `${FANTASY_SPREAD_GAP}+ pts off the closing line`,
+        record: of(cardFilter("spreads")),
+      },
+      {
+        key: "totals",
+        title: "Over/Under",
+        tag: "O/U",
+        emoji: "🎯",
+        rule: `${FANTASY_TOTAL_GAP}+ pts off the closing line`,
+        record: of(cardFilter("totals")),
+      },
+    ];
+  }
   const out: Card[] = [
     {
       key: "spreads",
@@ -246,9 +282,32 @@ export function ruleCard(picks: TrackerPick[]): Card {
   };
 }
 
-/** A rule play's reason, for the graded list: "Ours WKU -6.9 · 4.4 pts off". */
+/**
+ * The fantasy model's original sheet, graded beside the fixed version
+ * (`fantasy_sheet`): one record, then spread and total.
+ */
+export function sheetCard(picks: TrackerPick[]): Card {
+  const sheet = picks.filter((p) => p.engine === "fantasy_sheet");
+  const of = (filter: (p: TrackerPick) => boolean) => record(sheet.filter(filter));
+  return {
+    key: "sheet",
+    title: "Original sheet",
+    tag: "SHEET",
+    emoji: "📄",
+    rule: `The formula exactly as the sheet has it · spread ${FANTASY_SPREAD_GAP}+ · total ${FANTASY_TOTAL_GAP}+`,
+    record: record(sheet),
+    breakdown: [
+      { label: "Spread", record: of((p) => p.market === "spreads") },
+      { label: "Total", record: of((p) => p.market === "totals") },
+    ],
+  };
+}
+
+/** Why a gap pick was made, for the graded list: "Ours WKU -6.9 · 4.4 pts off". */
 export function ruleReason(p: TrackerPick): string | null {
-  return p.engine === "rules" ? reasonLabel(p) : null;
+  return p.engine === "rules" || p.engine === "fantasy" || p.engine === "fantasy_sheet"
+    ? reasonLabel(p)
+    : null;
 }
 
 /** "LIB -14", "Over 52.5", "LIB ML". */

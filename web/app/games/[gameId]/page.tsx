@@ -7,6 +7,7 @@ import { GameLive } from "@/components/live/game-live";
 import { BookOddsPanel } from "@/components/games/book-odds-panel";
 import { CoachPanel } from "@/components/games/coach-panel";
 import { EvWagersPanel } from "@/components/games/ev-wagers-panel";
+import { FantasyPanel } from "@/components/games/fantasy-panel";
 import { MatchupGrid } from "@/components/games/matchup-grid";
 import { ModelLinePanel } from "@/components/games/model-line-panel";
 import { RecordsPanel } from "@/components/games/records-panel";
@@ -27,7 +28,9 @@ import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import { isSupabaseConfigured } from "@/lib/core/env";
 import { formatCount, formatKickoff, formatVenue } from "@/lib/core/format";
 import { currentCoach, summarizeCoach } from "@/lib/core/coach";
+import { chooseBook } from "@/lib/core/fantasy-view";
 import { favourite, gameMatchups } from "@/lib/core/game-view";
+import { spreadLabel } from "@/lib/core/game-lines";
 import { hasKickedOff } from "@/lib/core/kickoff";
 import { LIVE_SPORTS } from "@/lib/core/live";
 import { shareGameFileName, shareGameTitle } from "@/lib/core/share-game";
@@ -37,6 +40,7 @@ import { getTeamStrength } from "@/lib/data/team-strength";
 import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
 import { getEvWagers } from "@/lib/data/ev";
+import { getFantasyGame } from "@/lib/data/fantasy";
 import { getLiveScores } from "@/lib/data/live";
 import {
   getEarliestSeason,
@@ -127,6 +131,7 @@ export default async function GamePage({
     roster,
     evWagers,
     liveRows,
+    fantasy,
   ] = await Promise.all([
     getDefenseRatings(game.season, game.week, game.sport),
     // Joins the existing wave rather than forming its own. A wave costs one
@@ -148,6 +153,10 @@ export default async function GamePage({
     getStartersAndInjuries(game.season, game.week, [game.homeTeamId, game.awayTeamId]),
     getEvWagers([gameId]),
     LIVE_SPORTS.includes(game.sport) && !game.completed ? getLiveScores([gameId]) : [],
+    // The client's fantasy game model is NFL-only (phase F3).
+    game.sport === "nfl"
+      ? getFantasyGame(gameId, game.season, game.week, [game.homeTeamId, game.awayTeamId])
+      : null,
   ]);
 
   // +EV rows are the last capture's prices: an offer before kickoff, history
@@ -162,6 +171,14 @@ export default async function GamePage({
 
   const matchups = gameMatchups(game, ratings);
   const line = favourite(game);
+  // CFBD's consensus is college-only. An NFL game's header shows the book the
+  // fantasy panel measures against (Pinnacle, then DraftKings, then FanDuel),
+  // from our own capture, so the two never disagree.
+  const nflSpread = game.sport === "nfl" ? chooseBook(bookOdds, "spreads") : null;
+  const nflTotal = game.sport === "nfl" ? chooseBook(bookOdds, "totals") : null;
+  const nflBooks = new Set(
+    bookOdds.filter((o) => o.period === "full").map((o) => o.sportsbookKey),
+  ).size;
   const venue = formatVenue({
     name: game.venueName,
     city: game.venueCity,
@@ -232,21 +249,37 @@ export default async function GamePage({
         ) : null}
 
         <div className="border-border-subtle flex flex-wrap items-baseline gap-x-6 gap-y-2 border-t pt-3">
-          <Stat label="Spread">
-            {line
-              ? line.points === 0
-                ? "Pick'em"
-                : `${line.abbreviation ?? line.school} -${line.points.toFixed(1)}`
-              : "Not priced"}
-          </Stat>
-          <Stat label="Total">
-            {game.gameTotal !== null ? game.gameTotal.toFixed(1) : "—"}
-          </Stat>
-          <Stat label="Books">
-            {game.gameLineProviders !== null && game.gameLineProviders > 0
-              ? formatCount(game.gameLineProviders)
-              : "—"}
-          </Stat>
+          {game.sport === "nfl" ? (
+            <>
+              <Stat label="Spread">
+                {spreadLabel(
+                  nflSpread?.line ?? null,
+                  game.homeAbbreviation ?? game.homeSchool,
+                  game.awayAbbreviation ?? game.awaySchool,
+                ) ?? "Not priced"}
+              </Stat>
+              <Stat label="Total">{nflTotal?.line != null ? nflTotal.line.toFixed(1) : "—"}</Stat>
+              <Stat label="Books">{nflBooks > 0 ? formatCount(nflBooks) : "—"}</Stat>
+            </>
+          ) : (
+            <>
+              <Stat label="Spread">
+                {line
+                  ? line.points === 0
+                    ? "Pick'em"
+                    : `${line.abbreviation ?? line.school} -${line.points.toFixed(1)}`
+                  : "Not priced"}
+              </Stat>
+              <Stat label="Total">
+                {game.gameTotal !== null ? game.gameTotal.toFixed(1) : "—"}
+              </Stat>
+              <Stat label="Books">
+                {game.gameLineProviders !== null && game.gameLineProviders > 0
+                  ? formatCount(game.gameLineProviders)
+                  : "—"}
+              </Stat>
+            </>
+          )}
           <Stat label="Props">{formatCount(game.projections)}</Stat>
           <Stat label="With a call">{formatCount(game.calls)}</Stat>
         </div>
@@ -277,13 +310,22 @@ export default async function GamePage({
             are. These are CFBD's consensus; the game model's numbers and its
             edge against one book (CLAUDE.md §11) are in their own panel
             below, so a reader never has to guess which line is whose. */}
-        <p className="text-dim text-[0.6875rem]">
-          The spread and total are the median across{" "}
-          {game.gameLineProviders ?? 0} sportsbook
-          {game.gameLineProviders === 1 ? "" : "s"}, ingested from
-          CollegeFootballData. They are the market&rsquo;s numbers. The game
-          model&rsquo;s fair line and edge are in its panel below.
-        </p>
+        {game.sport === "nfl" ? (
+          <p className="text-dim text-[0.6875rem]">
+            The spread and total are{" "}
+            {nflSpread?.sportsbookName ?? nflTotal?.sportsbookName ?? "the book"}&rsquo;s
+            current line, the book the fantasy model is measured against. Every
+            book&rsquo;s price is further down the page.
+          </p>
+        ) : (
+          <p className="text-dim text-[0.6875rem]">
+            The spread and total are the median across{" "}
+            {game.gameLineProviders ?? 0} sportsbook
+            {game.gameLineProviders === 1 ? "" : "s"}, ingested from
+            CollegeFootballData. They are the market&rsquo;s numbers. The game
+            model&rsquo;s fair line and edge are in its panel below.
+          </p>
+        )}
       </header>
 
       {/* Above the matchups on purpose. Conditions are one glance and they
@@ -292,13 +334,28 @@ export default async function GamePage({
           deep-dive and reads slower, so it follows. */}
       {/* The game model's panels (CLAUDE.md §11). Its fair line first,
           labelled and with no call (G4), then the market's prices by book. */}
-      <ModelLinePanel
-        projection={projections.get(gameId) ?? null}
-        home={game.homeAbbreviation ?? game.homeSchool}
-        away={game.awayAbbreviation ?? game.awaySchool}
-        completed={game.completed}
-        edgeThreshold={config.edgeThreshold}
-      />
+      {/* The NFL's model is the client's fantasy game model (phase F3); the
+          college game model never projects an NFL game, so its panel would
+          only ever say "not projected". */}
+      {fantasy ? (
+        <FantasyPanel
+          projections={fantasy.projections}
+          lineups={fantasy.lineups}
+          odds={bookOdds}
+          home={game.homeAbbreviation ?? game.homeSchool}
+          away={game.awayAbbreviation ?? game.awaySchool}
+          homeTeamId={game.homeTeamId}
+          awayTeamId={game.awayTeamId}
+        />
+      ) : (
+        <ModelLinePanel
+          projection={projections.get(gameId) ?? null}
+          home={game.homeAbbreviation ?? game.homeSchool}
+          away={game.awayAbbreviation ?? game.awaySchool}
+          completed={game.completed}
+          edgeThreshold={config.edgeThreshold}
+        />
+      )}
 
       <SharpRetailPanel
         summary={summaries.get(gameId)}

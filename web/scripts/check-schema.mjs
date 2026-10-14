@@ -204,6 +204,15 @@ const EXPECTED = {
     "game_id", "period", "market", "sportsbook_id", "side", "line", "price",
     "link", "event_link", "captured_at",
   ],
+  // The client's NFL fantasy game model on the game page (migrations 0093-0094).
+  fantasy_game_projections: [
+    "game_id", "model_version", "away_score", "home_score", "total", "home_margin",
+    "p_home_win", "away_fantasy", "home_fantasy", "inputs_as_of_week", "made_at",
+  ],
+  fantasy_lineups: [
+    "season", "week", "team_id", "slot", "player_name", "fantasy_points",
+    "points_source", "picked_by", "skipped",
+  ],
   // +EV wagers on the game page and the slate (migration 0087).
   game_ev_wagers: [
     "game_id", "period", "market", "sportsbook_id", "side", "line", "price",

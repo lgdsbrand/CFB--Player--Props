@@ -8,7 +8,7 @@ team and ours disagree, so it gets its own tests.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from worker.adapters.odds.base import GameBookMarket, GameOutcome
 from worker.adapters.odds.theoddsapi import (
@@ -17,7 +17,7 @@ from worker.adapters.odds.theoddsapi import (
     parse_game_odds,
 )
 from worker.core.name_match import TeamResolver
-from worker.jobs.ingest_game_odds import orient, side_resolver
+from worker.jobs.ingest_game_odds import buy_reason, orient, side_resolver
 
 TEAMS = [
     {"id": 10, "school": "Georgia", "mascot": "Bulldogs", "alt_name": None},
@@ -181,3 +181,60 @@ def test_price_key_ignores_timestamps_and_float_noise():
     a, _ = orient(m1, _fixed({}))
     b, _ = orient(m2, _fixed({}))
     assert a.price_key() == b.price_key()
+
+
+# --- Open-and-close mode (NFL, `--close-window-minutes`) ---------------------
+
+NOW = datetime(2026, 10, 18, 16, 20, tzinfo=UTC)   # a Sunday, 12:20 ET
+WINDOW = timedelta(minutes=90)
+EARLY = datetime(2026, 10, 18, 17, 0, tzinfo=UTC)  # 1:00 ET
+LATE = datetime(2026, 10, 18, 20, 25, tzinfo=UTC)  # 4:25 ET
+
+
+def test_a_game_in_the_window_not_captured_inside_it_buys_its_close():
+    reason = buy_reason([(1, EARLY), (2, LATE)], {1: NOW - timedelta(hours=20),
+                        2: NOW - timedelta(hours=20)}, {1, 2}, NOW, WINDOW)
+    assert reason is not None and reason.startswith("closing: game 1")
+
+
+def test_a_game_already_captured_inside_its_window_does_not_buy_again():
+    # The 15:40 run (inside 90 minutes of a 17:00 kickoff) already took the close.
+    captured = NOW - timedelta(minutes=40)
+    assert buy_reason([(1, EARLY)], {1: captured}, {1}, NOW, WINDOW) is None
+
+
+def test_one_buy_covers_a_whole_kickoff_window():
+    # At 19:20 both late games (20:05, 20:25) are inside 90 minutes; after that
+    # one buy, the 20:20 run finds nothing due.
+    at_1920 = datetime(2026, 10, 18, 19, 20, tzinfo=UTC)
+    first_late = datetime(2026, 10, 18, 20, 5, tzinfo=UTC)
+    games = [(3, first_late), (2, LATE)]
+    assert buy_reason(games, {}, {2, 3}, at_1920, WINDOW) is not None
+    after = {3: at_1920, 2: at_1920}
+    assert buy_reason(games, after, {2, 3}, at_1920 + timedelta(hours=1), WINDOW) is None
+
+
+def test_a_game_outside_the_window_waits():
+    assert buy_reason([(2, LATE)], {2: NOW - timedelta(hours=20)}, {2}, NOW, WINDOW) is None
+
+
+def test_a_never_priced_game_this_week_buys_its_opener():
+    tuesday = datetime(2026, 10, 20, 14, 20, tzinfo=UTC)
+    thursday = datetime(2026, 10, 23, 0, 15, tzinfo=UTC)
+    reason = buy_reason([(9, thursday)], {}, set(), tuesday, WINDOW)
+    assert reason == "opening: game 9 has no price yet"
+
+
+def test_an_opener_alone_buys_at_most_twice_a_day():
+    # A game no book prices yet must not buy 9 credits every hour.
+    tuesday = datetime(2026, 10, 20, 14, 20, tzinfo=UTC)
+    thursday = datetime(2026, 10, 23, 0, 15, tzinfo=UTC)
+    recent = {5: tuesday - timedelta(hours=3)}
+    assert buy_reason([(9, thursday), (5, thursday)], recent, {5}, tuesday, WINDOW) is None
+    older = {5: tuesday - timedelta(hours=13)}
+    assert buy_reason([(9, thursday), (5, thursday)], older, {5}, tuesday, WINDOW) is not None
+
+
+def test_a_game_beyond_the_week_does_not_buy_an_opener():
+    far = NOW + timedelta(days=20)
+    assert buy_reason([(7, far)], {}, set(), NOW, WINDOW) is None

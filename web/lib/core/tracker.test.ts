@@ -15,6 +15,7 @@ import {
   ruleReason,
   resolveEngine,
   resolvePeriod,
+  sheetCard,
   type TrackerPick,
 } from "./tracker.ts";
 
@@ -157,4 +158,26 @@ test("rule plays have their own card, never inside v2's", () => {
   assert.equal([v2, ...rules].filter(cardFilter("rules")).length, 4);
   assert.equal(ruleReason(rules[0]), "Ours LIB -6.9 · 4.4 pts off");
   assert.equal(ruleReason(v2), null);
+});
+
+test("the NFL's fantasy engines: fixed on the market cards, the original sheet on its own", () => {
+  const fixed = pick({ engine: "fantasy", market: "spreads", result: "win", units: 0.91 });
+  const sheet = pick({ engine: "fantasy_sheet", market: "spreads", result: "loss", units: -1 });
+  const sheetTotal = pick({ engine: "fantasy_sheet", market: "totals", result: "win", units: 0.95 });
+  const fantasyCards = cards([fixed], "fantasy");
+  assert.deepEqual(fantasyCards.map((c) => c.key), ["spreads", "totals"]);
+  assert.equal(fantasyCards[0].record.wins, 1);
+  // Never pooled: the spreads filter does not count the sheet's spread.
+  assert.equal([fixed, sheet].filter(cardFilter("spreads")).length, 1);
+  const card = sheetCard([fixed, sheet, sheetTotal]);
+  assert.equal(card.record.wins, 1);
+  assert.equal(card.record.losses, 1);
+  assert.deepEqual(card.breakdown?.map((b) => [b.label, b.record.wins, b.record.losses]), [
+    ["Spread", 0, 1],
+    ["Total", 1, 0],
+  ]);
+  assert.equal(resolveCardKey("sheet", "fantasy"), "sheet");
+  assert.equal(resolveCardKey("edge", "fantasy"), null);
+  assert.equal(resolveCardKey("sheet", "v2"), null);
+  assert.match(ruleReason({ ...fixed, modelLine: -7.5, gap: 4 }) ?? "", /4\.0 pts off/);
 });

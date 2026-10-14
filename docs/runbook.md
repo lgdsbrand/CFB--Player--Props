@@ -277,13 +277,23 @@ python -m worker.jobs.build_splits --seasons 2024
 **Monitored:** all four at `max_age_hours=200`; `ingest_stats` and `build_splits`
 critical.
 
-#### `ingest_game_odds` — Sun/Tue/Thu/Fri 23:00 UTC, Saturday 15:00/19:00/23:00 UTC
+#### `ingest_game_odds` — college Sun/Tue/Thu/Fri 23:00 UTC, Saturday 15:00/19:00/23:00 UTC; NFL hourly at :20
 
 ```bash
-python -m worker.jobs.ingest_game_odds              # what both crons run
+python -m worker.jobs.ingest_game_odds              # what both college crons run
 python -m worker.jobs.ingest_game_odds --dry-run    # SPENDS 9 credits, writes nothing
 python -m worker.jobs.ingest_game_odds --paid       # bill the paid pool instead
+python -m worker.jobs.ingest_game_odds --sport nfl --paid --close-window-minutes 90
+                                                    # the NFL, chained on nfl-props-odds-refresh
 ```
+
+**The NFL runs open-and-close** (since 2026-10-14, for the fantasy game
+model). Each hourly run reads the free event list and makes the 9-credit bulk
+call only when a game kicks off within 90 minutes and was not captured inside
+them, or a game in the next 8 days has no price yet (at most once per 12
+hours). The log's `decision` line says which, or "nothing due, no call made";
+most runs make no call and that is healthy. ~55 credits a week, paid pool.
+The monitor checks the two sports separately.
 
 The game model's odds capture (CLAUDE.md §11). Moneyline, spread and total
 from retail books, Pinnacle (`eu`) and the exchanges (`us_ex`) in ONE bulk
@@ -1127,6 +1137,30 @@ numbers. Four steps, in order:
 
 **Monitored:** 36h. No keys, no credits; eight ~0.8 MB pages and the
 play-by-play file a run.
+
+#### `nfl_fantasy_picks` — hourly at :20, last in `nfl-props-odds-refresh`
+
+```bash
+python -m worker.jobs.nfl_fantasy_picks              # what the chain runs (90-minute window)
+python -m worker.jobs.nfl_fantasy_picks --dry-run    # compute, write nothing
+```
+
+The fantasy game model's picks (migration 0095), graded on the NFL tracker.
+For each NFL game kicking off in the next 90 minutes, both versions of the
+formula against the closing capture `ingest_game_odds` made a moment earlier
+in the same chain, on the client's gap rule: **spread 4+ points, total 6+**,
+against Pinnacle, then DraftKings, then FanDuel (`core/fantasy_picks.py`).
+Engines `fantasy` (fixed) and `fantasy_sheet` (his sheet as-is), never pooled.
+
+- **Once per game, engine and market.** A made pick is never revisited.
+- **No closing capture, no pick.** A game whose odds were not captured inside
+  the window is skipped and counted, not picked against its week-old opener.
+- **`model_prob` is his 0.23 logistic on the points past the line**, his own
+  scale, not a calibrated probability (4 points reads 72%). Selection and
+  grading are by points and results.
+- No moneyline picks (spread and total were approved).
+
+**Monitored:** 3h, `nfl` — most runs find no game in the window and still log.
 
 #### `build_usage_shares`
 

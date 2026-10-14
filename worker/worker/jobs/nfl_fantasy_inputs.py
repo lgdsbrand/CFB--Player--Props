@@ -1,18 +1,21 @@
-"""Inputs of the client's NFL fantasy game model (migration 0093, phase F1).
+"""The client's NFL fantasy game model: its inputs and its projections.
 
     python -m worker.jobs.nfl_fantasy_inputs --current
     python -m worker.jobs.nfl_fantasy_inputs --current --dry-run
     python -m worker.jobs.nfl_fantasy_inputs --seasons 2025 --steps inputs
 
-Three steps, in this order (details in adapters/nflverse/fantasy_model.py):
+Four steps, in this order (details in adapters/nflverse/fantasy_model.py):
 
-  inputs       fantasy_team_inputs, every week of the season, rebuilt.
-  projections  CBS's projections for each team's next game.
-  lineups      each team's five starters for its next game.
+  inputs       fantasy_team_inputs, every week of the season, rebuilt (0093).
+  projections  CBS's projections for each team's next game (0093).
+  lineups      each team's five starters for its next game (0093).
+  model        fantasy_game_projections, both versions of the formula, for
+               every game not yet kicked off (0094, core/fantasy_model.py).
 
-`projections` and `lineups` are snapshots of NOW, so they run on the current
-season only; `inputs` can rebuild any season. Run after the NFL results
-chain, so the day's play-by-play, depth charts and injuries are in.
+`projections`, `lineups` and `model` work on what has not kicked off, so they
+run on the current season only; `inputs` can rebuild any season. Run after
+the NFL results chain, so the day's play-by-play, depth charts and injuries
+are in. The job keeps its F1 name so the Render cron's command is unchanged.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from worker.adapters.nflverse.fantasy_model import (
     build_lineups,
     build_team_inputs,
     capture_projections,
+    run_model,
 )
 from worker.adapters.nflverse.ingest_reference import NflReferenceCounts
 from worker.adapters.nflverse.mapping import LIVE_MAX_AGE, SPORT
@@ -36,8 +40,8 @@ from worker.logging_setup import configure_logging, get_logger
 log = get_logger(__name__)
 
 JOB_NAME = "nfl_fantasy_inputs"
-STEPS = ("inputs", "projections", "lineups")
-SNAPSHOT_STEPS = frozenset({"projections", "lineups"})
+STEPS = ("inputs", "projections", "lineups", "model")
+SNAPSHOT_STEPS = frozenset({"projections", "lineups", "model"})
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -76,22 +80,31 @@ def main(argv: list[str] | None = None) -> int:
     counts = NflReferenceCounts()
 
     def run(season: int) -> int:
+        # A dry run writes nothing, so each later step reads what the earlier
+        # steps computed instead of the database.
         written = 0
-        projections = None
+        inputs = projections = lineups = None
         if "inputs" in steps:
-            written += len(build_team_inputs(
+            inputs = build_team_inputs(
                 nflverse, season, max_age=LIVE_MAX_AGE, dry_run=args.dry_run
-            ))
+            )
+            written += len(inputs)
         if "projections" in steps:
             projections = capture_projections(
                 cbs, nflverse, season, counts, max_age=LIVE_MAX_AGE, dry_run=args.dry_run
             )
             written += len(projections)
         if "lineups" in steps:
-            written += len(build_lineups(
+            lineups = build_lineups(
                 season, counts, dry_run=args.dry_run,
-                # A dry run wrote nothing, so the lineups read what it fetched.
                 projections=projections if args.dry_run else None,
+            )
+            written += len(lineups)
+        if "model" in steps:
+            written += len(run_model(
+                season, counts, dry_run=args.dry_run,
+                lineups=lineups if args.dry_run else None,
+                inputs=inputs if args.dry_run else None,
             ))
         return written
 

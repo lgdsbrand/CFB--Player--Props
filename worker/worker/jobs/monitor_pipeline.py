@@ -377,7 +377,8 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
         max_age_hours=36,
         sport="nfl",
         note="09:40 and 15:40 UTC, after the NFL results chain -- the fantasy game "
-             "model's CBS projections, starters and team numbers (migration 0093). "
+             "model's CBS projections, starters, team numbers (migration 0093) and "
+             "its projected scores (0094). "
              "A warning, but a costly one: CBS keeps no history, so a week with "
              "no successful run before kickoff has no projections, ever.",
     ),

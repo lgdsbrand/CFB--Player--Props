@@ -27,6 +27,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import polars as pl
+from psycopg.types.json import Jsonb
 
 from worker.adapters.cbs.client import CbsClient
 from worker.adapters.cbs.projections import build_rows as projection_rows
@@ -36,6 +37,7 @@ from worker.adapters.nflverse.mapping import SPORT, canonical_team
 from worker.adapters.sleeper.ingest_injuries import RosterBridge
 from worker.core.fantasy_inputs import FinalScore, inputs_as_of, round_row
 from worker.core.fantasy_lineup import DepthQB, Projected, pick_lineup
+from worker.core.fantasy_model import VERSIONS, Side, project
 from worker.core.team_weeks import open_team_weeks, replace_team_weeks
 from worker.db import execute, fetch_all, upsert
 from worker.logging_setup import get_logger
@@ -45,6 +47,7 @@ log = get_logger(__name__)
 INPUTS_TABLE = "fantasy_team_inputs"
 PROJECTIONS_TABLE = "fantasy_projections"
 LINEUPS_TABLE = "fantasy_lineups"
+PROJECTIONS_OUT_TABLE = "fantasy_game_projections"
 
 #: Last regular-season week. Inputs are written for as_of_week up to one past
 #: it, so week 18's game has a row; postseason is out of the sheet's scope.
@@ -325,6 +328,157 @@ def build_lineups(
     return rows
 
 
+# -----------------------------------------------------------------------------
+# 4. the model (phase F2, migration 0094)
+# -----------------------------------------------------------------------------
+_SIDE_FIELDS = (
+    "third_down_pct", "opp_third_down_pct", "red_zone_pct", "opp_red_zone_pct",
+    "srs", "massey_off", "massey_def", "home_field", "off_epa_play", "def_epa_play",
+    "off_epa_total", "def_epa_total", "plays_pg",
+)
+
+
+def side_from(inputs: Mapping[str, Any], fantasy_total: float) -> Side | None:
+    """A formula Side from one fantasy_team_inputs row; None if a figure is missing."""
+    if any(inputs.get(f) is None for f in _SIDE_FIELDS):
+        return None
+    v = {f: float(inputs[f]) for f in _SIDE_FIELDS}
+    return Side(
+        fantasy_total=fantasy_total,
+        third_down_pct=v["third_down_pct"],
+        opp_third_down_pct=v["opp_third_down_pct"],
+        red_zone_pct=v["red_zone_pct"],
+        opp_red_zone_pct=v["opp_red_zone_pct"],
+        fpi=v["srs"],
+        massey_off=v["massey_off"],
+        massey_def=v["massey_def"],
+        massey_hfa=v["home_field"],
+        off_epa_play=v["off_epa_play"],
+        def_epa_play=v["def_epa_play"],
+        off_epa_total=v["off_epa_total"],
+        def_epa_total=v["def_epa_total"],
+        plays_pg=v["plays_pg"],
+    )
+
+
+def game_projection_rows(
+    games: list[Mapping[str, Any]],
+    inputs: Mapping[tuple[int, int], Mapping[str, Any]],
+    fantasy: Mapping[tuple[int, int], float],
+    counts: Any,
+) -> list[dict[str, Any]]:
+    """fantasy_game_projections rows, both versions, for every game with full inputs.
+
+    `inputs` is keyed (team_id, as_of_week); `fantasy` (team_id, week) -> the
+    five starters' summed points.
+    """
+    rows: list[dict[str, Any]] = []
+    for g in games:
+        week = int(g["week"])
+        sides = []
+        for team in (int(g["away_team_id"]), int(g["home_team_id"])):
+            total = fantasy.get((team, week))
+            row = inputs.get((team, week))
+            if total is None:
+                counts.skip("model: team has no lineup for the week")
+                sides.append(None)
+                continue
+            if row is None:
+                counts.skip("model: team has no inputs for the week")
+                sides.append(None)
+                continue
+            side = side_from(row, total)
+            if side is None:
+                counts.skip("model: a team figure is missing")
+            sides.append(side)
+        away, home = sides
+        if away is None or home is None:
+            continue
+        for version in VERSIONS:
+            p = project(away, home, version)
+            rows.append({
+                "game_id": int(g["id"]),
+                "model_version": version,
+                "season": int(g["season"]),
+                "week": week,
+                "away_score": round(p.away_score, 2),
+                "home_score": round(p.home_score, 2),
+                "total": round(p.total, 2),
+                "home_margin": p.home_margin,
+                "p_home_win": round(p.p_home_win, 5),
+                "away_fantasy": round(away.fantasy_total, 1),
+                "home_fantasy": round(home.fantasy_total, 1),
+                "away_terms": Jsonb({k: round(v, 4) for k, v in p.away_terms.items()}),
+                "home_terms": Jsonb({k: round(v, 4) for k, v in p.home_terms.items()}),
+                "inputs_as_of_week": week,
+            })
+    return rows
+
+
+def run_model(
+    season: int,
+    counts: Any,
+    *,
+    now: datetime | None = None,
+    lineups: list[Mapping[str, Any]] | None = None,
+    inputs: list[Mapping[str, Any]] | None = None,
+    dry_run: bool = False,
+) -> list[dict[str, Any]]:
+    """Project every NFL game of the season that has not kicked off. Returns the rows.
+
+    `lineups` and `inputs` let a dry run hand over rows it did not write.
+    """
+    now = now or datetime.now(UTC)
+    games = fetch_all(
+        """
+        select id, season, week, home_team_id, away_team_id
+          from games
+         where sport = %s and season = %s and start_date > %s and week <= %s
+        """,
+        (SPORT, season, now, LAST_REGULAR_WEEK),
+    )
+    if not games:
+        return []
+    weeks = sorted({int(g["week"]) for g in games})
+    if lineups is None:
+        lineups = fetch_all(
+            f"select team_id, week, fantasy_points from {LINEUPS_TABLE} "
+            "where season = %s and week = any(%s)",
+            (season, weeks),
+        )
+    if inputs is None:
+        inputs = fetch_all(
+            f"select * from {INPUTS_TABLE} where season = %s and as_of_week = any(%s)",
+            (season, weeks),
+        )
+    fantasy: dict[tuple[int, int], float] = {}
+    for r in lineups:
+        key = (int(r["team_id"]), int(r["week"]))
+        fantasy[key] = fantasy.get(key, 0.0) + float(r["fantasy_points"])
+    by_team_week = {
+        (int(r["team_id"]), int(r["as_of_week"])): r
+        for r in inputs if int(r["season"]) == season
+    }
+    # Lineups exist for each team's NEXT game only, so a game further out
+    # (or one whose opponent is on a bye this week) waits for a later run.
+    games = [
+        g for g in games
+        if (int(g["away_team_id"]), int(g["week"])) in fantasy
+        and (int(g["home_team_id"]), int(g["week"])) in fantasy
+    ]
+    rows = game_projection_rows(games, by_team_week, fantasy, counts)
+    projected = {r["game_id"] for r in rows}
+    log.info(
+        "fantasy model %d: %d game(s) with both lineups in week(s) %s, %d projected "
+        "(both versions)",
+        season, len(games), sorted({int(g["week"]) for g in games}), len(projected),
+    )
+    if not dry_run and rows:
+        upsert(PROJECTIONS_OUT_TABLE, rows, conflict_columns=["game_id", "model_version"])
+        counts.add(PROJECTIONS_OUT_TABLE, len(rows))
+    return rows
+
+
 __all__ = [
     "LAST_REGULAR_WEEK",
     "build_lineups",
@@ -334,4 +488,7 @@ __all__ = [
     "load_final_scores",
     "normalize_plays",
     "player_resolver",
+    "game_projection_rows",
+    "run_model",
+    "side_from",
 ]

@@ -1089,9 +1089,9 @@ python -m worker.jobs.nfl_fantasy_inputs --current --dry-run          # fetch an
 python -m worker.jobs.nfl_fantasy_inputs --seasons 2025 --steps inputs  # rebuild a past season's team numbers
 ```
 
-The inputs of the client's NFL **fantasy game model** (migration 0093), the
-Google Sheet that projects a score from five starters' fantasy projections plus
-team numbers. Three steps, in order:
+The client's NFL **fantasy game model** (migrations 0093-0094), the Google
+Sheet that projects a score from five starters' fantasy projections plus team
+numbers. Four steps, in order:
 
 1. **`inputs`** → `fantasy_team_inputs`: per team, as of before each week,
    3rd-down and red-zone rates both ways, plays per game and EPA (raw season to
@@ -1106,6 +1106,12 @@ team numbers. Three steps, in order:
    its next game: the available players with the highest CBS projection
    (`core/fantasy_lineup.py`), the depth chart only when CBS lists no available
    QB. Needs the day's depth charts and injuries, hence after the 08:20 chain.
+4. **`model`** → `fantasy_game_projections`: the sheet's formula
+   (`core/fantasy_model.py`) on every NFL game not yet kicked off, in two
+   versions: `sheet` (exact, pinned by a test that reproduces the client's
+   sheet to six decimals) and `fixed` (its four faults corrected). A game
+   missing a lineup or a team figure is skipped and counted, never guessed.
+   Rows are rewritten until kickoff and never after.
 
 - **CBS KEEPS NO HISTORY.** A past week's URL answers 200 with the current
   week's table. The job checks every page's title names the week asked and

@@ -139,6 +139,9 @@ PLAN: tuple[TableSpec, ...] = (
                                  "week (0093), frozen at kickoff."),
     TableSpec("fantasy_team_inputs", "The fantasy game model's team numbers (0093). "
                                      "Rebuildable from nflverse in seconds a season."),
+    TableSpec("fantasy_game_projections", "The fantasy game model's projections "
+                                          "(0094). A played game's row is the last "
+                                          "made before kickoff and cannot be rebuilt."),
     TableSpec("markets", "Migration-seeded and identical, but moved so the two "
                          "databases are byte-comparable."),
     TableSpec("market_positions", "Which markets each position group shows."),

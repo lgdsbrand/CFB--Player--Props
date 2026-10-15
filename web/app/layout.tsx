@@ -3,6 +3,7 @@ import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 
 import { SlipDock } from "@/components/slip/slip-dock";
+import { SITE_HOST } from "@/lib/core/site";
 
 /**
  * Inter, measured — not chosen.
@@ -30,6 +31,8 @@ const geistMono = Geist_Mono({
 // `generateMetadata` on every page reading the same search param the page
 // already reads; neutral here is honest and costs nothing.
 export const metadata: Metadata = {
+  // A shared link's preview image names the client's site, not this deployment.
+  ...(SITE_HOST ? { metadataBase: new URL(`https://${SITE_HOST}`) } : {}),
   title: "Player Props · Legends Sports",
   description:
     "Model-derived OVER/UNDER calls with confidence for college football and NFL player props.",

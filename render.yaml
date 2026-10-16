@@ -276,9 +276,13 @@ services:
     buildCommand: pip install -r requirements.txt
     # Then the game model's 1H/1Q lines (capture_game_periods), which need the
     # paid key this service already holds and the same hourly open-and-close.
+    # Last, after `;` so a failed capture cannot stop it, lock_prop_picks
+    # copies the board's calls for games starting soon into the props record
+    # (migration 0096). No API calls.
     startCommand: >-
       python -m worker.jobs.ingest_odds --event-limit 120 --close-window-minutes 60 &&
-      python -m worker.jobs.capture_game_periods
+      python -m worker.jobs.capture_game_periods;
+      python -m worker.jobs.lock_prop_picks --sport cfb
     envVars:
       - fromGroup: cfb-props-worker
 
@@ -462,9 +466,12 @@ services:
   # free key the college game odds and the Q1 capture share. `;`, not `&&`: a
   # failed props capture must not cost the game lines their close.
   #
-  # LAST, THE FANTASY MODEL'S PICKS (migration 0095): for each game in the same
+  # THEN THE FANTASY MODEL'S PICKS (migration 0095): for each game in the same
   # 90 minutes, his gap rule (spread 4+, total 6+) against the close just
   # captured, once per game, market and version. No API calls.
+  #
+  # LAST, lock_prop_picks (migration 0096): the board's prop calls for games
+  # starting soon, copied into the props record. No API calls.
   - type: cron
     name: nfl-props-odds-refresh
     runtime: python
@@ -475,7 +482,8 @@ services:
     startCommand: >-
       python -m worker.jobs.ingest_odds --sport nfl --event-limit 120 --close-window-minutes 60;
       python -m worker.jobs.ingest_game_odds --sport nfl --paid --close-window-minutes 90;
-      python -m worker.jobs.nfl_fantasy_picks --close-window-minutes 90
+      python -m worker.jobs.nfl_fantasy_picks --close-window-minutes 90;
+      python -m worker.jobs.lock_prop_picks --sport nfl
     envVars:
       - fromGroup: cfb-props-worker
 

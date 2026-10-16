@@ -371,6 +371,7 @@ class TestSportGating:
             "ingest_odds",
             "build_usage_shares",
             "ingest_game_odds",
+            "lock_prop_picks",
         ):
             sports = {job.sport for job in MONITORED_JOBS if job.name == name}
             assert sports == set(MONITORED_SPORTS), (
@@ -389,6 +390,7 @@ class TestSportGating:
             "ingest_odds",
             "build_usage_shares",
             "ingest_game_odds",
+            "lock_prop_picks",
         }
         for job in MONITORED_JOBS:
             assert job.sport_scoped == (job.name in shared), (

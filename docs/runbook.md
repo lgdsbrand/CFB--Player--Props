@@ -1162,6 +1162,35 @@ Engines `fantasy` (fixed) and `fantasy_sheet` (his sheet as-is), never pooled.
 
 **Monitored:** 3h, `nfl` — most runs find no game in the window and still log.
 
+#### `lock_prop_picks` — hourly, last in `cfb-props-odds-refresh` (:00) and `nfl-props-odds-refresh` (:20)
+
+```bash
+python -m worker.jobs.lock_prop_picks --sport cfb              # what the chain runs (150-minute window)
+python -m worker.jobs.lock_prop_picks --sport nfl --dry-run    # count what would be locked, write nothing
+```
+
+The props record (migration 0096). `run_projections` rewrites the whole week
+every day, played games included, so `picks` cannot be graded after the fact.
+For each game of the sport kicking off in the next 150 minutes, this copies the
+board's headline row per player-market from `v_board_rows` into
+`prop_pick_locks`: the book the board shows, its line and two-way price, the
+side, the published (calibrated) probability and the edge.
+
+- **The board's last state before kickoff.** Each game is seen two or three
+  times; a later run refreshes a row only when something differs.
+- **Frozen at kickoff by trigger**, like `game_picks`. A game that kicks off
+  mid-run is skipped and counted, never failing the others.
+- **Locked:** real two-way book lines on markets that publish a call. Not
+  anytime TD (one-way, no edge), not first-quarter markets, not the DEV book.
+- **Graded by `v_prop_pick_results`**, a view over the official box score
+  (`v_player_game_log`): pending, void (final but no value for the player's
+  stat), push, win, loss, and units at the price of the side taken. No job.
+- No API calls, no credits. Runs after the capture with `;`, so a failed
+  capture does not stop the lock.
+
+**Monitored:** 3h per sport (`cfb`, `nfl`) — most runs find no game in the
+window and still log.
+
 #### `build_usage_shares`
 
 ```bash

@@ -190,6 +190,11 @@ PLAN: tuple[TableSpec, ...] = (
     # for a move is a decision to make by hand, never a flag on this job.
     TableSpec("game_picks", "Frozen model picks, the shadow test (0078). See "
                             "the note above before moving any."),
+    # Same freeze trigger, same consequence: a move with played games in it
+    # stops loudly here rather than leaving the props record behind.
+    TableSpec("prop_pick_locks", "The props record (0096), frozen at kickoff "
+                                 "like game_picks. IRREPLACEABLE: the picks it "
+                                 "copied are rewritten daily."),
     TableSpec("game_projections", "The game model's fair lines. Rebuildable for "
                                   "games not yet played; a finished game's row is "
                                   "the last pre-kickoff projection and is not."),

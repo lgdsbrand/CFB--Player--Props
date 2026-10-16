@@ -314,6 +314,24 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
              "game in the window and still log, so staleness means the chain "
              "stopped and the week's picks are not being made.",
     ),
+    # One module run per sport with --sport, so scoped like ingest_odds.
+    JobExpectation(
+        name="lock_prop_picks",
+        max_age_hours=3,
+        sport_scoped=True,
+        note="hourly at :00, last in the college props odds chain — copies the "
+             "board's calls into the props record before kickoff (migration "
+             "0096). Most runs find no game in the window and still log; a "
+             "stop means the record silently misses the slate.",
+    ),
+    JobExpectation(
+        name="lock_prop_picks",
+        max_age_hours=3,
+        sport="nfl",
+        sport_scoped=True,
+        note="hourly at :20, last in the NFL odds chain — the NFL half of the "
+             "props record (migration 0096).",
+    ),
     JobExpectation(
         name="nfl_ingest_reference",
         max_age_hours=36,

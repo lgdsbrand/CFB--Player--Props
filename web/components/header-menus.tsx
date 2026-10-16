@@ -203,3 +203,63 @@ export function MoreMenu() {
     </div>
   );
 }
+
+export type ToolItem = { label: string; icon: string; href: string; active: boolean };
+
+/**
+ * "Tools" at the end of our tab row (client, 2026-10-15): the arb calculator,
+ * the slip builder and the slip checker, which were three tabs. Outside the
+ * sideways-scrolling tab row, or the open menu would be clipped by it. Hrefs
+ * arrive already carrying the sport; the button reads as active on a tool page.
+ */
+export function ToolsMenu({ items }: { items: ToolItem[] }) {
+  const root = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useClosable(root);
+  const onTool = items.some((item) => item.active);
+  return (
+    <div ref={root} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className={
+          "flex cursor-pointer items-center gap-1 rounded-lg border px-3 py-1.5 text-[10px] font-black tracking-wider uppercase transition-all duration-200 md:px-4 md:tracking-widest " +
+          (onTool
+            ? "border-blue-500/30 bg-blue-600/20 text-blue-400 shadow-[0_0_12px_rgba(59,130,246,0.15)]"
+            : open
+              ? "border-slate-700 bg-slate-800/60 text-slate-200"
+              : "border-transparent text-slate-400 hover:bg-slate-900/40 hover:text-slate-200")
+        }
+      >
+        <span>🧰</span>
+        <span>Tools</span>
+        <span className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`}>▾</span>
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          className="absolute top-[calc(100%+6px)] right-0 z-50 w-52 rounded-2xl border border-slate-800 bg-slate-950 p-2 shadow-2xl shadow-black/60"
+        >
+          {items.map((item) => (
+            <a
+              key={item.href}
+              href={item.href}
+              role="menuitem"
+              aria-current={item.active ? "page" : undefined}
+              className={
+                "flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-bold tracking-wider uppercase transition-all " +
+                (item.active
+                  ? "bg-blue-600/20 text-blue-400"
+                  : "text-slate-300 hover:bg-slate-900 hover:text-white")
+              }
+            >
+              <span>{item.icon}</span>
+              <span>{item.label}</span>
+            </a>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}

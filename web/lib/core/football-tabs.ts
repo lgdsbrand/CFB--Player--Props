@@ -10,6 +10,9 @@
  * open his site. "Records" on NFL is his model's record; our tracker of the
  * fantasy model's picks is linked from the Fantasy Model page instead. Our
  * Overview page is no longer a tab; it stays at its address.
+ *
+ * The three tools are not tabs but a "Tools" menu at the end of the row
+ * (client, 2026-10-15), on his pages and ours alike.
  */
 
 import { BOARD_PATH } from "./board-params.ts";
@@ -37,14 +40,6 @@ const his = (label: string, icon: string, href: string): FootballTab => ({
   external: true,
 });
 
-// Until the Tools menu takes them (the client's next ask), the three tools
-// keep their own tabs at the end of the row.
-const TOOLS: FootballTab[] = [
-  ours("Builder", "🧱", "/builder"),
-  ours("Check", "✅", "/slip-check"),
-  ours("Arb", "🔀", "/arbitrage"),
-];
-
 export function footballTabs(sport: Sport): FootballTab[] {
   if (sport === "nfl") {
     return [
@@ -54,7 +49,6 @@ export function footballTabs(sport: Sport): FootballTab[] {
       ours("Fantasy Model", "🧮", "/games"),
       ours("Sheets", "📋", "/cheat-sheets"),
       ours("No Vig", "⚖️", "/no-vig"),
-      ...TOOLS,
     ];
   }
   return [
@@ -64,6 +58,12 @@ export function footballTabs(sport: Sport): FootballTab[] {
     ours("Sheets", "📋", "/cheat-sheets"),
     ours("No Vig", "⚖️", "/no-vig"),
     his("Team Analytics", "📊", hisSiteHref("cfb")),
-    ...TOOLS,
   ];
 }
+
+/** The Tools menu, in the client's order. Both leagues; the header adds the sport. */
+export const FOOTBALL_TOOLS: readonly FootballTab[] = [
+  ours("Arb Calculator", "🔀", "/arbitrage"),
+  ours("Slip Builder", "🧱", "/builder"),
+  ours("Slip Check", "✅", "/slip-check"),
+];

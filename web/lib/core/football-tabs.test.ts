@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { BOARD_PATH } from "./board-params.ts";
-import { footballTabs } from "./football-tabs.ts";
+import { FOOTBALL_TOOLS, footballTabs } from "./football-tabs.ts";
 
-const labels = (sport: "cfb" | "nfl") =>
-  footballTabs(sport).filter((t) => !["Builder", "Check", "Arb"].includes(t.label)).map((t) => t.label);
+const labels = (sport: "cfb" | "nfl") => footballTabs(sport).map((t) => t.label);
 
 test("the tabs are the client's, in his order, for each league", () => {
   assert.deepEqual(labels("cfb"), ["Games", "Records", "Player Props", "Sheets", "No Vig", "Team Analytics"]);
@@ -33,4 +32,15 @@ test("Overview is no longer a tab, and NFL's Records is his, not our tracker", (
     assert.ok(!footballTabs(sport).some((t) => t.label === "Overview" || t.href === "/"));
   }
   assert.ok(!footballTabs("nfl").some((t) => t.href === "/tracker"));
+});
+
+test("the tools are a menu of their own, in his order, not tabs", () => {
+  assert.deepEqual(
+    FOOTBALL_TOOLS.map((t) => [t.label, t.href]),
+    [["Arb Calculator", "/arbitrage"], ["Slip Builder", "/builder"], ["Slip Check", "/slip-check"]],
+  );
+  for (const sport of ["cfb", "nfl"] as const) {
+    const hrefs = footballTabs(sport).map((t) => t.href);
+    for (const tool of FOOTBALL_TOOLS) assert.ok(!hrefs.includes(tool.href), tool.label);
+  }
 });

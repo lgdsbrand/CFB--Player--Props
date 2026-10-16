@@ -2,10 +2,11 @@ import Image from "next/image";
 import Link from "next/link";
 
 import legendsLogo from "@/assets/legends-logo.png";
-import { HamburgerMenu, MoreMenu } from "@/components/header-menus";
+import { HamburgerMenu, MoreMenu, ToolsMenu } from "@/components/header-menus";
 import { scopedHref } from "@/lib/core/board-params";
 import { BAR_SPORTS, CLIENT_SITE_ORIGIN, hisInfoHref, hisSiteHref } from "@/lib/core/client-site";
-import { footballTabs } from "@/lib/core/football-tabs";
+import { FOOTBALL_TOOLS, footballTabs } from "@/lib/core/football-tabs";
+import { withBasePath } from "@/lib/core/site";
 import { DEFAULT_SPORT, SPORTS, type Sport } from "@/lib/core/sport";
 
 /**
@@ -166,6 +167,16 @@ export function SiteHeader({
               })}
             </nav>
           </div>
+          {/* The tools, outside the scrolling row so the open menu is not
+              clipped by it. */}
+          <ToolsMenu
+            items={FOOTBALL_TOOLS.map((tool) => ({
+              label: tool.label,
+              icon: tool.icon,
+              href: withBasePath(withSport(tool.href)),
+              active: tool.href === activeHref,
+            }))}
+          />
           {/* Same page, other league. Links, not a control: each option is a
               shareable URL and works without JavaScript. */}
           <nav

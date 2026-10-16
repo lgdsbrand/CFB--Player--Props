@@ -218,8 +218,11 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
     ),
     JobExpectation(
         name="ingest_rankings",
-        max_age_hours=200,
-        note="Sunday 09:00 UTC, chained — polls publish Sunday, one call/season",
+        max_age_hours=36,
+        note="daily 08:00 UTC, last in the results chain (and Sunday 09:00 in the "
+             "weekly one) — polls publish Sunday afternoon, so Monday's run "
+             "loads the week's ranks. Was weekly until 2026-10-16, which ran "
+             "before the polls came out and left every week unranked.",
     ),
     JobExpectation(
         name="poll_live_scores",

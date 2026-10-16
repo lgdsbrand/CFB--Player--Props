@@ -178,6 +178,12 @@ services:
   # 08:00 UTC is 04:00 ET — after the latest west-coast game has settled, and
   # ahead of the 10:00/11:00/12:00 jobs and the 12:30 pricing run, so the board
   # is priced from stats ingested the same morning.
+  #
+  # THE POLLS, LAST (2026-10-16). The weekly chain above loads them at 09:00
+  # UTC on Sunday, before the AP and Coaches polls come out that afternoon, so
+  # the current week's ranks were never loaded: the board's rank chips and the
+  # client's game strip showed no ranks all week. Daily, Monday's run picks up
+  # Sunday's polls. Two CFBD calls; last so a CFBD hiccup costs nothing above.
   - type: cron
     name: cfb-props-ingest-results
     runtime: python
@@ -190,7 +196,8 @@ services:
       python -m worker.jobs.ingest_stats --current --incremental &&
       python -m worker.jobs.build_splits --current &&
       python -m worker.jobs.build_usage_shares --current --sport cfb &&
-      python -m worker.jobs.build_team_strength --current
+      python -m worker.jobs.build_team_strength --current &&
+      python -m worker.jobs.ingest_rankings --live --current
     envVars:
       - fromGroup: cfb-props-worker
 

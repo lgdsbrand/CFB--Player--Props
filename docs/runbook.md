@@ -247,6 +247,12 @@ are season-level from CFBD and cannot serve as point-in-time backtest features.
 **`ingest_rankings`** — `team_poll_rankings`: the AP, Coaches and CFP polls
 that back the board's Top 25 filter. Two CFBD calls per season, no odds credits.
 
+**Also daily, last in the 08:00 UTC results chain (since 2026-10-16).** The
+polls come out on Sunday afternoon, after this 09:00 UTC chain has run, so
+until then the current week's poll was never loaded and every week's games
+showed no ranks (the board's rank chips, the client's game strip). Monday's
+daily run now picks it up. Monitored at 36h.
+
 **Point-in-time with no offset, and that was proven rather than assumed.** CFBD's
 week N poll is the poll published *entering* week N, reflecting games through
 week N-1. Verified against 2025: every ranked team that LOST in week 1 still

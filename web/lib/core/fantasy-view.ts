@@ -24,14 +24,15 @@ import type { BookOdds, OddsMarket } from "./game-lines.ts";
 import { devigFirst, impliedProbability } from "./game-lines.ts";
 
 export type FantasyVersion = "fixed" | "sheet";
-export const FANTASY_VERSIONS: readonly FantasyVersion[] = ["fixed", "sheet"];
-export const DEFAULT_FANTASY_VERSION: FantasyVersion = "fixed";
 
-/** The page is public, so the sheet's version is "Original", not "your sheet". */
-export const FANTASY_VERSION_LABEL: Record<FantasyVersion, string> = {
-  fixed: "Fixed",
-  sheet: "Original",
-};
+/**
+ * ONE MODEL ON SCREEN (client, 2026-10-16). He asked for the fixes to be the
+ * model rather than a second one beside it, so the site shows the fixed version
+ * only: no version switch, no "Original" record. The worker still projects and
+ * grades his sheet as-is (`fantasy_sheet`), out of sight, so whether the fixes
+ * beat his formula can be answered later (user's choice, option A).
+ */
+export const SHOWN_FANTASY_VERSION: FantasyVersion = "fixed";
 
 /** His rule plays' gaps, in points. */
 export const SPREAD_GAP = 4;

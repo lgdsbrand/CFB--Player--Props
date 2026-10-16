@@ -9,7 +9,9 @@ model's number sits far enough from the book's line,
 
 compared in POINTS, the way his sheet's "Edge" column does. Each version of
 the formula (`fantasy_model.VERSIONS`) picks as its own engine, so the fixed
-one and his sheet as-is are graded side by side and never pooled.
+one and his sheet as-is are graded side by side and never pooled. The site
+shows the fixed one only (client, 2026-10-16); the sheet's record is kept so
+the two can still be compared.
 
 THE PROBABILITY RECORDED IS HIS SCALE, NOT A CALIBRATED ONE. `game_picks`
 needs a model probability, and his model has none for a cover. The user chose

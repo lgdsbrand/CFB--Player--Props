@@ -1,20 +1,13 @@
-"use client";
-
-import { useState } from "react";
-
 import { formatAmericanOdds, formatEdge, formatKickoff } from "@/lib/core/format";
 import {
   chooseBook,
-  DEFAULT_FANTASY_VERSION,
-  FANTASY_VERSION_LABEL,
-  FANTASY_VERSIONS,
   moneylineEdge,
   pointsEdge,
+  SHOWN_FANTASY_VERSION,
   SPREAD_GAP,
   TOTAL_GAP,
   teamLineup,
   type FantasyProjection,
-  type FantasyVersion,
   type LineupEntry,
   type PointsEdge,
 } from "@/lib/core/fantasy-view";
@@ -29,10 +22,10 @@ import {
 /**
  * The client's NFL fantasy game model on the game page (phase F3).
  *
- * TWO VERSIONS, ONE TOGGLE (user, 2026-10-14). "Fixed" by default: the
- * formula with its four faults corrected. "Original" is the formula exactly
- * as his sheet has it. Both are projected and both are graded on the tracker,
- * so the toggle only changes which one is read here.
+ * ONE VERSION (client, 2026-10-16): the formula with its four faults
+ * corrected. Until then a toggle also showed "Original", the formula exactly as
+ * his sheet has it; that version is still graded, out of sight
+ * (SHOWN_FANTASY_VERSION).
  *
  * His terms throughout: edges in points against one book's line, a play at
  * his own gaps (spread 4+, total 6+), the win % from his raw 0.23 formula.
@@ -54,8 +47,7 @@ export function FantasyPanel({
   homeTeamId: number;
   awayTeamId: number;
 }) {
-  const [version, setVersion] = useState<FantasyVersion>(DEFAULT_FANTASY_VERSION);
-  const projection = projections.find((p) => p.version === version) ?? null;
+  const projection = projections.find((p) => p.version === SHOWN_FANTASY_VERSION) ?? null;
 
   const spreadQuote = chooseBook(odds, "spreads");
   const totalQuote = chooseBook(odds, "totals");
@@ -72,26 +64,6 @@ export function FantasyPanel({
             book&rsquo;s line; a play is a spread {SPREAD_GAP}+ or a total {TOTAL_GAP}+ points
             off it.
           </p>
-        </div>
-        <div
-          role="group"
-          aria-label="Model version"
-          className="border-border-subtle bg-panel-inset flex gap-1 rounded-lg border p-1"
-        >
-          {FANTASY_VERSIONS.map((v) => (
-            <button
-              key={v}
-              type="button"
-              aria-pressed={v === version}
-              onClick={() => setVersion(v)}
-              className={
-                "rounded-md px-2.5 py-1 text-[0.6875rem] font-extrabold uppercase tracking-label transition-colors " +
-                (v === version ? "cta" : "text-muted hover:text-ink")
-              }
-            >
-              {FANTASY_VERSION_LABEL[v]}
-            </button>
-          ))}
         </div>
       </div>
 

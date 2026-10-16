@@ -17,8 +17,9 @@
  *
  * THE NFL HAS ITS OWN ENGINES, `fantasy` and `fantasy_sheet` (2026-10-14,
  * migration 0095): the client's fantasy game model, fixed and as his sheet has
- * it, on his gap rule at the closing line. The NFL tracker leads with the fixed
- * one and gives the original a card of its own, never pooled.
+ * it, on his gap rule at the closing line. The NFL tracker shows the fixed one
+ * only (client, 2026-10-16: the fixes are the model, not a second one); the
+ * sheet's picks are still made and graded, never shown and never pooled.
  */
 
 import { slateDayKey } from "./slate-days.ts";
@@ -147,7 +148,7 @@ export function record(picks: TrackerPick[]): Record_ {
   };
 }
 
-export type CardKey = "spreads" | "totals" | "edge" | "h2h" | "rules" | "sheet";
+export type CardKey = "spreads" | "totals" | "edge" | "h2h" | "rules";
 
 export interface Card {
   key: CardKey;
@@ -174,7 +175,6 @@ export function isEdgePlay(p: TrackerPick): boolean {
 /** Which picks a card counts; the page's list filters by the same rule. */
 export function cardFilter(key: CardKey): (p: TrackerPick) => boolean {
   if (key === "rules") return (p) => p.engine === "rules";
-  if (key === "sheet") return (p) => p.engine === "fantasy_sheet";
   return key === "edge"
     ? isEdgePlay
     : (p) => p.engine !== "rules" && p.engine !== "fantasy_sheet" && p.market === key;
@@ -190,7 +190,7 @@ export function resolveCardKey(raw: string | undefined, engine: Engine): CardKey
     engine === "v1"
       ? ["spreads", "totals", "edge", "h2h"]
       : engine === "fantasy"
-        ? ["spreads", "totals", "sheet"]
+        ? ["spreads", "totals"]
         : ["spreads", "totals", "edge", "rules"];
   return valid.includes(raw as CardKey) ? (raw as CardKey) : null;
 }
@@ -278,27 +278,6 @@ export function ruleCard(picks: TrackerPick[]): Card {
       { label: "Total 6+", record: of((p) => p.market === "totals") },
       { label: "Total 7+", record: of(isTopTier) },
       { label: "Moneyline", record: of((p) => p.market === "h2h") },
-    ],
-  };
-}
-
-/**
- * The fantasy model's original sheet, graded beside the fixed version
- * (`fantasy_sheet`): one record, then spread and total.
- */
-export function sheetCard(picks: TrackerPick[]): Card {
-  const sheet = picks.filter((p) => p.engine === "fantasy_sheet");
-  const of = (filter: (p: TrackerPick) => boolean) => record(sheet.filter(filter));
-  return {
-    key: "sheet",
-    title: "Original sheet",
-    tag: "SHEET",
-    emoji: "📄",
-    rule: `The formula exactly as the sheet has it · spread ${FANTASY_SPREAD_GAP}+ · total ${FANTASY_TOTAL_GAP}+`,
-    record: record(sheet),
-    breakdown: [
-      { label: "Spread", record: of((p) => p.market === "spreads") },
-      { label: "Total", record: of((p) => p.market === "totals") },
     ],
   };
 }

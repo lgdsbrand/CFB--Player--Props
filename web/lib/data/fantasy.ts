@@ -1,16 +1,18 @@
 /**
- * The client's NFL fantasy game model for one game (phase F3): both versions
- * of its projection (`fantasy_game_projections`, migration 0094) and the two
- * teams' five starters that week (`fantasy_lineups`, 0093). Two small reads,
- * at most 2 and 10 rows. The book prices come from the page's existing
+ * The client's NFL fantasy game model for one game (phase F3): the shown
+ * version of its projection (`fantasy_game_projections`, migration 0094; the
+ * sheet's own version is stored too but not shown, see SHOWN_FANTASY_VERSION)
+ * and the two teams' five starters that week (`fantasy_lineups`, 0093). Two
+ * small reads, at most 1 and 10 rows. The book prices come from the page's existing
  * `getGameBookOdds`, so the panel needs no odds read of its own.
  */
 
-import type {
-  FantasyProjection,
-  FantasyVersion,
-  LineupEntry,
-  LineupSlot,
+import {
+  SHOWN_FANTASY_VERSION,
+  type FantasyProjection,
+  type FantasyVersion,
+  type LineupEntry,
+  type LineupSlot,
 } from "@/lib/core/fantasy-view";
 import { type DbRow, num, unwrap } from "@/lib/data/query";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
@@ -34,7 +36,8 @@ export async function getFantasyGame(
         "model_version, away_score, home_score, total, home_margin, p_home_win, " +
           "away_fantasy, home_fantasy, inputs_as_of_week, made_at",
       )
-      .eq("game_id", gameId),
+      .eq("game_id", gameId)
+      .eq("model_version", SHOWN_FANTASY_VERSION),
     supabase
       .from("fantasy_lineups")
       .select("team_id, slot, player_name, fantasy_points, points_source, picked_by, skipped")

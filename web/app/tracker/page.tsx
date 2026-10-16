@@ -23,7 +23,6 @@ import {
   resolvePeriod,
   ruleCard,
   ruleReason,
-  sheetCard,
   type Card,
   type CardKey,
   type Engine,
@@ -72,7 +71,6 @@ const CARD_TINT: Record<CardKey, string> = {
   edge: "border-target/40 from-target/15",
   h2h: "border-positive/35 from-positive/10",
   rules: "border-accent-indigo/40 from-accent-cyan/10 via-accent-indigo/10",
-  sheet: "border-border-strong from-white/5",
 };
 const BAR_TINT: Record<CardKey, string> = {
   spreads: "bg-accent-indigo",
@@ -80,7 +78,6 @@ const BAR_TINT: Record<CardKey, string> = {
   edge: "bg-target",
   h2h: "bg-positive",
   rules: "bg-gradient-to-r from-accent-cyan to-accent-indigo",
-  sheet: "bg-muted",
 };
 
 export default async function TrackerPage({
@@ -127,25 +124,26 @@ export default async function TrackerPage({
     );
   }
   const engine = sport === "nfl" ? NFL_ENGINE : ENGINE;
-  // The engine with a card of its own beside the main one, never pooled.
-  const sideEngine: Engine = sport === "nfl" ? "fantasy_sheet" : "rules";
-  const sideKey: CardKey = sport === "nfl" ? "sheet" : "rules";
+  // College's rule plays have a card of their own beside the main engine,
+  // never pooled. The NFL shows one engine: the fantasy model's original sheet
+  // is still graded but not shown (client, 2026-10-16).
+  const sideEngine: Engine | null = sport === "nfl" ? null : "rules";
   const period = resolvePeriod(first(raw.period));
   // The card the graded-picks list is narrowed to; null is every pick.
   const market = resolveCardKey(first(raw.market), engine);
 
-  const picks = await getTrackerPicks(sport, [engine, sideEngine]);
+  const picks = await getTrackerPicks(sport, sideEngine ? [engine, sideEngine] : [engine]);
   // One period cut for both, so "Week" is the same week on every card.
   const inScope = inPeriod(picks, period);
   const shown = inScope.filter((p) => p.engine === engine);
-  const shownSide = inScope.filter((p) => p.engine === sideEngine);
+  const shownSide = sideEngine ? inScope.filter((p) => p.engine === sideEngine) : [];
   const overall = record(shown);
   const marketCards = [
     ...cards(shown, engine),
-    sport === "nfl" ? sheetCard(shownSide) : ruleCard(shownSide),
+    ...(sideEngine ? [ruleCard(shownSide)] : []),
   ];
   const listed =
-    market === sideKey ? shownSide : market ? shown.filter(cardFilter(market)) : shown;
+    market === "rules" ? shownSide : market ? shown.filter(cardFilter(market)) : shown;
   const href = (changes: { period?: Period; market?: CardKey | null }) => {
     const nextPeriod = changes.period ?? period;
     const nextMarket = changes.market === undefined ? market : changes.market;

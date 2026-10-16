@@ -141,6 +141,19 @@ export function slateDayStart(now: Date = new Date()): Date {
 }
 
 /**
+ * The current slate day as a half-open window, [start, end).
+ *
+ * The end is the NEXT day's `slateDayStart`, found from a point safely inside
+ * that day, rather than start + 24h: the day the clocks change is 23 or 25
+ * hours long.
+ */
+export function slateDayWindow(now: Date = new Date()): { start: Date; end: Date } {
+  const start = slateDayStart(now);
+  const end = slateDayStart(new Date(start.getTime() + 30 * 3_600_000));
+  return { start, end };
+}
+
+/**
  * The Eastern calendar day a kickoff belongs to.
  *
  * Returns undefined for a game with no kickoff time — CFBD publishes those as

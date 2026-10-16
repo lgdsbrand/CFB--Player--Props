@@ -19,6 +19,7 @@ import {
   narrowToDay,
   slateDayKey,
   slateDays,
+  slateDayWindow,
 } from "./slate-days.ts";
 import type { GameSummary } from "./types.ts";
 
@@ -152,4 +153,19 @@ test("narrowing preserves the order the caller sorted the games into", () => {
     narrowToDay(games, saturday).map((g) => g.gameId),
     [3, 1, 2],
   );
+});
+
+test("today runs from 4 a.m. Eastern to 4 a.m. the next day", () => {
+  // 22:30 ET Thursday 15 Oct: Thursday's slate, the night game included.
+  const { start, end } = slateDayWindow(new Date("2026-10-16T02:30:00Z"));
+  assert.equal(start.toISOString(), "2026-10-15T08:00:00.000Z");
+  assert.equal(end.toISOString(), "2026-10-16T08:00:00.000Z");
+});
+
+test("the day the clocks go back is 25 hours long, not 24", () => {
+  // Clocks go back at 2 a.m. on Sunday 1 Nov 2026, so Saturday's slate runs
+  // from 04:00 EDT (08:00Z) to Sunday's 04:00 EST (09:00Z).
+  const { start, end } = slateDayWindow(new Date("2026-10-31T15:00:00Z"));
+  assert.equal(start.toISOString(), "2026-10-31T08:00:00.000Z");
+  assert.equal(end.toISOString(), "2026-11-01T09:00:00.000Z");
 });

@@ -52,9 +52,12 @@ const TAB_IDLE = "border border-transparent text-slate-400 hover:bg-slate-900/40
 export function SiteHeader({
   activeHref = "/",
   sport = DEFAULT_SPORT,
+  keep,
 }: {
   activeHref?: string;
   sport?: Sport;
+  /** Parameters the league switch carries over, e.g. the tracker's props view. */
+  keep?: Record<string, string>;
 }) {
   const withSport = (href: string) => scopedHref(href, { sport });
 
@@ -188,7 +191,7 @@ export function SiteHeader({
               return (
                 <Link
                   key={option}
-                  href={scopedHref(activeHref, { sport: option })}
+                  href={scopedHref(activeHref, { sport: option }, keep)}
                   aria-current={active ? "true" : undefined}
                   className={
                     "rounded-lg px-2.5 py-1.5 text-[10px] font-black tracking-widest uppercase transition-all duration-200 " +

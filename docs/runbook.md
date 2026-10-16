@@ -1191,6 +1191,10 @@ side, the published (calibrated) probability and the edge.
 - **Graded by `v_prop_pick_results`**, a view over the official box score
   (`v_player_game_log`): pending, void (final but no value for the player's
   stat), push, win, loss, and units at the price of the side taken. No job.
+- **On the site at `/tracker?view=props`** (migration 0097, `v_prop_record`
+  summed by week, market and edge band). 5%+ leads; every tier is shown.
+  Nothing links to it until `PROPS_RECORD_PUBLIC` in
+  `web/lib/core/prop-record.ts` is true.
 - No API calls, no credits. Runs after the capture with `;`, so a failed
   capture does not stop the lock.
 

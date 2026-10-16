@@ -252,3 +252,59 @@ def test_an_under_wins_below_the_line(slate):
     assert row["result"] == "win"
     assert float(row["units"]) == pytest.approx(round(100 / 105, 4))
     assert float(row["model_prob"]) == pytest.approx(0.60)
+
+
+# =============================================================================
+# v_prop_record (migration 0097): the summary the props record page reads
+# =============================================================================
+def _record(s):
+    return s["conn"].execute(
+        "select * from v_prop_record r join games g on g.season = r.season and g.week = r.week "
+        "where g.id = %s and r.sport = g.sport",
+        (s["game"],),
+    ).fetchall()
+
+
+def test_the_results_carry_names_for_the_page(slate):
+    pick(slate, projection(slate), slate["first"])
+    lock(slate)
+    row = slate["conn"].execute(
+        "select player_name, team_abbreviation, opponent_abbreviation, market_label "
+        "from v_prop_pick_results where game_id = %s", (slate["game"],),
+    ).fetchone()
+    assert (row["player_name"], row["team_abbreviation"], row["opponent_abbreviation"]) == (
+        "Test Back", "TOF", "TDF")
+    assert row["market_label"]
+
+
+def test_a_game_not_yet_started_is_not_in_the_record(slate):
+    pick(slate, projection(slate), slate["first"])
+    lock(slate)
+    assert _record(slate) == []
+
+
+@pytest.mark.parametrize(
+    ("prob", "book", "band"),
+    [(0.70, 0.55, 10), (0.62, 0.55, 5), (0.58, 0.55, 2), (0.56, 0.55, 0), (0.53, 0.55, -1)],
+)
+def test_each_pick_lands_in_one_edge_band(slate, prob, book, band):
+    proj = projection(slate)
+    pick(slate, proj, slate["first"], prob=prob)
+    slate["conn"].execute("update picks set book_prob_over = %s where projection_id = %s", (book, proj))
+    lock(slate)
+    _finish(slate, 90)
+    [row] = _record(slate)
+    assert row["band"] == band
+    assert (row["wins"], row["losses"], row["pending"]) == (1, 0, 0)
+
+
+def test_the_record_counts_results_and_units_by_market(slate):
+    pick(slate, projection(slate), slate["first"])  # rush yards over 74.5, wins at 90
+    pick(slate, projection(slate, "receptions"), slate["first"], market="receptions", line=3.5)
+    lock(slate)
+    _finish(slate, 90)  # no receptions value: the receptions pick is void
+    rows = {r["market_key"]: r for r in _record(slate)}
+    assert (rows["rush_yards"]["wins"], rows["rush_yards"]["voids"]) == (1, 0)
+    assert float(rows["rush_yards"]["units"]) == pytest.approx(round(100 / 115, 4))
+    assert (rows["receptions"]["wins"], rows["receptions"]["losses"], rows["receptions"]["voids"]) == (0, 0, 1)
+    assert float(rows["receptions"]["units"]) == 0

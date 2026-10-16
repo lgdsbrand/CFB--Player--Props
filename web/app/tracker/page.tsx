@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { NotConfigured } from "@/components/not-configured";
+import { PropsRecord } from "@/components/tracker/props-record";
 import { SiteHeader } from "@/components/site-header";
 import { scopedHref, type RawParams } from "@/lib/core/board-params";
 import { isSupabaseConfigured } from "@/lib/core/env";
@@ -31,6 +32,13 @@ import {
   type TrackerPick,
 } from "@/lib/core/tracker";
 import { getTrackerPicks } from "@/lib/data/tracker";
+import {
+  recordWeeks,
+  resolveRecordWeek,
+  resolveTier,
+  tierMinEdge,
+} from "@/lib/core/prop-record";
+import { getPropPicks, getPropRecord } from "@/lib/data/prop-record";
 
 /**
  * The tracker (client, 2026-10-08): the game model's picks, graded, laid out
@@ -90,6 +98,34 @@ export default async function TrackerPage({
   const raw = await searchParams;
   const sport = resolveSport(raw.sport);
   const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
+
+  // THE PROPS RECORD (2026-10-16), at ?view=props. Not linked from anywhere
+  // until PROPS_RECORD_PUBLIC (lib/core/prop-record.ts) is turned on.
+  if (first(raw.view) === "props") {
+    // The current season's record: the latest season with a locked pick, so a
+    // new season's week 1 never mixes with the last one's.
+    const all = await getPropRecord(sport);
+    const season = all.reduce((latest, r) => Math.max(latest, r.season), 0);
+    const rows = all.filter((r) => r.season === season);
+    const scope = {
+      week: resolveRecordWeek(first(raw.week), recordWeeks(rows)),
+      tier: resolveTier(first(raw.tier)),
+      market: first(raw.market) ?? null,
+      page: Math.max(0, (Number.parseInt(first(raw.page) ?? "", 10) || 1) - 1),
+    };
+    const { picks, hasMore } = await getPropPicks(sport, {
+      season,
+      week: scope.week,
+      minEdge: tierMinEdge(scope.tier),
+      market: scope.market,
+      page: scope.page,
+    });
+    return (
+      <Shell sport={sport} keep={{ view: "props" }}>
+        <PropsRecord sport={sport} rows={rows} picks={picks} hasMore={hasMore} scope={scope} />
+      </Shell>
+    );
+  }
   const engine = sport === "nfl" ? NFL_ENGINE : ENGINE;
   // The engine with a card of its own beside the main one, never pooled.
   const sideEngine: Engine = sport === "nfl" ? "fantasy_sheet" : "rules";
@@ -421,10 +457,18 @@ function Stat({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-function Shell({ children, sport = DEFAULT_SPORT }: { children: React.ReactNode; sport?: Sport }) {
+function Shell({
+  children,
+  sport = DEFAULT_SPORT,
+  keep,
+}: {
+  children: React.ReactNode;
+  sport?: Sport;
+  keep?: Record<string, string>;
+}) {
   return (
     <>
-      <SiteHeader activeHref="/tracker" sport={sport} />
+      <SiteHeader activeHref="/tracker" sport={sport} keep={keep} />
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-4 py-6 sm:px-6">{children}</main>
     </>
   );

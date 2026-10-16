@@ -57,11 +57,14 @@ export const BAR_SPORTS = HIS_SPORTS.filter((s) => s.status !== "COMING_SOON");
 /** His "More" menu: what is coming. */
 export const SOON_SPORTS = HIS_SPORTS.filter((s) => s.status === "COMING_SOON");
 
-/** A page of his site: a sport's view, or his home. */
-export function hisSiteHref(sportId?: string): string {
-  return sportId && sportId !== "home"
-    ? `${CLIENT_SITE_ORIGIN}/?sport=${encodeURIComponent(sportId)}`
-    : `${CLIENT_SITE_ORIGIN}/`;
+/**
+ * A page of his site: a sport's view, or his home. `view` opens a tab of that
+ * sport's page (his NFL page reads `?view=records`).
+ */
+export function hisSiteHref(sportId?: string, view?: string): string {
+  if (!sportId || sportId === "home") return `${CLIENT_SITE_ORIGIN}/`;
+  const page = `${CLIENT_SITE_ORIGIN}/?sport=${encodeURIComponent(sportId)}`;
+  return view ? `${page}&view=${encodeURIComponent(view)}` : page;
 }
 
 /** His About and Contact are dialogs on his site, opened by `/?open=`. */

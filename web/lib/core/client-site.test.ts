@@ -22,4 +22,5 @@ test("his pages open by address", () => {
   assert.equal(hisSiteHref("home"), "https://lgdsanalytics.vercel.app/");
   assert.equal(hisSiteHref(), "https://lgdsanalytics.vercel.app/");
   assert.equal(hisInfoHref("contact"), "https://lgdsanalytics.vercel.app/?open=contact");
+  assert.equal(hisSiteHref("nfl", "records"), "https://lgdsanalytics.vercel.app/?sport=nfl&view=records");
 });

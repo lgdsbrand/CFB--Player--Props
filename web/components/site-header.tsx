@@ -3,8 +3,9 @@ import Link from "next/link";
 
 import legendsLogo from "@/assets/legends-logo.png";
 import { HamburgerMenu, MoreMenu } from "@/components/header-menus";
-import { BOARD_PATH, scopedHref } from "@/lib/core/board-params";
+import { scopedHref } from "@/lib/core/board-params";
 import { BAR_SPORTS, CLIENT_SITE_ORIGIN, hisInfoHref, hisSiteHref } from "@/lib/core/client-site";
+import { footballTabs } from "@/lib/core/football-tabs";
 import { DEFAULT_SPORT, SPORTS, type Sport } from "@/lib/core/sport";
 
 /**
@@ -19,7 +20,9 @@ import { DEFAULT_SPORT, SPORTS, type Sport } from "@/lib/core/sport";
  *      opens his site; NFL or CFB is highlighted, because this app is the
  *      Player Props (and NFL Fantasy Model) tab of his NFL and CFB pages;
  *   3. our own tabs, his MLB sub-tab style, with the NFL/CFB league switch at
- *      the end of the row (the old NCAAF/NFL toggle, restyled as his).
+ *      the end of the row (the old NCAAF/NFL toggle, restyled as his). The
+ *      tabs are his CFB and NFL pages' tabs, per league (`football-tabs.ts`);
+ *      the ones that are his views open his site.
  * His classes are used as he wrote them (Tailwind's default palette), so the
  * header matches his pixel for pixel rather than through our theme tokens.
  *
@@ -28,20 +31,6 @@ import { DEFAULT_SPORT, SPORTS, type Sport } from "@/lib/core/sport";
  * deliberately not a tab: it is an operator's deploy proof, unlinked and
  * noindexed (`app/health/page.tsx`).
  */
-
-const TABS: { href: string; label: string; icon: string }[] = [
-  { href: "/", label: "Overview", icon: "🏈" },
-  { href: BOARD_PATH, label: "Props", icon: "🎯" },
-  { href: "/games", label: "Games", icon: "🏟️" },
-  { href: "/cheat-sheets", label: "Sheets", icon: "📋" },
-  { href: "/builder", label: "Builder", icon: "🧱" },
-  // The slip checker (client, 2026-10-12): the same slip, checked leg by leg.
-  { href: "/slip-check", label: "Check", icon: "✅" },
-  // The game models' graded picks (client, 2026-10-08).
-  { href: "/tracker", label: "Tracker", icon: "📈" },
-  { href: "/no-vig", label: "No-Vig", icon: "⚖️" },
-  { href: "/arbitrage", label: "Arb", icon: "🔀" },
-];
 
 const LEAGUE_LABEL: Record<Sport, string> = { nfl: "NFL", cfb: "CFB" };
 
@@ -146,21 +135,32 @@ export function SiteHeader({
         <div className={`${WIDTH} flex items-center gap-3`}>
           {/* On a phone the switch leaves room for two or three tabs, so the
               right edge fades: a tab cut off flat reads as a rendering fault,
-              a fade reads as "more this way". Right only, so Overview at the
-              start is never faded. */}
+              a fade reads as "more this way". Right only, so the first tab is
+              never faded. */}
           <div className="no-scrollbar min-w-0 flex-1 overflow-x-auto [mask-image:linear-gradient(to_right,black_calc(100%-1.75rem),transparent)] md:[mask-image:none]">
             <nav className="flex min-w-max items-center justify-start gap-2 md:gap-1.5" aria-label="Football">
-              {TABS.map((tab) => {
-                const active = tab.href === activeHref;
-                return (
-                  <Link
-                    key={tab.href}
-                    href={withSport(tab.href)}
-                    aria-current={active ? "page" : undefined}
-                    className={`${TAB_BASE} px-3 py-1.5 tracking-wider md:px-4 md:tracking-widest ${active ? TAB_ACTIVE : TAB_IDLE}`}
-                  >
+              {footballTabs(sport).map((tab) => {
+                const active = !tab.external && tab.href === activeHref;
+                const className = `${TAB_BASE} px-3 py-1.5 tracking-wider md:px-4 md:tracking-widest ${active ? TAB_ACTIVE : TAB_IDLE}`;
+                const body = (
+                  <>
                     <span>{tab.icon}</span>
                     <span>{tab.label}</span>
+                  </>
+                );
+                // His views are another site: a plain link, a full page load.
+                return tab.external ? (
+                  <a key={tab.label} href={tab.href} className={className}>
+                    {body}
+                  </a>
+                ) : (
+                  <Link
+                    key={tab.label}
+                    href={withSport(tab.href)}
+                    aria-current={active ? "page" : undefined}
+                    className={className}
+                  >
+                    {body}
                   </Link>
                 );
               })}

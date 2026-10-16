@@ -237,7 +237,21 @@ export default async function Games({
     <Shell sport={sport}>
       <div className="flex flex-col gap-1">
         <span className="label-caption">Legends Sports · {SPORT_LABEL[sport]}</span>
-        <h1 className="text-2xl font-extrabold tracking-tight">Analyze Games</h1>
+        {/* NFL's tab for this page is "Fantasy Model" (football-tabs.ts), and
+            its tracker has no tab of its own, so the page links to it. */}
+        <h1 className="text-2xl font-extrabold tracking-tight">
+          {sport === "nfl" ? "Fantasy Model" : "Analyze Games"}
+        </h1>
+        {sport === "nfl" ? (
+          <p className="text-muted text-xs">
+            The fantasy game model on every game of the week. Its picks are locked at kickoff
+            and graded on the{" "}
+            <Link href={scopedHref("/tracker", { sport })} className="text-accent-cyan hover:underline">
+              record
+            </Link>
+            .
+          </p>
+        ) : null}
       </div>
 
       <WeekStrip weeks={weeks} active={active} basePath={GAMES_PATH} sport={sport} />

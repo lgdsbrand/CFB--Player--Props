@@ -46,7 +46,7 @@ export const HIS_SPORTS: readonly HisSport[] = [
   { id: "nfl", name: "NFL", icon: "🏈", status: "BETA", football: "nfl" },
   { id: "fantasy", name: "Fantasy", icon: "🏈", status: "ACTIVE" },
   { id: "wnba", name: "WNBA", icon: "🏀", status: "BETA" },
-  { id: "nhl", name: "NHL", icon: "🏒", status: "COMING_SOON" },
+  { id: "nhl", name: "NHL", icon: "🏒", status: "BETA" },
   { id: "cbb", name: "CBB", icon: "🏀", status: "COMING_SOON" },
   { id: "cfb", name: "CFB", icon: "🏈", status: "BETA", football: "cfb" },
   { id: "pga", name: "PGA Tour", icon: "⛳", status: "COMING_SOON" },
@@ -57,12 +57,18 @@ export const BAR_SPORTS = HIS_SPORTS.filter((s) => s.status !== "COMING_SOON");
 /** His "More" menu: what is coming. */
 export const SOON_SPORTS = HIS_SPORTS.filter((s) => s.status === "COMING_SOON");
 
+/** Sports whose page is a separate app his site forwards to (his vercel.json). */
+const SPORT_PAGES: Record<string, string> = { nba: "/nba", nhl: "/nhl" };
+
 /**
  * A page of his site: a sport's view, or his home. `view` opens a tab of that
  * sport's page (his NFL page reads `?view=records`).
  */
 export function hisSiteHref(sportId?: string, view?: string): string {
   if (!sportId || sportId === "home") return `${CLIENT_SITE_ORIGIN}/`;
+  // NBA and NHL are apps of their own on his site, at /nba and /nhl
+  // (2026-10-16); his /?sport=nba and /?sport=nhl forward there anyway.
+  if (sportId in SPORT_PAGES) return `${CLIENT_SITE_ORIGIN}${SPORT_PAGES[sportId]}`;
   const page = `${CLIENT_SITE_ORIGIN}/?sport=${encodeURIComponent(sportId)}`;
   return view ? `${page}&view=${encodeURIComponent(view)}` : page;
 }

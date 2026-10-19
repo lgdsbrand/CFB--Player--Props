@@ -21,6 +21,7 @@ from worker.adapters.cbs.projections import (
     CbsProjection,
     build_rows,
     check_week,
+    fetch_weeks,
     name_key,
     parse_page,
 )
@@ -91,6 +92,34 @@ def test_parse_refuses_the_substituted_week_even_with_a_full_table(small_pages):
     html = _page(10, [("J. Allen QB BUF Josh Allen QB BUF", "29.9")], title_week=6)
     with pytest.raises(CbsError, match="asked CBS for week 10"):
         parse_page(html, "QB", 10, NflReferenceCounts())
+
+
+class _FakeCbs:
+    """Serves `served` weeks; any other week gets CBS's current table (week 6)."""
+
+    def __init__(self, served: set[int]) -> None:
+        self.served = served
+
+    def projection_page(self, position: str, season: int, week: int) -> str:
+        row = (f"A. Player {position} BUF Alex Player {position} BUF", "10.0")
+        if week in self.served:
+            return _page(week, [row])
+        return _page(week, [row], title_week=6)
+
+
+def test_a_week_cbs_does_not_serve_yet_is_skipped_not_fatal(small_pages):
+    # 2026-10-18: teams on a week-7 bye had open week 8; CBS answered week 6 and
+    # the whole capture failed, so week 7's teams got nothing.
+    counts = NflReferenceCounts()
+    pages = fetch_weeks(_FakeCbs({6, 7}), 2026, [7, 8, 7], counts)
+    assert {w for w, _ in pages} == {7}
+    assert len(pages) == 4  # one player per position, week 7 only
+    assert counts.skipped == {"cbs: week 8 not served": 1}
+
+
+def test_no_week_served_at_all_is_still_an_error(small_pages):
+    with pytest.raises(CbsError, match="serves none of the weeks"):
+        fetch_weeks(_FakeCbs({6}), 2026, [8, 9], NflReferenceCounts())
 
 
 def test_a_page_that_lost_its_table_fails_rather_than_clearing_the_week():

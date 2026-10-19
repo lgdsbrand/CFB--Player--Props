@@ -110,6 +110,23 @@ class _Tables(HTMLParser):
             self._cell.append(data)
 
 
+class CbsWeekNotServed(CbsError):
+    """CBS answered with another week's table: the week asked is not served.
+
+    Raised for a week CBS has not published yet (a team on a bye next week
+    has its open week two ahead) as much as for one it has dropped. The page
+    itself is fine, so `fetch_weeks` skips that week rather than failing.
+    """
+
+    def __init__(self, asked: int, shown: int) -> None:
+        super().__init__(
+            f"asked CBS for week {asked}, the page shows week {shown}: "
+            "CBS serves only the current weeks and substitutes silently"
+        )
+        self.asked = asked
+        self.shown = shown
+
+
 def check_week(title: str | None, week: int) -> None:
     """Raise unless the page title says it shows `week`."""
     match = _TITLE_WEEK.search(title or "")
@@ -117,10 +134,7 @@ def check_week(title: str | None, week: int) -> None:
         raise CbsError(f"projection page has no week in its title ({title!r})")
     shown = int(match.group(1))
     if shown != week:
-        raise CbsError(
-            f"asked CBS for week {week}, the page shows week {shown}: "
-            "CBS serves only the current weeks and substitutes silently"
-        )
+        raise CbsWeekNotServed(week, shown)
 
 
 def parse_page(html: str, position: str, week: int, counts: Any) -> list[CbsProjection]:
@@ -220,12 +234,34 @@ def build_rows(
 def fetch_weeks(
     client: CbsClient, season: int, weeks: Iterable[int], counts: Any
 ) -> list[tuple[int, CbsProjection]]:
-    """Every position page for every week asked, as (week, projection) pairs."""
+    """Every position page for every week asked, as (week, projection) pairs.
+
+    A week CBS does not serve is skipped whole, and its teams keep what an
+    earlier run wrote (`build_rows` only replaces teams it has rows for).
+    2026-10-18: with teams on a week-7 bye, their open week was 8, CBS showed
+    week 6 for it, and the whole capture failed until Thursday's teams had
+    nothing. If no week asked is served at all, that is still an error.
+    """
     out: list[tuple[int, CbsProjection]] = []
-    for week in sorted(set(weeks)):
-        for position in POSITIONS:
-            html = client.projection_page(position, season, week)
-            out.extend((week, p) for p in parse_page(html, position, week, counts))
+    asked = sorted(set(weeks))
+    skipped: list[int] = []
+    for week in asked:
+        try:
+            pages = [
+                (week, p)
+                for position in POSITIONS
+                for p in parse_page(
+                    client.projection_page(position, season, week), position, week, counts
+                )
+            ]
+        except CbsWeekNotServed as exc:
+            log.warning("skipping week %d: %s", week, exc)
+            counts.skip(f"cbs: week {week} not served")
+            skipped.append(week)
+            continue
+        out.extend(pages)
+    if asked and len(skipped) == len(asked):
+        raise CbsError(f"CBS serves none of the weeks asked ({asked})")
     return out
 
 
@@ -235,6 +271,7 @@ __all__ = [
     "SOURCE",
     "TABLE",
     "CbsProjection",
+    "CbsWeekNotServed",
     "build_rows",
     "check_week",
     "fetch_weeks",

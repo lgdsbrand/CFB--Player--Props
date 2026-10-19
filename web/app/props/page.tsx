@@ -155,6 +155,10 @@ export default async function Home({
   // the reader's filters, not the absence of scope: "Best Plays" means the best
   // full-game plays, and a first-quarter market has no call to be best at.
   const marketKeys = scopeKeys(markets, scope);
+  // FANDUEL AND DRAFTKINGS BY DEFAULT (client, 2026-10-19), presets included:
+  // a preset is the absence of the reader's filters, and this is the board's
+  // default rather than one of them. `books=all` lifts it.
+  const majorBooksOnly = !resolved.allBooks;
 
   const filters: BoardFilters = preset
     ? {
@@ -168,6 +172,7 @@ export default async function Home({
         // every row clearing the threshold, ordered by edge.
         withCallOnly: preset === "best",
         edgesOnly: preset === "edges",
+        majorBooksOnly,
         sort: preset === "best" ? "confidence" : "edge",
       }
     : {
@@ -192,6 +197,7 @@ export default async function Home({
         // ON, would return nothing and read as "no first-quarter props this
         // week" rather than as a filter that cannot apply here.
         edgesOnly: showsCalls ? resolved.edgesOnly : false,
+        majorBooksOnly,
         edgeThreshold: config.edgeThreshold,
         minConfidence: showsCalls ? resolved.minConfidence : undefined,
         minOpponentRank: resolved.minOpponentRank,
@@ -391,7 +397,8 @@ export default async function Home({
             <span className="text-accent-cyan font-bold tabular-nums">
               {formatCount(board.resultCount)}
             </span>{" "}
-            {board.resultCount === 1 ? "play" : "plays"}, unfiltered.{" "}
+            {board.resultCount === 1 ? "play" : "plays"}
+            {majorBooksOnly ? " on FanDuel or DraftKings" : ""}, otherwise unfiltered.{" "}
             <Link
               href={boardHref(
                 { ...resolved, preset: undefined },
@@ -719,6 +726,14 @@ function EmptyBoard({
       Turn off Edges only
     </Link>
   );
+  const showAllBooks = (
+    <Link
+      href={boardHref(params, { allBooks: true })}
+      className="text-accent-cyan hover:underline"
+    >
+      Show every book
+    </Link>
+  );
 
   if (params.edgesOnly && counts.withBookLine === 0) {
     return (
@@ -743,6 +758,26 @@ function EmptyBoard({
           {formatCount(counts.withBookLine)} rows are priced, but none clears
           the {Math.round(edgeThreshold * 100)}% edge threshold — before any
           other filter is applied. {showLeans} to see the whole slate.
+        </p>
+      </div>
+    );
+  }
+
+  // After the two structural cases above, which hold whatever the books. Books
+  // post college props late (Thursday and Friday for Saturday, CLAUDE.md §7),
+  // so early in the week this is the usual reason and gets its own fix.
+  if (!params.allBooks) {
+    return (
+      <div className="panel p-6">
+        <h2 className="section-header mb-2">No FanDuel or DraftKings props here</h2>
+        <p className="text-muted max-w-prose text-sm">
+          The board shows props FanDuel or DraftKings have posted, and none matches. Books
+          post most props a day or two before the game. {showAllBooks}{" "}
+          to see the other books and the model&rsquo;s lean on every player, or{" "}
+          <Link href={cleared} className="text-accent-cyan hover:underline">
+            clear the filters
+          </Link>
+          .
         </p>
       </div>
     );

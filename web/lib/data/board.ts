@@ -13,6 +13,7 @@
  */
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { MAJOR_BOOKS } from "@/lib/core/board-params";
 import { type BoardSort, boardSortKeys } from "@/lib/core/board-view";
 import { parseLadder } from "@/lib/core/ladder-view";
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
@@ -104,6 +105,13 @@ export type BoardFilters = {
   minOpponentRank?: number;
   /** Only rows that have a book line attached. */
   withBookLineOnly?: boolean;
+  /**
+   * Only rows whose headline book is FanDuel or DraftKings (`MAJOR_BOOKS`),
+   * the board's default since 2026-10-19 (`BoardParams.allBooks`). The
+   * headline is the highest-priority book pricing the row and those two hold
+   * priorities 10 and 20, so this is exactly "a row either of them prices".
+   */
+  majorBooksOnly?: boolean;
   /**
    * Only rows the model has actually called — the population BEST PLAYS lists.
    *
@@ -234,6 +242,7 @@ function buildBoardQuery(
 
   if (filters.withBookLineOnly) query = query.eq("has_book_line", true);
   if (filters.withCallOnly) query = query.eq("has_call", true);
+  if (filters.majorBooksOnly) query = query.in("sportsbook_key", [...MAJOR_BOOKS]);
 
   // `not null` rather than `lte 25`: the column only ever holds 1-25, and a
   // numeric bound would silently start meaning something else if a poll with a
@@ -508,7 +517,13 @@ export async function getRowsForCards(
   keys: CardKey[],
   filters: Pick<
     BoardFilters,
-    "season" | "week" | "marketKey" | "marketKeys" | "positionGroup" | "side"
+    | "season"
+    | "week"
+    | "marketKey"
+    | "marketKeys"
+    | "positionGroup"
+    | "side"
+    | "majorBooksOnly"
   >,
 ): Promise<BoardRow[]> {
   if (keys.length === 0) return [];
@@ -537,6 +552,9 @@ export async function getRowsForCards(
   // reader who chose Over and opened a card showing that player's unders
   // would read the switch as broken, not as "his other markets".
   query = applySide(query, filters.side);
+  // So does the book filter: a FanDuel/DraftKings board whose cards grew
+  // sub-cards no one of them prices would show what the reader turned off.
+  if (filters.majorBooksOnly) query = query.in("sportsbook_key", [...MAJOR_BOOKS]);
 
   const rows = unwrap<DbRow[]>(
     await query.order("market_key"),

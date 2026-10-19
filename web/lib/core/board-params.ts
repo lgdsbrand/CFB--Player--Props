@@ -194,6 +194,17 @@ export type BoardParams = {
   search?: string;
   sort: BoardSort;
   edgesOnly: boolean;
+  /**
+   * Every book, not just FanDuel and DraftKings. Off (undefined) by default:
+   * the client asked on 2026-10-19 for the board to show only what his
+   * readers can bet at those two (`MAJOR_BOOKS`), so the default board lists
+   * rows whose headline book is one of them. On brings back every book and
+   * the model's leans on players no book has priced yet (CLAUDE.md §7).
+   *
+   * ONLY `true` IS WRITTEN (`books=all`), so the default never needs a
+   * parameter and an old link keeps working; it lands on the filtered board.
+   */
+  allBooks?: boolean;
   minConfidence?: number;
   minOpponentRank?: number;
   hitRateWindow: number;
@@ -281,6 +292,13 @@ export function boardParamsPresent(raw: RawParams): boolean {
 }
 
 export const DEFAULT_HIT_RATE_WINDOW = 5;
+
+/**
+ * The books the board shows by default (client, 2026-10-19: "only showing
+ * predictions for players that are available on FanDuel and DraftKings").
+ * Keys of `sportsbooks`; see `BoardParams.allBooks`.
+ */
+export const MAJOR_BOOKS = ["draftkings", "fanduel"] as const;
 
 /** Cards per page. Deliberately modest — see `getGameLogsByPlayer`. */
 export const CARDS_PER_PAGE = 25;
@@ -410,6 +428,7 @@ export function parseBoardParams(
         ? sort
         : "edge",
     edgesOnly: edgesOnly === undefined ? edgesOnlyDefault : edgesOnly === "1",
+    allBooks: first(raw.books) === "all" ? true : undefined,
     minConfidence: float(raw.conf),
     minOpponentRank: int(raw.rank),
     hitRateWindow: int(raw.window) ?? DEFAULT_HIT_RATE_WINDOW,
@@ -528,6 +547,7 @@ export function boardHref(
   set("q", next.search);
   if (next.sort !== "edge") set("sort", next.sort);
   if (next.edgesOnly) set("edges", "1");
+  if (next.allBooks) set("books", "all");
   if (next.rankedOnly) set("top25", "1");
   set("side", next.side);
   set("conf", next.minConfidence);

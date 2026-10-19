@@ -54,6 +54,9 @@ const FULLY_FILTERED: BoardParams = {
   search: "John",
   sort: "confidence",
   edgesOnly: true,
+  // True, the only value ever written: the default (FanDuel and DraftKings
+  // only) carries no parameter.
+  allBooks: true,
   rankedOnly: true,
   // Under, not over: either is non-default, but under is the side whose
   // query differs (it also drops the yes/no markets), so it is the one worth
@@ -177,6 +180,20 @@ test("every filter survives a trip through the URL", () => {
   );
 
   assert.deepEqual(params, FULLY_FILTERED);
+});
+
+test("the board defaults to FanDuel and DraftKings, and only books=all lifts it", () => {
+  assert.equal(parseBoardParams({}).allBooks, undefined);
+  assert.equal(parseBoardParams({ books: "fanduel" }).allBooks, undefined);
+  assert.equal(parseBoardParams({ books: "all" }).allBooks, true);
+  // The default writes nothing, so every existing link lands on it.
+  assert.equal(
+    boardHref(parseBoardParams({ season: "2026", week: "8" }), {}),
+    "/props?season=2026&week=8",
+  );
+  // Reset returns to the default, not to every book.
+  const reset = new URLSearchParams(resetBoardHref(FULLY_FILTERED).split("?")[1] ?? "");
+  assert.equal(parseBoardParams(Object.fromEntries(reset)).allBooks, undefined);
 });
 
 test("changing a filter drops the page, because page 4 of one row is a dead end", () => {

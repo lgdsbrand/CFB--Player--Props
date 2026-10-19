@@ -321,6 +321,21 @@ export function BoardControls({
           Top 25
         </Link>
 
+        {/* On by default: the client asked for the board to show what his
+            readers can bet at FanDuel and DraftKings (2026-10-19). */}
+        <Link
+          href={boardHref(params, { allBooks: !params.allBooks })}
+          className={
+            "rounded-lg border px-3 py-1 text-[0.625rem] font-black uppercase tracking-label transition-colors " +
+            (!params.allBooks
+              ? "border-blue-500/30 bg-blue-600/20 text-blue-400"
+              : "border-border-subtle text-muted hover:text-ink")
+          }
+          title="Only props FanDuel or DraftKings have posted. Turn off to see every book and the model's lean on players no book has priced yet."
+        >
+          FanDuel + DraftKings
+        </Link>
+
         {showsCalls ? (
           <Link
             href={boardHref(params, { edgesOnly: !params.edgesOnly })}

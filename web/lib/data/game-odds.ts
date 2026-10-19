@@ -197,7 +197,40 @@ export async function getGameBookOdds(gameId: number): Promise<BookOdds[]> {
       .eq("game_id", gameId),
     "v_game_odds_current",
   );
-  return rows.map((row) => ({
+  return rows.map(toBookOdds);
+}
+
+/**
+ * The full-game spreads and totals of the given books on many games, grouped
+ * by game: what the NFL game cards need to show the same book as each game's
+ * page (`chooseBook`). 16 games x 3 books x 2 markets is ~100 rows.
+ */
+export async function getFullGameBookOdds(
+  gameIds: number[],
+  books: readonly string[],
+): Promise<Map<number, BookOdds[]>> {
+  const out = new Map<number, BookOdds[]>();
+  if (gameIds.length === 0) return out;
+  const supabase = createServerSupabaseClient();
+  const rows = unwrap<DbRow[]>(
+    await supabase
+      .from("v_game_odds_current")
+      .select(`game_id, ${BOOK_COLUMNS}`)
+      .in("game_id", gameIds)
+      .eq("period", "full")
+      .in("market", ["spreads", "totals"])
+      .in("sportsbook_key", books),
+    "v_game_odds_current",
+  );
+  for (const row of rows) {
+    const gameId = Number(row.game_id);
+    out.set(gameId, [...(out.get(gameId) ?? []), toBookOdds(row)]);
+  }
+  return out;
+}
+
+function toBookOdds(row: DbRow): BookOdds {
+  return {
     period: row.period as ModelPeriod,
     sportsbookKey: row.sportsbook_key as string,
     sportsbookName: row.sportsbook_name as string,
@@ -211,7 +244,7 @@ export async function getGameBookOdds(gameId: number): Promise<BookOdds[]> {
     firstLine: num(row.first_line),
     capturedAt: row.captured_at as string,
     firstCapturedAt: row.first_captured_at as string,
-  }));
+  };
 }
 
 // =============================================================================

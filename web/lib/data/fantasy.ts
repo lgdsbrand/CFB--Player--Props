@@ -69,3 +69,35 @@ export async function getFantasyGame(
     })),
   };
 }
+
+/**
+ * The shown version's projected score for each game, for the NFL game cards
+ * (client, 2026-10-19: "fantasy model isn't showing proj score on the front
+ * view"). One read for the list, at most one row per game.
+ */
+export async function getFantasyScores(
+  gameIds: number[],
+): Promise<Map<number, { home: number; away: number }>> {
+  const out = new Map<number, { home: number; away: number }>();
+  if (gameIds.length === 0) return out;
+  const supabase = createServerSupabaseClient();
+  const rows = unwrap<DbRow[]>(
+    await supabase
+      .from("fantasy_game_projections")
+      .select("game_id, away_score, home_score")
+      .in("game_id", gameIds)
+      .eq("model_version", SHOWN_FANTASY_VERSION),
+    "fantasy_game_projections",
+  );
+  for (const row of rows) {
+    const home = num(row.home_score);
+    const away = num(row.away_score);
+    if (home !== null && away !== null) {
+      out.set(Number(row.game_id), {
+        home: Math.round(home * 10) / 10,
+        away: Math.round(away * 10) / 10,
+      });
+    }
+  }
+  return out;
+}

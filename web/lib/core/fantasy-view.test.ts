@@ -8,6 +8,7 @@ import {
   pointsEdge,
   teamLineup,
   type FantasyProjection,
+  withBookLines,
   type LineupEntry,
 } from "./fantasy-view.ts";
 
@@ -57,6 +58,25 @@ test("the book is Pinnacle, then DraftKings, then FanDuel, skipping a non-price"
   ];
   assert.equal(chooseBook(pulled, "spreads")?.sportsbookKey, "fanduel");
   assert.equal(chooseBook([quote({ period: "h1" })], "spreads"), null);
+});
+
+test("an NFL card takes the chosen book's spread and total, or none", () => {
+  const game = { gameId: 1, homeSpread: null, gameTotal: null };
+  const odds = [
+    quote({ sportsbookKey: "fanduel", line: -3 }),
+    quote({ sportsbookKey: "pinnacle", line: -2.5 }),
+    quote({
+      sportsbookKey: "draftkings",
+      market: "totals",
+      line: 44.5,
+      homePrice: null,
+      awayPrice: null,
+      overPrice: -110,
+      underPrice: -110,
+    }),
+  ];
+  assert.deepEqual(withBookLines(game, odds), { gameId: 1, homeSpread: -2.5, gameTotal: 44.5 });
+  assert.deepEqual(withBookLines(game, []), { gameId: 1, homeSpread: null, gameTotal: null });
 });
 
 test("the spread edge is in points, on the model's side, and a play at 4+", () => {

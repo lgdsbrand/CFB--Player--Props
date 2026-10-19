@@ -179,3 +179,20 @@ export function teamLineup(
   ).filter((e): e is LineupEntry => e !== undefined);
   return { slots, total: round1(slots.reduce((sum, e) => sum + e.fantasyPoints, 0)) };
 }
+
+/**
+ * An NFL game with its spread and total taken from the book `chooseBook`
+ * picks, for the game cards. CFBD's consensus, which fills these on a college
+ * game, does not cover the NFL, so without this every NFL card read "Not
+ * priced" beside a game page that showed the book's line.
+ */
+export function withBookLines<G extends { homeSpread: number | null; gameTotal: number | null }>(
+  game: G,
+  odds: BookOdds[],
+): G {
+  return {
+    ...game,
+    homeSpread: chooseBook(odds, "spreads")?.line ?? null,
+    gameTotal: chooseBook(odds, "totals")?.line ?? null,
+  };
+}

@@ -21,7 +21,7 @@ import { isSupabaseConfigured } from "@/lib/core/env";
 import { EV_HIGHLIGHT } from "@/lib/core/ev";
 import { formatCount } from "@/lib/core/format";
 import { LIVE_SPORTS } from "@/lib/core/live";
-import { orderByEdge } from "@/lib/core/game-lines";
+import { orderByEdge, projectedScore, type BookOdds } from "@/lib/core/game-lines";
 import { playsFor } from "@/lib/core/rule-plays";
 import { gameMatchups } from "@/lib/core/game-view";
 import {
@@ -33,8 +33,14 @@ import { getConferences } from "@/lib/data/catalogue";
 import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
 import { getEvWagers } from "@/lib/data/ev";
+import { getFantasyScores } from "@/lib/data/fantasy";
+import { PICK_BOOKS, withBookLines } from "@/lib/core/fantasy-view";
 import { getLiveScores } from "@/lib/data/live";
-import { getGameOddsSummaries, getGameProjections } from "@/lib/data/game-odds";
+import {
+  getFullGameBookOdds,
+  getGameOddsSummaries,
+  getGameProjections,
+} from "@/lib/data/game-odds";
 import { getSlateGames } from "@/lib/data/games";
 import { getRulePlays } from "@/lib/data/rule-plays";
 import { findWeek, getSlateWeeks } from "@/lib/data/slate";
@@ -176,8 +182,17 @@ export default async function Games({
   // Started now so it runs beside the reads below rather than after them.
   const hasLive = LIVE_SPORTS.includes(sport);
   const livePromise = hasLive ? getLiveScores(shownIds) : Promise.resolve([]);
-  // Projections in both views: the cards carry the projected score.
+  // Projections in both views: the cards carry the projected score. The NFL
+  // has no game model; its cards take the fantasy model's score instead, and
+  // the book line its game pages show (CFBD's consensus is college-only).
   const projectionsPromise = getGameProjections(shownIds);
+  const nflCards = sport === "nfl" && !showLines;
+  const fantasyScoresPromise = nflCards
+    ? getFantasyScores(shownIds)
+    : Promise.resolve(new Map<number, { home: number; away: number }>());
+  const nflOddsPromise = nflCards
+    ? getFullGameBookOdds(shownIds, PICK_BOOKS)
+    : Promise.resolve(new Map<number, BookOdds[]>());
   const [odds, projections, config, evWagers] = showLines
     ? await Promise.all([
         getGameOddsSummaries(shownIds),
@@ -216,7 +231,11 @@ export default async function Games({
           getAppConfig(),
         ])
       : [new Map(), null];
-  const liveInitial = await livePromise;
+  const [liveInitial, fantasyScores, nflOdds] = await Promise.all([
+    livePromise,
+    fantasyScoresPromise,
+    nflOddsPromise,
+  ]);
 
   const conferenceLabel = params.conference ?? "displayed conferences";
 
@@ -362,7 +381,9 @@ export default async function Games({
         .{" "}
         {showLines
           ? "Each game's model numbers and edges are set against one book's line, named in the table."
-          : "Spreads and totals are the book\u2019s consensus; the projected score is the game model\u2019s."}
+          : sport === "nfl"
+            ? "Spreads and totals are one book\u2019s (Pinnacle, then DraftKings, then FanDuel); the projected score is the fantasy model\u2019s."
+            : "Spreads and totals are the book\u2019s consensus; the projected score is the game model\u2019s."}
       </p>
 
       {hasLive && shown.length > 0 ? (
@@ -419,10 +440,14 @@ export default async function Games({
           {shown.map((game) => (
             <GameCard
               key={game.gameId}
-              game={game}
+              game={sport === "nfl" ? withBookLines(game, nflOdds.get(game.gameId) ?? []) : game}
               matchups={gameMatchups(game, ratings)}
               conditions={conditions.get(game.gameId) ?? null}
-              projection={projections.get(game.gameId) ?? null}
+              score={
+                sport === "nfl"
+                  ? (fantasyScores.get(game.gameId) ?? null)
+                  : projectedScore(projections.get(game.gameId))
+              }
             />
           ))}
         </div>

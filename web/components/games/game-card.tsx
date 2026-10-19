@@ -4,7 +4,6 @@ import { TeamChip } from "@/components/board/team-chip";
 import { ShareButton } from "@/components/share/share-button";
 import { favourite, softestMatchup, type PositionMatchup } from "@/lib/core/game-view";
 import { formatCount, formatKickoff, formatVenue } from "@/lib/core/format";
-import { projectedScore, type GameProjection } from "@/lib/core/game-lines";
 import { shareGameFileName, shareGameTitle } from "@/lib/core/share-game";
 import type { GameConditions, GameSummary } from "@/lib/core/types";
 import { conditionsSummary } from "@/lib/core/weather-view";
@@ -19,22 +18,22 @@ import { conditionsSummary } from "@/lib/core/weather-view";
  * for. Everything else is a caption.
  *
  * The spread and total are the BOOK'S numbers, from CFBD. The one model number
- * is the projected score beside each team (client, 2026-10-09), from the game
- * model's projection (CLAUDE.md §11); the edges stay on the Lines view.
+ * is the projected score beside each team (client, 2026-10-09): the game
+ * model's for college (CLAUDE.md §11), the fantasy model's for the NFL
+ * (2026-10-19). The page picks which; the edges stay on the Lines view.
  */
 export function GameCard({
   game,
   matchups,
   conditions = null,
-  projection = null,
+  score = null,
 }: {
   game: GameSummary;
   matchups: PositionMatchup[];
   conditions?: GameConditions | null;
-  projection?: GameProjection | null;
+  score?: { home: number; away: number } | null;
 }) {
   const line = favourite(game);
-  const score = projectedScore(projection);
   const softest = softestMatchup(matchups);
   const venue = formatVenue({
     name: game.venueName,

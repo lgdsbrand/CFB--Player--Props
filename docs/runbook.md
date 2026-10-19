@@ -1168,6 +1168,28 @@ Engines `fantasy` (fixed) and `fantasy_sheet` (his sheet as-is), never pooled.
 
 **Monitored:** 3h, `nfl` — most runs find no game in the window and still log.
 
+#### `reprice_picks` — hourly, after the capture and before `lock_prop_picks`, in both props odds crons
+
+```bash
+python -m worker.jobs.reprice_picks --sport cfb              # what the chain runs
+python -m worker.jobs.reprice_picks --sport nfl --dry-run    # re-price in a rolled-back transaction, report
+```
+
+The board reads its line, price, side and edge off `picks`, which
+`run_projections` writes only at 12:30 UTC. Without this, the close capture an
+hour before kickoff reached neither the board nor the props record before the
+game (the weekend of 2026-10-17 locked 9 of 61 college games). For every game
+not yet started whose real book lines are newer than its newest pick, this
+replaces the game's picks, priced from the stored distribution with
+`run_projections`' own `_insert_picks`: no re-projection, seconds per run.
+
+- **An hour with no new lines writes nothing.**
+- **Verified identical:** on 2026-10-19 re-pricing every upcoming game
+  reproduced all 574 NFL picks and every college pick outside the 8 games
+  whose lines had moved.
+
+**Monitored:** 3h, per sport.
+
 #### `lock_prop_picks` — hourly, last in `cfb-props-odds-refresh` (:00) and `nfl-props-odds-refresh` (:20)
 
 ```bash

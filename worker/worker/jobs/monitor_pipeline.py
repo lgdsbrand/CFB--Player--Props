@@ -319,6 +319,23 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
     ),
     # One module run per sport with --sport, so scoped like ingest_odds.
     JobExpectation(
+        name="reprice_picks",
+        max_age_hours=3,
+        sport_scoped=True,
+        note="hourly at :00, after the college props capture — prices the "
+             "board's calls against the lines just captured. A stop means the "
+             "board and the props record see new lines only after the 12:30 "
+             "UTC projection run, which is after most kickoffs.",
+    ),
+    JobExpectation(
+        name="reprice_picks",
+        max_age_hours=3,
+        sport="nfl",
+        sport_scoped=True,
+        note="hourly at :20, after the NFL props capture — the NFL half of "
+             "re-pricing the board against new lines.",
+    ),
+    JobExpectation(
         name="lock_prop_picks",
         max_age_hours=3,
         sport_scoped=True,

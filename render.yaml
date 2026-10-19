@@ -283,12 +283,15 @@ services:
     buildCommand: pip install -r requirements.txt
     # Then the game model's 1H/1Q lines (capture_game_periods), which need the
     # paid key this service already holds and the same hourly open-and-close.
-    # Last, after `;` so a failed capture cannot stop it, lock_prop_picks
-    # copies the board's calls for games starting soon into the props record
-    # (migration 0096). No API calls.
+    # Then, after `;` so a failed capture cannot stop them: reprice_picks
+    # prices the board's calls against the lines just captured (the board reads
+    # them off `picks`, which run_projections writes only at 12:30 UTC, after
+    # most kickoffs), and lock_prop_picks copies the board's calls for games
+    # starting soon into the props record (migration 0096). No API calls.
     startCommand: >-
       python -m worker.jobs.ingest_odds --event-limit 120 --close-window-minutes 60 &&
       python -m worker.jobs.capture_game_periods;
+      python -m worker.jobs.reprice_picks --sport cfb;
       python -m worker.jobs.lock_prop_picks --sport cfb
     envVars:
       - fromGroup: cfb-props-worker
@@ -477,8 +480,9 @@ services:
   # 90 minutes, his gap rule (spread 4+, total 6+) against the close just
   # captured, once per game, market and version. No API calls.
   #
-  # LAST, lock_prop_picks (migration 0096): the board's prop calls for games
-  # starting soon, copied into the props record. No API calls.
+  # LAST, reprice_picks then lock_prop_picks (migration 0096): the board's
+  # prop calls priced against the lines just captured, then those for games
+  # starting soon copied into the props record. No API calls.
   - type: cron
     name: nfl-props-odds-refresh
     runtime: python
@@ -490,6 +494,7 @@ services:
       python -m worker.jobs.ingest_odds --sport nfl --event-limit 120 --close-window-minutes 60;
       python -m worker.jobs.ingest_game_odds --sport nfl --paid --close-window-minutes 90;
       python -m worker.jobs.nfl_fantasy_picks --close-window-minutes 90;
+      python -m worker.jobs.reprice_picks --sport nfl;
       python -m worker.jobs.lock_prop_picks --sport nfl
     envVars:
       - fromGroup: cfb-props-worker

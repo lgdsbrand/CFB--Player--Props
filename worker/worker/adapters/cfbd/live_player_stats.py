@@ -317,18 +317,32 @@ def _write(game_id: int, rows: list[dict[str, Any]], now: datetime) -> None:
         )
 
 
+#: CFBD's body for a game whose play-by-play has not started.
+NO_PLAYS = "No plays found for game"
+
+
 def poll(client: CfbdClient, now: datetime, *, dry_run: bool = False) -> int:
     """Rows written across the games due now (0 when none is)."""
     due = games_due(now)
     written = 0
     for game in due:
-        response = client.call_uncached(
-            "/live/plays",
-            cfbd.PlaysApi,
-            "get_live_plays_with_http_info",
-            game_id=int(game["cfbd_id"]),
-            _preload_content=False,
-        )
+        try:
+            response = client.call_uncached(
+                "/live/plays",
+                cfbd.PlaysApi,
+                "get_live_plays_with_http_info",
+                game_id=int(game["cfbd_id"]),
+                _preload_content=False,
+            )
+        except cfbd.exceptions.BadRequestException as exc:
+            # 2026-10-17: one game CFBD had no plays for yet answered 400 "No
+            # plays found for game." on every poll for half an hour, and the
+            # games after it in the loop went unread. Skipped unstamped, so the
+            # next poll asks again; any other 400 still fails the run.
+            if NO_PLAYS not in str(exc.body or ""):
+                raise
+            log.info("live plays: game %s has no plays at CFBD yet; skipped", game["id"])
+            continue
         remaining = response.headers.get("X-CallLimit-Remaining") if response.headers else None
         payload = json.loads(response.raw_data)
         rows, unresolved = stat_rows(parse_live_game(payload), _rosters(game), int(game["id"]), now)

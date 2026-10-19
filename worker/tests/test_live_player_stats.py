@@ -12,6 +12,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import cfbd
+import pytest
+
+import worker.adapters.cfbd.live_player_stats as lps
 from worker.adapters.cfbd.live_player_stats import (
     RosterResolver,
     StatLine,
@@ -230,3 +234,51 @@ def test_rows_sum_one_player_named_two_ways_and_report_the_unresolved():
         }
     ]
     assert sorted(unresolved) == ["M.Alejado", "Z.Nobody"]
+
+
+# --- the poll loop --------------------------------------------------------------
+
+class _Response:
+    headers = {"X-CallLimit-Remaining": "20000"}
+    raw_data = b'{"status": "in_progress", "teams": [], "drives": []}'
+
+
+class _Client:
+    """CFBD stand-in: game 1 has no plays yet (CFBD's 400), game 2 answers."""
+
+    def __init__(self, body: str = '{"message":"No plays found for game."}') -> None:
+        self.body = body
+        self.asked: list[int] = []
+
+    def call_uncached(self, _path, _api, _method, *, game_id, **_kwargs):
+        self.asked.append(game_id)
+        if game_id == 1:
+            exc = cfbd.exceptions.BadRequestException(status=400, reason="Bad Request")
+            exc.body = self.body
+            raise exc
+        return _Response()
+
+
+def _due(monkeypatch, written: list[int]) -> None:
+    games = [{"id": 101, "cfbd_id": 1}, {"id": 102, "cfbd_id": 2}]
+    monkeypatch.setattr(lps, "games_due", lambda _now: games)
+    monkeypatch.setattr(lps, "_rosters", lambda _game: {})
+    monkeypatch.setattr(lps, "parse_live_game", lambda _payload: [])
+    monkeypatch.setattr(lps, "stat_rows", lambda *_a: ([], []))
+    monkeypatch.setattr(lps, "_write", lambda game_id, _rows, _now: written.append(game_id))
+
+
+def test_a_game_with_no_plays_yet_is_skipped_and_the_rest_are_read(monkeypatch):
+    # 2026-10-17: one such game failed every poll for half an hour.
+    written: list[int] = []
+    _due(monkeypatch, written)
+    client = _Client()
+    lps.poll(client, datetime(2026, 10, 17, 0, 20, tzinfo=UTC))
+    assert client.asked == [1, 2]
+    assert written == [102]  # game 101 left unstamped, so the next poll asks again
+
+
+def test_any_other_bad_request_still_fails(monkeypatch):
+    _due(monkeypatch, [])
+    with pytest.raises(cfbd.exceptions.BadRequestException):
+        lps.poll(_Client(body='{"message":"invalid id"}'), datetime(2026, 10, 17, tzinfo=UTC))

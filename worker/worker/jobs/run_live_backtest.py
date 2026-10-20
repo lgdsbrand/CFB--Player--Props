@@ -174,6 +174,25 @@ def nfl_priors(finals_df: pl.DataFrame) -> dict[int, tuple[float, float]]:
     return out
 
 
+def nfl_prior_objects(
+    finals_df: pl.DataFrame, finals: dict[int, Final], first_season: int
+) -> tuple[dict[int, Prior], float, float]:
+    """`nfl_priors` as Prior objects, with one league sd from the first season's misses.
+
+    Shared with the game simulator's backtest (`run_sim_backtest`), so both
+    are graded from the same pregame projection.
+    """
+    means = nfl_priors(finals_df)
+    base = [g for g, f in finals.items() if g in means and f.season == first_season]
+    sd_m = float(
+        np.std([finals[g].home_points - finals[g].away_points - means[g][0] for g in base])
+    )
+    sd_t = float(
+        np.std([finals[g].home_points + finals[g].away_points - means[g][1] for g in base])
+    )
+    return {g: Prior(m, sd_m, t, sd_t) for g, (m, t) in means.items()}, sd_m, sd_t
+
+
 def _game_id(rows: pl.DataFrame, s: FinalScore) -> int:
     hit = rows.filter(
         (pl.col("week") == s.week)
@@ -208,16 +227,7 @@ def run_sport(sport: str, current: int, *, write_params: bool = False) -> dict:
     if sport == "cfb":
         priors = cfb_priors(seasons, prior_seasons)
     else:
-        means = nfl_priors(finals_df)
-        # One league sd for the NFL prior, from the earliest season's misses.
-        base = [g for g, f in finals.items() if g in means and f.season == prior_seasons[0]]
-        sd_m = float(
-            np.std([finals[g].home_points - finals[g].away_points - means[g][0] for g in base])
-        )
-        sd_t = float(
-            np.std([finals[g].home_points + finals[g].away_points - means[g][1] for g in base])
-        )
-        priors = {g: Prior(m, sd_m, t, sd_t) for g, (m, t) in means.items()}
+        priors, sd_m, sd_t = nfl_prior_objects(finals_df, finals, prior_seasons[0])
     rows = checkpoints(timelines, finals, priors)
     prior_sds = (sd_m, sd_t) if sport == "nfl" else (None, None)
     log.info("%s: %d checkpoint rows from %d games with a prior", sport, len(rows), len(priors))
@@ -307,7 +317,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sport", choices=("cfb", "nfl", "both"), default="both")
     parser.add_argument(
-        "--write-params", action="store_true",
+        "--write-params",
+        action="store_true",
         help="Refit the recommended candidate on every season and write core/live_params/.",
     )
     args = parser.parse_args(argv)

@@ -515,6 +515,23 @@ NFL is also compared with nflverse's published win probability, downloaded
 from nflverse's public play-by-play file. Reads the database only otherwise,
 two or three minutes.
 
+#### `run_sim_backtest` — on demand (NFL game simulator, S1)
+
+```bash
+python -m worker.jobs.run_sim_backtest                          # both test seasons, ~50 minutes
+python -m worker.jobs.run_sim_backtest --test 2025 --sims 150   # a quick look
+```
+
+Backtest of the play-by-play game simulator (`core/play_sim.py`) against the
+live model, on the live backtest's own moments and Massey projection, and the
+report at `docs/nfl-sim-backtest.html`. The simulator learns from nflverse's
+full public play-by-play (cached under `worker/.cache/nflverse/`, gitignored),
+because `plays` holds offensive snaps only and has no kicks. Also grades the
+first quarter and first half against a projection-times-league-share baseline.
+No odds, no API credits. The first full run (2026-10-20) tied the live model on
+the full game, so the live model keeps it; the simulator supplies the
+animation, the first-quarter total and the first-half winner.
+
 #### `ingest_game_lines` — daily 10:00 UTC
 
 ```bash

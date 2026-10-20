@@ -201,15 +201,18 @@ services:
     envVars:
       - fromGroup: cfb-props-worker
 
-  # Every two minutes, all week: college live scores (migration 0088). Almost
-  # every run ends in a second or two on a database query that finds no game
-  # in its window, with NO CFBD call and no pipeline_runs row. While a game is
-  # on, ONE /scoreboard call covers the whole FBS week: ~360 calls on a
-  # Saturday, ~3,500 a month against CFBD's 30,000. College only: NFL scores
-  # would be bought from the Odds API. Then the players (migration 0092): each
-  # game in progress with book props has its play-by-play read at most every
-  # five minutes, one /live/plays call each, ~10,500 a month; it stops itself
-  # below 5,000 calls left in the month.
+  # Every two minutes, all week: live scores (migration 0088). Almost every
+  # run ends in a second or two on a database query that finds no game in its
+  # window, with NO API call and no pipeline_runs row. While a college game is
+  # on, ONE CFBD /scoreboard call covers the whole FBS week: ~360 calls on a
+  # Saturday, ~3,500 a month against CFBD's 30,000. Then the players
+  # (migration 0092): each game in progress with book props has its
+  # play-by-play read at most every five minutes, one /live/plays call each,
+  # ~10,500 a month; it stops itself below 5,000 calls left in the month.
+  # NFL since migration 0098: one call to ESPN's free public scoreboard while
+  # an NFL game is on. Then the live model (live_projections) on every game in
+  # progress, both sports, with no API call. The name predates the NFL; a
+  # rename would create a second service, so it stays.
   - type: cron
     name: cfb-live-scores
     runtime: python

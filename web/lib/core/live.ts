@@ -1,9 +1,10 @@
 /**
  * Live scores (migration 0088): what the scoreboard shows right now.
  *
- * SPORT-AGNOSTIC CORE. Today only college games have rows (CFBD's
- * scoreboard, polled every two minutes while a game is on). Not the score of
- * record: `games` keeps the final, from the daily results ingest.
+ * SPORT-AGNOSTIC CORE. College rows come from CFBD's scoreboard and NFL rows
+ * from ESPN's (migration 0098), both polled every two minutes while a game is
+ * on. Not the score of record: `games` keeps the final, from the daily
+ * results ingest.
  */
 
 import type { Sport } from "./sport.ts";
@@ -11,11 +12,13 @@ import type { Sport } from "./sport.ts";
 export type LiveStatus = "scheduled" | "in_progress" | "completed";
 
 /**
- * Sports with a live-score feed. College only (CFBD's scoreboard, free); NFL
- * scores would be bought from the Odds API, which the user declined
- * (2026-10-06). A page for any other sport renders no live UI and polls nothing.
+ * Sports with a live-score feed: college (CFBD's scoreboard) and, since the
+ * live model (2026-10-20, migration 0098), the NFL from ESPN's free public
+ * scoreboard. The user declined buying NFL scores from the Odds API
+ * (2026-10-06) and approved ESPN's instead (2026-10-19). A page for any other
+ * sport renders no live UI and polls nothing.
  */
-export const LIVE_SPORTS: readonly Sport[] = ["cfb"];
+export const LIVE_SPORTS: readonly Sport[] = ["cfb", "nfl"];
 
 export interface LiveScore {
   gameId: number;
@@ -59,7 +62,7 @@ export function toLiveScore(row: Record<string, unknown>): LiveScore {
   };
 }
 
-/** "1st", "OT", "2OT": a college game's fifth period is overtime. */
+/** "1st", "OT", "2OT": a fifth period is overtime, in college and the NFL alike. */
 export function periodLabel(period: number): string {
   if (period <= 4) return ["1st", "2nd", "3rd", "4th"][period - 1] ?? `Q${period}`;
   const ot = period - 4;

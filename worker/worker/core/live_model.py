@@ -46,9 +46,11 @@ ranges held 77-84% of finals at every checkpoint.
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from scipy.stats import t as student_t
 
@@ -293,3 +295,88 @@ def interval(
 
 def checkpoint_list(points: Sequence[int] = CHECKPOINTS) -> list[int]:
     return sorted(set(points))
+
+
+# =============================================================================
+# The fitted model as a file
+# =============================================================================
+
+#: Where the fitted models live: one JSON per sport, written by
+#: `run_live_backtest --write-params` and committed, so a refit is a reviewed
+#: diff and the live job never fits anything itself.
+PARAMS_DIR = Path(__file__).with_name("live_params")
+
+
+@dataclass
+class FittedModel:
+    """Everything the live job needs for one sport.
+
+    `prior_margin_sd`/`prior_total_sd` stand in for a prior that carries no
+    spread of its own (the NFL's fantasy projection is a point estimate); the
+    coefficients were fitted with these same values, so they must travel
+    together. Null for college, whose game model gives a range per game.
+    """
+
+    sport: str
+    params: LiveParams
+    ep: EpTable
+    fitted_on: list[int]
+    prior_margin_sd: float | None = None
+    prior_total_sd: float | None = None
+
+    def to_json(self) -> str:
+        def coefs(table: dict[int, Coefficients]) -> dict[str, dict]:
+            return {
+                str(e): {
+                    "weights": c.weights,
+                    "sd_scale": c.sd_scale,
+                    "df": None if math.isinf(c.df) else c.df,
+                    "win_k": c.win_k,
+                }
+                for e, c in sorted(table.items())
+            }
+
+        return json.dumps(
+            {
+                "sport": self.sport,
+                "candidate": self.params.candidate,
+                "fitted_on": self.fitted_on,
+                "prior_margin_sd": self.prior_margin_sd,
+                "prior_total_sd": self.prior_total_sd,
+                "ep": {f"{d}:{b}": v for (d, b), v in sorted(self.ep.values.items())},
+                "margin": coefs(self.params.margin),
+                "total": coefs(self.params.total),
+            },
+            indent=1,
+        )
+
+    @classmethod
+    def from_json(cls, text: str) -> FittedModel:
+        raw = json.loads(text)
+
+        def coefs(table: dict[str, dict]) -> dict[int, Coefficients]:
+            return {
+                int(e): Coefficients(
+                    {k: float(v) for k, v in c["weights"].items()},
+                    float(c["sd_scale"]),
+                    math.inf if c["df"] is None else float(c["df"]),
+                    float(c["win_k"]),
+                )
+                for e, c in table.items()
+            }
+
+        params = LiveParams(raw["candidate"], coefs(raw["margin"]), coefs(raw["total"]))
+        ep = EpTable(
+            {
+                (int(k.split(":")[0]), int(k.split(":")[1])): float(v)
+                for k, v in raw["ep"].items()
+            }
+        )
+        return cls(
+            raw["sport"], params, ep, list(raw["fitted_on"]),
+            raw.get("prior_margin_sd"), raw.get("prior_total_sd"),
+        )
+
+
+def load_fitted(sport: str) -> FittedModel:
+    return FittedModel.from_json((PARAMS_DIR / f"{sport}.json").read_text(encoding="utf-8"))

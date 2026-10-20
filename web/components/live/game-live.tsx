@@ -1,6 +1,7 @@
 "use client";
 
 import { liveStateLabel, periodLabel, type LiveScore } from "@/lib/core/live";
+import type { Sport } from "@/lib/core/sport";
 import { useLiveScores } from "@/components/live/use-live-scores";
 
 /**
@@ -15,12 +16,15 @@ export function GameLive({
   home,
   away,
   initial,
+  sport,
 }: {
   gameId: number;
   startDate: string | null;
   home: string;
   away: string;
   initial: LiveScore | null;
+  /** Names the scoreboard it came from: CFBD's for college, ESPN's for the NFL. */
+  sport: Sport;
 }) {
   const [score] = useLiveScores([{ gameId, startDate }], initial ? [initial] : []);
   if (!score || score.status === "scheduled") return null;
@@ -79,7 +83,7 @@ export function GameLive({
         </table>
       ) : null}
       <span className="text-dim text-[0.6875rem]">
-        From CollegeFootballData&rsquo;s scoreboard, refreshed every minute.
+        {`From ${sport === "nfl" ? "ESPN" : "CollegeFootballData"}’s scoreboard, refreshed every minute.`}
       </span>
     </div>
   );

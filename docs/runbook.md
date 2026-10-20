@@ -390,13 +390,43 @@ distance, last play. The games page's Live strip and each game page read it.
 whether a college game is in its window (5 minutes before kickoff to 5 hours
 after, not yet final). If not, it exits with no CFBD call and no
 `pipeline_runs` row. When one is, ONE `/scoreboard` call covers the whole FBS
-week. ~360 calls on a Saturday, ~3,500 a month. College only: NFL scores would
-cost Odds API credits.
+week. ~360 calls on a Saturday, ~3,500 a month.
+
+**NFL too, since migration 0098.** While one of our NFL games is in its window,
+one call to ESPN's public scoreboard (free, keyless, unofficial;
+`adapters/espn/scoreboard.py`) writes NFL rows to the same table, recorded as
+its own run with `metadata.sport = 'nfl'`. A failed ESPN call is logged and the
+next poll tries again. Then `live_projections` runs the live model on every game
+in progress (below). Each of the three is its own run, and a failure in one does
+not stop the others.
 
 **Not the score of record.** `games` gets the final from the daily results
 ingest; this table only says what the scoreboard shows now. **Monitored:** 96h
 on the job (it is idle between game nights), and `check_live_scores` warns when
-a game on the field has no live row newer than 15 minutes.
+a game on the field (either sport) has no live row newer than 15 minutes.
+
+#### `live_projections` — run by `poll_live_scores` (live model, L2)
+
+```bash
+python -m worker.jobs.live_projections --dry-run   # project every live game, write nothing
+```
+
+The live model (`core/live_model.py`, migration 0098) on every game in progress:
+projected final margin and total with 80% ranges, and the home win %, written to
+`live_projections` (one row per game, overwritten; a last write at the final)
+and `live_projection_history` (one row per distinct clock and score, for the
+win % chart and grading). No API calls: it reads `live_scores` and the pregame
+projection, the game model's for college (`game_projections`, ratings-v1) and
+the fantasy model's for the NFL (`fantasy_game_projections`, the shown version).
+A game with no pregame projection gets no live one. No odds anywhere.
+
+The fitted model is a file per sport, `core/live_params/<sport>.json`, written
+by `run_live_backtest --write-params` and committed. Refit it in the offseason,
+review the report, commit the diff; the live job never fits anything.
+**Monitored** by `check_live_projections`, which warns when a game has a fresh
+live score and a pregame projection but no live projection newer than 15
+minutes. It has no staleness expectation of its own: it is not a cron, it runs
+inside `poll_live_scores`, whose 96h expectation covers the schedule.
 
 #### `run_game_model` — daily 09:30/15:30/19:30/23:30 UTC (game model, G4)
 

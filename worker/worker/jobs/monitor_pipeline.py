@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -227,10 +227,11 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
     JobExpectation(
         name="poll_live_scores",
         max_age_hours=96,
-        note="every 2 minutes, but it records a run ONLY while a college game "
-             "is on, so the gap between Saturday night and the next weeknight "
-             "game is normal; 96h covers it. A live game that stops updating is "
-             "caught by check_live_scores, not here.",
+        note="every 2 minutes, but it records a run ONLY while a game is on "
+             "(college from CFBD, NFL from ESPN since migration 0098, each its "
+             "own run), so a quiet stretch between game days is normal; 96h "
+             "covers it. A live game that stops updating is caught by "
+             "check_live_scores, not here.",
     ),
     JobExpectation(
         name="ingest_coaches",
@@ -793,18 +794,19 @@ LIVE_STALE_MINUTES = 15
 
 
 def check_live_scores(report: MonitorReport) -> None:
-    """A college game in progress whose live score has stopped moving.
+    """A game in progress whose live score has stopped moving.
 
     The poller is idle most of the week by design, so its staleness check
     cannot see this; what can is a game that kicked off over 20 minutes ago,
-    is not final, and has no live row or an old one.
+    is not final, and has no live row or an old one. Both sports since
+    migration 0098 (NFL from ESPN's scoreboard).
     """
     rows = fetch_all(
         """
-        select g.id, l.updated_at
+        select g.id, g.sport, l.updated_at
           from games g
           left join live_scores l on l.game_id = g.id
-         where g.sport = 'cfb' and not g.completed
+         where g.sport in ('cfb', 'nfl') and not g.completed
            and g.start_date between now() - interval '4 hours'
                                 and now() - interval '20 minutes'
            and (l.status is null or l.status <> 'completed')
@@ -817,10 +819,51 @@ def check_live_scores(report: MonitorReport) -> None:
         report.add(
             "warning",
             "live-scores-stale",
-            f"{len(rows)} live college game(s) without a fresh score",
-            f"Games {', '.join(str(r['id']) for r in rows[:10])} are on the field "
-            f"and their live_scores row is missing or over {LIVE_STALE_MINUTES} "
-            "minutes old. Check the cfb-live-scores cron on Render.",
+            f"{len(rows)} live game(s) without a fresh score",
+            f"Games {_game_list(rows, 'id')} are on "
+            f"the field and their live_scores row is missing or over {LIVE_STALE_MINUTES} "
+            "minutes old. Check the cfb-live-scores cron on Render (it polls both "
+            "sports); an NFL-only gap points at ESPN's scoreboard.",
+        )
+
+
+def _game_list(rows: Sequence[Mapping[str, Any]], key: str) -> str:
+    """'123 (cfb), 456 (nfl)' for the first ten rows."""
+    return ", ".join("{} ({})".format(r[key], r["sport"]) for r in rows[:10])
+
+
+def check_live_projections(report: MonitorReport) -> None:
+    """A game with a fresh live score and a pregame projection, but a stale live projection.
+
+    The live model needs no API, so when the score is moving and the
+    projection is not, the fault is ours: the model file, the prior read or
+    the write (jobs/live_projections.py logs which).
+    """
+    rows = fetch_all(
+        """
+        select l.game_id, g.sport
+          from live_scores l
+          join games g on g.id = l.game_id
+          left join live_projections lp on lp.game_id = l.game_id
+         where l.status = 'in_progress'
+           and l.period is not null
+           and l.updated_at > now() - make_interval(mins => %s)
+           and (exists (select 1 from game_projections gp where gp.game_id = g.id)
+                or exists (select 1 from fantasy_game_projections fp where fp.game_id = g.id))
+           and (lp.updated_at is null
+                or lp.updated_at < now() - make_interval(mins => %s))
+        """,
+        (LIVE_STALE_MINUTES, LIVE_STALE_MINUTES),
+    )
+    if rows:
+        report.add(
+            "warning",
+            "live-projections-stale",
+            f"{len(rows)} live game(s) with a fresh score but no fresh live projection",
+            f"Games {_game_list(rows, 'game_id')} have "
+            f"a live score from the last {LIVE_STALE_MINUTES} minutes and a pregame "
+            "projection, but their live_projections row is missing or old. Read the "
+            "live_projections lines in the cfb-live-scores cron's log.",
         )
 
 
@@ -833,6 +876,7 @@ def run_checks(slates: Mapping[str, Slate | None]) -> MonitorReport:
     check_latest_run_failed(report)
     check_staleness(report, slates)
     check_live_scores(report)
+    check_live_projections(report)
     # COLLEGE ONLY, deliberately, and it is a known gap. This check counts
     # `projections` rows for the slate week and compares them against earlier
     # weeks and the prior season — a comparison the NFL cannot make yet, having

@@ -2,6 +2,12 @@
 
     python -m worker.jobs.run_live_backtest
     python -m worker.jobs.run_live_backtest --sport nfl
+    python -m worker.jobs.run_live_backtest --write-params   # refit what runs live
+
+`--write-params` then refits the recommended candidate on EVERY season with a
+prior and writes core/live_params/<sport>.json, which the live poller reads.
+Commit the diff: a refit is a reviewed change, done in the offseason (or once
+a season has enough games), never automatically.
 
 Writes docs/live-model-backtest.html. Reads the database only, plus nflverse's
 public play-by-play file for the NFL benchmark (their own win probability).
@@ -47,8 +53,8 @@ from worker.core.live_backtest import (
     pregame_only,
     score,
 )
-from worker.core.live_model import Prior
-from worker.core.live_report import render
+from worker.core.live_model import PARAMS_DIR, FittedModel, Prior
+from worker.core.live_report import chosen, render
 from worker.db import fetch_all, get_config_value
 from worker.logging_setup import configure_logging, get_logger
 
@@ -191,7 +197,7 @@ def nflverse_wp(season: int) -> pl.DataFrame:
     return pl.read_parquet(cache, columns=["game_id", "play_id", "home_wp", "vegas_home_wp"])
 
 
-def run_sport(sport: str, current: int) -> dict:
+def run_sport(sport: str, current: int, *, write_params: bool = False) -> dict:
     first, after = SPORTS[sport]
     seasons = list(range(first, current + 1))
     finals_df, finals, plays = load(sport, seasons)
@@ -213,6 +219,7 @@ def run_sport(sport: str, current: int) -> dict:
         )
         priors = {g: Prior(m, sd_m, t, sd_t) for g, (m, t) in means.items()}
     rows = checkpoints(timelines, finals, priors)
+    prior_sds = (sd_m, sd_t) if sport == "nfl" else (None, None)
     log.info("%s: %d checkpoint rows from %d games with a prior", sport, len(rows), len(priors))
 
     blocks = []
@@ -265,7 +272,17 @@ def run_sport(sport: str, current: int) -> dict:
                 if "margin_mae" in o
                 else "",
             )
-    return {"sport": sport, "blocks": blocks}
+    result = {"sport": sport, "blocks": blocks}
+    if write_params:
+        candidate = chosen(result)
+        fitted_on = sorted({r.season for r in rows})
+        ep = fit_ep_table(list(timelines.values()), finals)
+        model = FittedModel(sport, fit(rows, candidate, ep), ep, fitted_on, *prior_sds)
+        path = PARAMS_DIR / f"{sport}.json"
+        PARAMS_DIR.mkdir(exist_ok=True)
+        path.write_text(model.to_json() + "\n", encoding="utf-8")
+        log.info("%s: wrote candidate %s fitted on %s to %s", sport, candidate, fitted_on, path)
+    return result
 
 
 def _attach_benchmark(rows: list[Checkpoint], finals_df: pl.DataFrame, season: int) -> None:
@@ -289,6 +306,10 @@ def _attach_benchmark(rows: list[Checkpoint], finals_df: pl.DataFrame, season: i
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sport", choices=("cfb", "nfl", "both"), default="both")
+    parser.add_argument(
+        "--write-params", action="store_true",
+        help="Refit the recommended candidate on every season and write core/live_params/.",
+    )
     args = parser.parse_args(argv)
     try:
         settings = get_settings()
@@ -300,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
 
     current = int(get_config_value("current_season") or 2026)
     sports = ("cfb", "nfl") if args.sport == "both" else (args.sport,)
-    results = [run_sport(s, current) for s in sports]
+    results = [run_sport(s, current, write_params=args.write_params) for s in sports]
     REPORT_PATH.write_text(render(results), encoding="utf-8")
     log.info("Wrote %s", REPORT_PATH)
     return 0

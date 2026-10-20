@@ -250,6 +250,7 @@ export default async function GamePage({
             home={game.homeAbbreviation ?? game.homeSchool}
             away={game.awayAbbreviation ?? game.awaySchool}
             initial={liveRows[0] ?? null}
+            sport={game.sport}
           />
         ) : null}
 

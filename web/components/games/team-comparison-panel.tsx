@@ -1,7 +1,7 @@
 import {
   STRENGTH_METRICS,
   ordinal,
-  type StrengthMetric,
+  type RankedValue,
   type TeamStrength,
 } from "@/lib/core/team-strength";
 
@@ -71,11 +71,12 @@ export function TeamComparisonPanel({
                 {side === "offense" ? "Offense" : "Defense"}
               </h3>
               {STRENGTH_METRICS.filter((m) => m.side === side).map((metric) => (
-                <MetricRow
+                <ComparisonRow
                   key={metric.key}
-                  metric={metric}
-                  away={awayStrength}
-                  home={homeStrength}
+                  label={metric.label}
+                  format={metric.format}
+                  away={awayStrength?.metrics[metric.key]}
+                  home={homeStrength?.metrics[metric.key]}
                 />
               ))}
             </div>
@@ -107,39 +108,44 @@ function TeamHead({
   );
 }
 
-function MetricRow({
-  metric,
-  away,
-  home,
+/**
+ * One ranked metric, away against home. Exported for the NFL's Matchup stats
+ * panel, which ranks the fantasy model's inputs the same way, so a bar means
+ * the same thing on both sports' pages.
+ */
+export function ComparisonRow({
+  label,
+  format,
+  away: a,
+  home: h,
 }: {
-  metric: StrengthMetric;
-  away: TeamStrength | undefined;
-  home: TeamStrength | undefined;
+  label: string;
+  format: (value: number) => string;
+  away: RankedValue | undefined;
+  home: RankedValue | undefined;
 }) {
-  const a = away?.metrics[metric.key];
-  const h = home?.metrics[metric.key];
   // Brighter for the better rank; equal when tied or one side is missing.
   const awayBetter = a && h ? a.rank < h.rank : false;
   const homeBetter = a && h ? h.rank < a.rank : false;
   return (
     <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-x-3">
-      <Side value={a} metric={metric} better={awayBetter} align="left" />
+      <Side value={a} format={format} better={awayBetter} align="left" />
       <span className="label-caption w-24 text-center leading-tight sm:w-44">
-        {metric.label}
+        {label}
       </span>
-      <Side value={h} metric={metric} better={homeBetter} align="right" />
+      <Side value={h} format={format} better={homeBetter} align="right" />
     </div>
   );
 }
 
 function Side({
   value,
-  metric,
+  format,
   better,
   align,
 }: {
-  value: TeamStrength["metrics"][keyof TeamStrength["metrics"]];
-  metric: StrengthMetric;
+  value: RankedValue | undefined;
+  format: (value: number) => string;
   better: boolean;
   align: "left" | "right";
 }) {
@@ -161,7 +167,7 @@ function Side({
             "text-sm font-extrabold tabular-nums " + (better ? "text-ink" : "text-muted")
           }
         >
-          {metric.format(value.value)}
+          {format(value.value)}
         </span>
         <span className="text-dim text-[0.6875rem] tabular-nums">{ordinal(value.rank)}</span>
       </span>

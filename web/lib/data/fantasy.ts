@@ -14,6 +14,7 @@ import {
   type LineupEntry,
   type LineupSlot,
 } from "@/lib/core/fantasy-view";
+import type { MatchupInputRow } from "@/lib/core/matchup-stats";
 import { type DbRow, num, unwrap } from "@/lib/data/query";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
@@ -68,6 +69,41 @@ export async function getFantasyGame(
       skipped: (r.skipped as string | null) ?? null,
     })),
   };
+}
+
+/**
+ * Every team's fantasy-model inputs entering one week (`fantasy_team_inputs`,
+ * 0093), for the game page's Matchup stats panel. The whole league, not just
+ * the two teams, because the panel ranks them: 32 rows. `as_of_week = week`
+ * holds games before that week only, the numbers the projection used.
+ */
+export async function getMatchupInputs(season: number, week: number): Promise<MatchupInputRow[]> {
+  const supabase = createServerSupabaseClient();
+  const rows = unwrap<DbRow[]>(
+    await supabase
+      .from("fantasy_team_inputs")
+      .select(
+        "team_id, games_included, massey_off, massey_def, srs, off_epa_play, third_down_pct, " +
+          "red_zone_pct, plays_pg, def_epa_play, opp_third_down_pct, opp_red_zone_pct",
+      )
+      .eq("season", season)
+      .eq("as_of_week", week),
+    "fantasy_team_inputs",
+  );
+  return rows.map((r) => ({
+    teamId: Number(r.team_id),
+    gamesIncluded: Number(r.games_included),
+    masseyOff: num(r.massey_off),
+    masseyDef: num(r.massey_def),
+    srs: num(r.srs),
+    offEpaPlay: num(r.off_epa_play),
+    thirdDownPct: num(r.third_down_pct),
+    redZonePct: num(r.red_zone_pct),
+    playsPg: num(r.plays_pg),
+    defEpaPlay: num(r.def_epa_play),
+    oppThirdDownPct: num(r.opp_third_down_pct),
+    oppRedZonePct: num(r.opp_red_zone_pct),
+  }));
 }
 
 /**

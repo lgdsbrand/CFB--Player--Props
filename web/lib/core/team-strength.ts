@@ -78,18 +78,37 @@ export type TeamStrength = {
  * last, and gets no entry for it.
  */
 export function rankStrength(rows: StrengthRow[], teamIds: number[]): Map<number, TeamStrength> {
-  const out = new Map<number, TeamStrength>();
+  return rankTeams(rows, STRENGTH_METRICS, teamIds);
+}
+
+/**
+ * The ranking behind `rankStrength`, for any table of per-team numbers: the
+ * NFL game page ranks the fantasy model's team inputs the same way
+ * (`lib/core/matchup-stats.ts`), so the two panels' ranks and bars mean the
+ * same thing.
+ */
+export function rankTeams<K extends string>(
+  rows: ({ teamId: number; gamesIncluded: number } & Record<K, number | null>)[],
+  metrics: readonly { key: K; higherFirst: boolean }[],
+  teamIds: number[],
+): Map<number, { teamId: number; gamesIncluded: number; metrics: Partial<Record<K, RankedValue>> }> {
+  const out = new Map<
+    number,
+    { teamId: number; gamesIncluded: number; metrics: Partial<Record<K, RankedValue>> }
+  >();
   for (const id of teamIds) {
     const row = rows.find((r) => r.teamId === id);
     if (row) out.set(id, { teamId: id, gamesIncluded: row.gamesIncluded, metrics: {} });
   }
-  for (const metric of STRENGTH_METRICS) {
+  for (const metric of metrics) {
+    const valueOf = (r: Record<K, number | null> | undefined): number | null | undefined =>
+      r?.[metric.key];
     const values = rows
-      .map((r) => r[metric.key])
-      .filter((v): v is number => v !== null && Number.isFinite(v));
+      .map(valueOf)
+      .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
     const of = values.length;
     for (const team of out.values()) {
-      const value = rows.find((r) => r.teamId === team.teamId)?.[metric.key];
+      const value = valueOf(rows.find((r) => r.teamId === team.teamId));
       if (value === null || value === undefined || !Number.isFinite(value)) continue;
       const better = values.filter((v) => (metric.higherFirst ? v > value : v < value)).length;
       const rank = better + 1;

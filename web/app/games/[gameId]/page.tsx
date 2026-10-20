@@ -10,6 +10,7 @@ import { CoachPanel } from "@/components/games/coach-panel";
 import { EvWagersPanel } from "@/components/games/ev-wagers-panel";
 import { FantasyPanel } from "@/components/games/fantasy-panel";
 import { MatchupGrid } from "@/components/games/matchup-grid";
+import { MatchupStatsPanel } from "@/components/games/matchup-stats-panel";
 import { ModelLinePanel } from "@/components/games/model-line-panel";
 import { RecordsPanel } from "@/components/games/records-panel";
 import { SharpRetailPanel } from "@/components/games/sharp-retail-panel";
@@ -41,7 +42,7 @@ import { getTeamStrength } from "@/lib/data/team-strength";
 import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
 import { getEvWagers } from "@/lib/data/ev";
-import { getFantasyGame } from "@/lib/data/fantasy";
+import { getFantasyGame, getMatchupInputs } from "@/lib/data/fantasy";
 import { getLiveScores } from "@/lib/data/live";
 import {
   getEarliestSeason,
@@ -133,6 +134,7 @@ export default async function GamePage({
     evWagers,
     liveRows,
     fantasy,
+    matchupInputs,
   ] = await Promise.all([
     getDefenseRatings(game.season, game.week, game.sport),
     // Joins the existing wave rather than forming its own. A wave costs one
@@ -158,6 +160,8 @@ export default async function GamePage({
     game.sport === "nfl"
       ? getFantasyGame(gameId, game.season, game.week, [game.homeTeamId, game.awayTeamId])
       : null,
+    // Its team numbers, the whole league's for this week, ranked by the panel.
+    game.sport === "nfl" ? getMatchupInputs(game.season, game.week) : [],
   ]);
 
   // +EV rows are the last capture's prices: an offer before kickoff, history
@@ -357,6 +361,22 @@ export default async function GamePage({
           edgeThreshold={config.edgeThreshold}
         />
       )}
+
+      {/* The numbers behind the fantasy projection, as a chart (client,
+          2026-10-19). Straight after the model so it reads as its working;
+          the NFL never renders the opponent-adjusted Team comparison below. */}
+      {fantasy ? (
+        <MatchupStatsPanel
+          away={game.awayAbbreviation ?? game.awaySchool}
+          home={game.homeAbbreviation ?? game.homeSchool}
+          awayTeamId={game.awayTeamId}
+          homeTeamId={game.homeTeamId}
+          rows={matchupInputs}
+          lineups={fantasy.lineups}
+          injuries={roster.injuries}
+          week={game.week}
+        />
+      ) : null}
 
       <SharpRetailPanel
         summary={summaries.get(gameId)}

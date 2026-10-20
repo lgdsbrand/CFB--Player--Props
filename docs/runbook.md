@@ -400,6 +400,14 @@ next poll tries again. Then `live_projections` runs the live model on every game
 in progress (below). Each of the three is its own run, and a failure in one does
 not stop the others.
 
+**NFL twice a run while a game is on (2026-10-20).** If an NFL game is in
+progress, the run waits 60 seconds and polls ESPN and reruns the model once
+more, so the NFL numbers are about a minute old at worst for the client's live
+betting. Such a run lasts a little over a minute and writes two more
+`pipeline_runs` rows. College stays at one CFBD call a run. The game page's
+"Refresh now" button re-reads `live_projections` at once; it never calls ESPN
+(the site reads only Supabase, CLAUDE.md §2).
+
 **Not the score of record.** `games` gets the final from the daily results
 ingest; this table only says what the scoreboard shows now. **Monitored:** 96h
 on the job (it is idle between game nights), and `check_live_scores` warns when

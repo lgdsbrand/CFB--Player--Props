@@ -1,3 +1,5 @@
+import { liveStateLabel } from "./live.ts";
+
 /**
  * The live model on the page (phase L3, migration 0098).
  *
@@ -139,6 +141,19 @@ export function chartPoints(points: LivePoint[]): { minute: number; homePct: num
       homePct: Math.round(p.pHomeWin * 1000) / 10,
       score: `${p.awayPoints}-${p.homePoints}`,
     }));
+}
+
+/**
+ * The moment the numbers belong to: "3rd 4:12 · WAS 14, SF 17". A live bettor
+ * sets this against the game on their screen; a number is only as good as the
+ * score it was worked out from.
+ */
+export function asOfLabel(
+  p: Pick<LiveProjection, "status" | "period" | "clock" | "homePoints" | "awayPoints">,
+  home: string,
+  away: string,
+): string {
+  return `${liveStateLabel(p)} · ${away} ${p.awayPoints}, ${home} ${p.homePoints}`;
 }
 
 /** Minutes since the row was written, for "updated 2 min ago". */

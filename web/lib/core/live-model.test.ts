@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  asOfLabel,
   chartPoints,
   favourite,
   marginRangeLabel,
@@ -59,6 +60,13 @@ test("chart points run in game order, in minutes and percent, overtime at the 60
   assert.deepEqual(points.map((p) => p.minute), [50.6, 55, 60]);
   assert.deepEqual(points.map((p) => p.homePct), [85, 74.7, 100]);
   assert.equal(points[0].score, "16-23"); // away-home, as the page reads "AWAY @ HOME"
+});
+
+test("the numbers say which moment of the game they belong to", () => {
+  const p = toLiveProjection(ROW);
+  assert.equal(asOfLabel(p, "SF", "WAS"), "4th 9:22 · WAS 16, SF 23");
+  assert.equal(asOfLabel({ ...p, period: 2, clock: "0:00" }, "SF", "WAS"), "Half · WAS 16, SF 23");
+  assert.equal(asOfLabel({ ...p, period: 5, clock: "6:10" }, "SF", "WAS"), "OT 6:10 · WAS 16, SF 23");
 });
 
 test("minutes since an update", () => {

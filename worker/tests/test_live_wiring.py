@@ -242,3 +242,40 @@ def test_the_committed_model_files_load_and_survive_a_round_trip(sport):
             math.isinf(c.df) and math.isinf(again.params.margin[e].df)
         )
     assert (model.prior_margin_sd is None) == (sport == "cfb")
+
+
+# --- the second NFL pass (2026-10-20) ---------------------------------------
+
+
+def _second_pass(monkeypatch, *, in_progress, poll_fails=False, project_fails=False):
+    from worker.jobs import poll_live_scores as pls
+
+    calls: list[str] = []
+    monkeypatch.setattr(pls, "nfl_in_progress", lambda: in_progress)
+    monkeypatch.setattr(
+        pls, "poll_nfl", lambda now: calls.append(f"poll {now:%H:%M}") or poll_fails
+    )
+    monkeypatch.setattr(
+        pls, "project", lambda now: calls.append(f"project {now:%H:%M}") or project_fails
+    )
+    later = datetime(2026, 10, 20, 1, 1, tzinfo=UTC)
+    failed = pls.second_nfl_pass(sleep=lambda s: calls.append(f"sleep {s}"), clock=lambda: later)
+    return failed, calls
+
+
+def test_while_an_nfl_game_is_on_the_run_polls_and_projects_again_a_minute_later(monkeypatch):
+    failed, calls = _second_pass(monkeypatch, in_progress=True)
+    assert not failed
+    assert calls == ["sleep 60", "poll 01:01", "project 01:01"]
+
+
+def test_no_nfl_game_in_progress_means_no_wait_and_no_second_call(monkeypatch):
+    failed, calls = _second_pass(monkeypatch, in_progress=False)
+    assert not failed
+    assert calls == []
+
+
+def test_a_failed_second_poll_still_reruns_the_model_and_reports_the_failure(monkeypatch):
+    failed, calls = _second_pass(monkeypatch, in_progress=True, poll_fails=True)
+    assert failed
+    assert calls[-1] == "project 01:01"

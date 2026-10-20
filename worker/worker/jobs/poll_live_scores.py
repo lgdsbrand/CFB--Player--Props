@@ -31,12 +31,23 @@ recorded as its own run with sport 'nfl' so a failure on one feed never hides
 behind a success on the other. Then `live_projections` runs the live model on
 every game in progress, both sports, from those rows: no API call at all.
 Each of the three is its own run, and a failure in one does not stop the next.
+
+TWICE A RUN WHILE AN NFL GAME IS ON (2026-10-20). The client bets games live
+off these numbers and asked for a way to recalculate on demand. The site
+never calls a provider itself (CLAUDE.md §2), so the freshness has to come
+from here: while one of our NFL games is in progress, the run waits a minute
+and polls ESPN and reruns the model once more, so the NFL numbers are never
+much more than a minute old against a two-minute schedule. ESPN costs
+nothing; college stays at one CFBD scoreboard call a run, its budget is real.
+A run that does this lasts a little over a minute, inside the two.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from worker.adapters.cfbd import live_player_stats
@@ -44,13 +55,75 @@ from worker.adapters.cfbd.client import CfbdClient
 from worker.adapters.cfbd.live_scores import games_in_window, poll
 from worker.adapters.espn import scoreboard as espn
 from worker.config import ConfigError, get_settings
-from worker.db import pipeline_run, set_rows_written
+from worker.db import fetch_all, pipeline_run, set_rows_written
 from worker.jobs import live_projections
 from worker.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
 
 JOB_NAME = "poll_live_scores"
+SECOND_NFL_POLL_SECONDS = 60
+
+
+def nfl_in_progress() -> bool:
+    """Whether one of our NFL games is in progress, by the row the last poll wrote."""
+    return bool(
+        fetch_all(
+            """
+            select 1
+              from live_scores l
+              join games g on g.id = l.game_id
+             where g.sport = 'nfl' and l.status = 'in_progress'
+             limit 1
+            """
+        )
+    )
+
+
+def poll_nfl(now: datetime, *, dry_run: bool = False) -> bool:
+    """ESPN's scoreboard into `live_scores`, as its own run. True when it failed."""
+    try:
+        if dry_run:
+            espn.poll(now, dry_run=True)
+        else:
+            with pipeline_run(JOB_NAME, metadata={"sport": "nfl"}) as run_id:
+                set_rows_written(run_id, espn.poll(now) or 0)
+    except Exception as exc:
+        log.error("NFL live score poll failed: %s", exc, exc_info=True)
+        return True
+    return False
+
+
+def project(now: datetime, *, dry_run: bool = False) -> bool:
+    """The live model on every game in progress, as its own run. True when it failed."""
+    try:
+        if dry_run:
+            live_projections.run(now, dry_run=True)
+        elif live_projections.due_games():
+            with pipeline_run(live_projections.JOB_NAME) as run_id:
+                set_rows_written(run_id, live_projections.run(now))
+    except Exception as exc:
+        log.error("Live projections failed: %s", exc, exc_info=True)
+        return True
+    return False
+
+
+def second_nfl_pass(
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> bool:
+    """A minute on, ESPN and the model once more, while an NFL game is on. True when it failed."""
+    try:
+        if not nfl_in_progress():
+            return False
+    except Exception as exc:
+        log.error("Could not read whether an NFL game is in progress: %s", exc, exc_info=True)
+        return True
+    sleep(SECOND_NFL_POLL_SECONDS)
+    now = clock()
+    failed = poll_nfl(now)
+    return project(now) or failed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -98,25 +171,11 @@ def main(argv: list[str] | None = None) -> int:
             log.error("College live score poll failed: %s", exc, exc_info=True)
             failed = True
 
-    if nfl_due:
-        try:
-            if args.dry_run:
-                espn.poll(now, dry_run=True)
-            else:
-                with pipeline_run(JOB_NAME, metadata={"sport": "nfl"}) as run_id:
-                    set_rows_written(run_id, espn.poll(now) or 0)
-        except Exception as exc:
-            log.error("NFL live score poll failed: %s", exc, exc_info=True)
-            failed = True
-
-    try:
-        if args.dry_run:
-            live_projections.run(now, dry_run=True)
-        elif live_projections.due_games():
-            with pipeline_run(live_projections.JOB_NAME) as run_id:
-                set_rows_written(run_id, live_projections.run(now))
-    except Exception as exc:
-        log.error("Live projections failed: %s", exc, exc_info=True)
+    if nfl_due and poll_nfl(now, dry_run=args.dry_run):
+        failed = True
+    if project(now, dry_run=args.dry_run):
+        failed = True
+    if nfl_due and not args.dry_run and second_nfl_pass():
         failed = True
     return 1 if failed else 0
 

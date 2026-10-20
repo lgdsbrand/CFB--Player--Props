@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { LIVE_REFRESH_MS } from "@/lib/core/live";
 import {
@@ -32,14 +32,25 @@ function mayChange(game: Game, row: LiveProjection | undefined, now: number): bo
  * for the same reason as `useLiveScores`: a few rows of one small table, not
  * a server re-render. With `historyFor`, that one game's chart points come
  * along on each refresh.
+ *
+ * `refresh()` asks at once, for the "Refresh now" button: a live bettor should
+ * not wait out the minute. It reads what the worker last wrote; the worker
+ * itself reruns the NFL model about every minute while a game is on.
  */
 export function useLiveProjections(
   games: Game[],
   initial: LiveProjection[],
   options: { historyFor?: number; initialHistory?: LivePoint[] } = {},
-): { projections: LiveProjection[]; history: LivePoint[] } {
+): {
+  projections: LiveProjection[];
+  history: LivePoint[];
+  refresh: () => Promise<void>;
+  refreshing: boolean;
+} {
   const [projections, setProjections] = useState(initial);
   const [history, setHistory] = useState(options.initialHistory ?? []);
+  const [refreshing, setRefreshing] = useState(false);
+  const loadRef = useRef<((force: boolean) => Promise<void>) | null>(null);
   const key = games.map((g) => g.gameId).join(",");
   const [seenKey, setSeenKey] = useState(key);
   if (seenKey !== key) {
@@ -54,10 +65,11 @@ export function useLiveProjections(
     let cancelled = false;
     let latest = initial;
 
-    const load = async () => {
+    const load = async (force = false) => {
       const now = Date.now();
-      if (cancelled || document.hidden) return;
-      if (!games.some((g) => mayChange(g, latest.find((p) => p.gameId === g.gameId), now))) return;
+      if (cancelled || (!force && document.hidden)) return;
+      const changing = games.some((g) => mayChange(g, latest.find((p) => p.gameId === g.gameId), now));
+      if (!force && !changing) return;
       const supabase = getBrowserSupabaseClient();
       const [rows, points] = await Promise.all([
         supabase.from("live_projections").select(LIVE_PROJECTION_COLUMNS).in("game_id", ids),
@@ -79,13 +91,15 @@ export function useLiveProjections(
       }
     };
 
-    const timer = window.setInterval(load, LIVE_REFRESH_MS);
+    loadRef.current = load;
+    const timer = window.setInterval(() => void load(), LIVE_REFRESH_MS);
     const onVisible = () => {
       if (!document.hidden) void load();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
+      loadRef.current = null;
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -93,5 +107,15 @@ export function useLiveProjections(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
-  return { projections, history };
+  const refresh = useCallback(async () => {
+    if (!loadRef.current) return;
+    setRefreshing(true);
+    try {
+      await loadRef.current(true);
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
+  return { projections, history, refresh, refreshing };
 }

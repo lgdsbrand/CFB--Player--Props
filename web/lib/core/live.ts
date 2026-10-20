@@ -77,7 +77,7 @@ const isZeroClock = (clock: string | null) => clock === null || /^0?0:00$/.test(
  * A clock of zero or none in the 2nd is halftime, and elsewhere the end of
  * that period, because that is how the scoreboard reads between periods.
  */
-export function liveStateLabel(score: LiveScore): string {
+export function liveStateLabel(score: Pick<LiveScore, "status" | "period" | "clock">): string {
   if (score.status === "completed") {
     return score.period !== null && score.period > 4 ? `Final/${periodLabel(score.period)}` : "Final";
   }

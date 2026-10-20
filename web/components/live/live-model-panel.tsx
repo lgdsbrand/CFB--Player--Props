@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Area,
   AreaChart,
@@ -12,6 +13,7 @@ import {
 
 import { useLiveProjections } from "@/components/live/use-live-model";
 import {
+  asOfLabel,
   chartPoints,
   favourite,
   marginRangeLabel,
@@ -32,8 +34,11 @@ import {
  * the game; the numbers it projected are history by then and are not shown
  * as if they still meant something.
  *
- * Refreshed from the browser every minute (`useLiveProjections`); the worker
- * writes a new projection every two.
+ * Refreshed from the browser every minute (`useLiveProjections`). The worker
+ * writes a new projection every two minutes, and every minute for the NFL
+ * while a game is on. "Refresh now" (the client's button for betting games
+ * live, 2026-10-20) asks at once instead of waiting out the minute, and the
+ * "as of" line names the score and clock the numbers were worked out from.
  */
 export function LiveModelPanel({
   gameId,
@@ -50,7 +55,8 @@ export function LiveModelPanel({
   initial: LiveProjection | null;
   initialHistory: LivePoint[];
 }) {
-  const { projections, history } = useLiveProjections(
+  const [checked, setChecked] = useState(false);
+  const { projections, history, refresh, refreshing } = useLiveProjections(
     [{ gameId, startDate }],
     initial ? [initial] : [],
     { historyFor: gameId, initialHistory },
@@ -65,6 +71,14 @@ export function LiveModelPanel({
   const homePct = Math.min(99, Math.max(1, Math.round(p.pHomeWin * 100)));
   const updated = minutesSince(p.updatedAt);
 
+  // A click always says it landed, even when the worker has not run since and
+  // the numbers on screen were already the latest.
+  const refreshNow = async () => {
+    await refresh();
+    setChecked(true);
+    window.setTimeout(() => setChecked(false), 4000);
+  };
+
   return (
     <section className="panel flex flex-col gap-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -76,12 +90,26 @@ export function LiveModelPanel({
             <span className="pill bg-negative/15 text-negative">● Live</span>
           )}
         </div>
-        {!final ? (
-          <span className="text-dim text-[0.6875rem]">
-            {updated <= 1 ? "Updated just now" : `Updated ${updated} min ago`}
-          </span>
+        {!final && !overtime ? (
+          <div className="flex items-center gap-2">
+            <span className="text-dim text-[0.6875rem]">
+              {checked ? "Latest numbers loaded" : updated <= 1 ? "Updated just now" : `Updated ${updated} min ago`}
+            </span>
+            <button
+              type="button"
+              onClick={refreshNow}
+              disabled={refreshing}
+              className="pill border-border-subtle text-accent-cyan hover:border-accent-cyan border bg-transparent disabled:opacity-60"
+            >
+              {refreshing ? "Checking…" : "↻ Refresh now"}
+            </button>
+          </div>
         ) : null}
       </div>
+
+      {!final && !overtime ? (
+        <p className="text-muted -mt-2 text-xs tabular-nums">{`As of ${asOfLabel(p, home, away)}`}</p>
+      ) : null}
 
       {final ? (
         <p className="text-muted text-xs">

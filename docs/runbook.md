@@ -459,6 +459,24 @@ The closing line GRADES and never predicts: `game_data.FEATURE_COLUMNS` is the
 only list a model trains on, and `tests/test_game_model.py` fails if a `mkt_`
 column reaches it.
 
+#### `run_live_backtest` — on demand (live model, L1)
+
+```bash
+python -m worker.jobs.run_live_backtest
+python -m worker.jobs.run_live_backtest --sport nfl
+```
+
+Backtest of the live (in-game) model and the report at
+`docs/live-model-backtest.html`. Past games are frozen every five minutes (plus
+three and one minute left) from `plays`, and the live projection at each moment
+is scored against the final: win % (Brier, log loss, calibration), projected
+final margin and total, and whether 80% ranges hold 80%. Fitted on earlier
+seasons, scored on later ones. The prior is our own pregame projection
+(college: the game model; NFL: a point-in-time Massey rating); no odds are read.
+NFL is also compared with nflverse's published win probability, downloaded
+from nflverse's public play-by-play file. Reads the database only otherwise,
+two or three minutes.
+
 #### `ingest_game_lines` — daily 10:00 UTC
 
 ```bash

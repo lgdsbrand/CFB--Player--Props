@@ -41,6 +41,8 @@ league rate). The backtest says whether the result is good enough.
 
 from __future__ import annotations
 
+import pickle
+import zlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -340,6 +342,39 @@ class SimTables:
             kickoffs=ev.kickoffs,
         )
 
+    # ---- saving and loading ----------------------------------------------------
+
+    _SAVED = (
+        "classifier",
+        "class_order",
+        "rp",
+        "rp_start",
+        "rp_end",
+        "fine_pool",
+        "kneel",
+        "spike",
+        "punt",
+        "punt_start",
+        "punt_end",
+        "fg_coef",
+        "xp_rate",
+        "two_rate",
+        "quarter_theta",
+    )
+
+    def to_bytes(self) -> bytes:
+        """Everything but the tilted-draw index (rebuilt on load: ~80 MB, ~0.2 s)."""
+        state = {k: getattr(self, k) for k in self._SAVED}
+        state["kickoffs"] = {c: self.kickoffs[c].to_numpy() for c in self.kickoffs.columns}
+        return zlib.compress(pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL), 6)
+
+    @classmethod
+    def from_bytes(cls, blob: bytes) -> SimTables:
+        state = pickle.loads(zlib.decompress(blob))  # noqa: S301 -- our own artifact, from our database
+        kickoffs = pl.DataFrame(state.pop("kickoffs"))
+        tilt = _tilt_flat(TILT_SCALE * np.clip(state["rp"]["epa"], -EPA_CLIP, EPA_CLIP))
+        return cls(tilt_flat=tilt, kickoffs=kickoffs, **state)
+
     # ---- kickoffs, point in time --------------------------------------------
 
     def kick_pool(self, season: int, week: int, minimum: int = 150) -> int:
@@ -359,6 +394,17 @@ class SimTables:
             {c: now[c].to_numpy() for c in ("kind", "ytg", "secs")},
         )
         return pid
+
+    def whole_kick_pool(self) -> int:
+        """Id of a pool holding every kickoff these tables carry (a saved engine's, already point in time)."""
+        key = ("all",)
+        if key not in self._kick_pools:
+            k = self.kickoffs
+            self._kick_pools[key] = (
+                len(self._kick_pools),
+                {c: k[c].to_numpy() for c in ("kind", "ytg", "secs")},
+            )
+        return self._kick_pools[key][0]
 
     def _kick_arrays(self) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray]:
         items = sorted(self._kick_pools.values(), key=lambda v: v[0])
@@ -390,13 +436,19 @@ def _count_rows(keys: np.ndarray) -> dict[tuple, int]:
 
 def _tilt_flat(epa: np.ndarray) -> tuple[np.ndarray, int]:
     """Cumulative weights exp(θ·epa) for every θ in THETA_GRID, laid end to end with offsets."""
+    # Filled in place: building a list and concatenating it doubled the peak,
+    # which the 512 MB Render instance does not have to spare.
     m = len(epa)
-    cums = []
-    for th in THETA_GRID:
-        w = np.exp(th * epa)
-        cums.append(np.concatenate([[0.0], np.cumsum(w)]))
-    offset = 2.0 * max(c[-1] for c in cums)
-    return np.concatenate([c + i * offset for i, c in enumerate(cums)]), m
+    stride = m + 1
+    out = np.empty(len(THETA_GRID) * stride)
+    for i, th in enumerate(THETA_GRID):
+        seg = out[i * stride : (i + 1) * stride]
+        seg[0] = 0.0
+        np.cumsum(np.exp(th * epa), out=seg[1:])
+    offset = 2.0 * out[stride - 1 :: stride].max()
+    for i in range(1, len(THETA_GRID)):
+        out[i * stride : (i + 1) * stride] += i * offset
+    return out, m
 
 
 def _decision_matrix(down, togo, ytg, half_secs, game_secs, qtr, diff) -> np.ndarray:
@@ -450,6 +502,8 @@ class Result:
     overtime: np.ndarray  # (rows, 2)
     steps: int
     unfinished: int
+    #: Play-by-play of the recorded games (simulate(record=...)), one list per game.
+    replays: list[list[dict]] = field(default_factory=list)
 
 
 def pregame(n: int, rng: np.random.Generator, theta_home, theta_away, kick_pool) -> Start:
@@ -518,8 +572,13 @@ NFL = Rules()
 
 
 def simulate(
-    tables: SimTables, start: Start, rng: np.random.Generator, rules: Rules = NFL
+    tables: SimTables,
+    start: Start,
+    rng: np.random.Generator,
+    rules: Rules = NFL,
+    record: int = 0,
 ) -> Result:
+    """Play every row's game to the end. `record` > 0 keeps the first `record` games play by play."""
     n = len(start.gsr)
     gsr = start.gsr.astype(float).copy()
     pos = start.pos.astype(np.int64).copy()
@@ -534,6 +593,12 @@ def simulate(
     th_h = start.theta_home.astype(float)
     th_a = start.theta_away.astype(float)
     kpool = start.kick_pool.astype(np.int64)
+    # Play-by-play of the first `record` games, for the field animation.
+    recorded = np.arange(min(record, n))
+    events: list[list[dict]] = [[] for _ in recorded]
+    play = np.full(n, -1, np.int64)
+    drawn_kind = np.full(n, -1, np.int64)
+    drawn_dy = np.zeros(n)
     quarters = np.zeros((n, 4, 2), dtype=np.int64)
     overtime = np.zeros((n, 2), dtype=np.int64)
     pat_team = np.zeros(n, np.int64)
@@ -613,6 +678,25 @@ def simulate(
         kick = np.flatnonzero(live & (phase == PHASE_KICK))
         pat = np.flatnonzero(live & (phase == PHASE_PAT))
         scrim = np.flatnonzero(live & (phase == PHASE_SCRIM))
+        if len(recorded):
+            before = _snapshot(
+                recorded[live[recorded]],
+                gsr,
+                ots,
+                in_ot,
+                phase,
+                pos,
+                down,
+                togo,
+                ytg,
+                hp,
+                ap,
+                kicker,
+                pat_team,
+            )
+            play[recorded] = -1
+            drawn_kind[recorded] = -1
+        play[kick] = PLAY_KICKOFF
 
         # ---- kickoffs ------------------------------------------------------
         if len(kick):
@@ -641,6 +725,7 @@ def simulate(
             margin = (hp[pat] - ap[pat]) * team
             late = score_q[pat] >= 3
             two = late & np.isin(margin, rules.go_for_two)
+            play[pat] = np.where(two, PLAY_TWO, PLAY_XP)
             p = np.where(two, tables.two_rate, tables.xp_rate)
             good = rng.random(len(pat)) < p
             add(pat[good], team[good], np.where(two[good], 2, 1), score_q[pat[good]])
@@ -747,6 +832,10 @@ def simulate(
                 if len(xi):
                     give(xi, -pos[xi], np.minimum(80, 92 - ytg[xi]))
 
+            play[s] = choice
+            drawn_kind[s] = kind
+            drawn_dy[s] = dy
+
             # Everything drawn from a pool.
             drawn = kind >= 0
             i_all = s[drawn]
@@ -832,7 +921,109 @@ def simulate(
                     ots[oe[~lead]] = 900.0
             pending[e] = 0
 
-    return Result(hp, ap, quarters, overtime, steps, int((~done).sum()))
+        if len(recorded):
+            after = _snapshot(
+                before["i"], gsr, ots, in_ot, phase, pos, down, togo, ytg, hp, ap, kicker, pat_team
+            )
+            for j, i in enumerate(before["i"]):
+                b = {k: v[j] for k, v in before.items()}
+                a = {k: v[j] for k, v in after.items()}
+                events[i].append(_event(b, a, int(play[i]), int(drawn_kind[i]), float(drawn_dy[i])))
+
+    return Result(hp, ap, quarters, overtime, steps, int((~done).sum()), events)
+
+
+PLAY_KICKOFF, PLAY_XP, PLAY_TWO = 6, 7, 8
+PLAY_NAMES = {
+    RUN: "run",
+    PASS: "pass",
+    PUNT: "punt",
+    FG: "field_goal",
+    KNEEL: "kneel",
+    SPIKE: "spike",
+    PLAY_KICKOFF: "kickoff",
+    PLAY_XP: "extra_point",
+    PLAY_TWO: "two_point",
+}
+
+
+def _snapshot(i, gsr, ots, in_ot, phase, pos, down, togo, ytg, hp, ap, kicker, pat_team) -> dict:
+    return {
+        "i": i,
+        "gsr": gsr[i].copy(),
+        "ots": ots[i].copy(),
+        "in_ot": in_ot[i].copy(),
+        "phase": phase[i].copy(),
+        "pos": pos[i].copy(),
+        "down": down[i].copy(),
+        "togo": togo[i].copy(),
+        "ytg": ytg[i].copy(),
+        "hp": hp[i].copy(),
+        "ap": ap[i].copy(),
+        "kicker": kicker[i].copy(),
+        "pat_team": pat_team[i].copy(),
+    }
+
+
+def _side(team: int) -> str:
+    return "home" if team == 1 else "away"
+
+
+def _event(b: dict, a: dict, play: int, kind: int, dy: float) -> dict:
+    """One step of a recorded game, as the field animation reads it.
+
+    `off` is the team the play is for (the offense; the receiving team on a
+    kickoff; the scoring team on a try). `ytg` is that team's yards to goal
+    before the play; `end_ytg` where the ball is after it, for the team that
+    has it then (`end_off`).
+    """
+    ot = bool(b["in_ot"])
+    q = 5 if ot else int(min((3600 - b["gsr"]) // 900, 3)) + 1
+    clock = float(b["ots"]) if ot else float(b["gsr"]) - 900 * (4 - q)
+    dh, da = int(a["hp"] - b["hp"]), int(a["ap"] - b["ap"])
+    name = PLAY_NAMES.get(play, "none")
+    ev: dict = {
+        "q": q,
+        "clock": int(round(max(clock, 0))),
+        "play": name,
+        "home": int(a["hp"]),
+        "away": int(a["ap"]),
+    }
+    if play == PLAY_KICKOFF:
+        off = -int(b["kicker"])
+        ev["result"] = (
+            "td" if dh or da else ("onside" if int(a["pos"]) == int(b["kicker"]) else "kickoff")
+        )
+    elif play in (PLAY_XP, PLAY_TWO):
+        off = int(b["pat_team"])
+        ev["result"] = "good" if dh or da else "no_good"
+    else:
+        off = int(b["pos"])
+        ev |= {"down": int(b["down"]), "togo": int(b["togo"]), "ytg": int(b["ytg"])}
+        mine, theirs = (dh, da) if off == 1 else (da, dh)
+        if play == FG:
+            ev["result"] = "good" if mine == 3 else "no_good"
+        elif play == PUNT:
+            ev["result"] = "td" if dh or da else ("kept" if int(a["pos"]) == off else "punt")
+        elif mine >= 6:
+            ev |= {"result": "td", "gain": int(b["ytg"])}
+        elif theirs >= 6:
+            ev["result"] = "def_td"
+        elif theirs == 2:
+            ev["result"] = "safety"
+        elif kind == KIND_TURNOVER:
+            ev["result"] = "turnover"
+        else:
+            ev["gain"] = int(round(dy))
+            ev["result"] = (
+                "downs"
+                if int(a["pos"]) != off
+                else ("first_down" if int(a["down"]) == 1 else "none")
+            )
+    ev["off"] = _side(off)
+    ev["end_off"] = _side(int(a["pos"]))
+    ev["end_ytg"] = int(a["ytg"])
+    return ev
 
 
 # =============================================================================

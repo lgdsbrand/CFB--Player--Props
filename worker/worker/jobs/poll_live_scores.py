@@ -56,7 +56,7 @@ from worker.adapters.cfbd.live_scores import games_in_window, poll
 from worker.adapters.espn import scoreboard as espn
 from worker.config import ConfigError, get_settings
 from worker.db import fetch_all, pipeline_run, set_rows_written
-from worker.jobs import live_projections
+from worker.jobs import live_projections, run_game_sims
 from worker.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -108,6 +108,25 @@ def project(now: datetime, *, dry_run: bool = False) -> bool:
     return False
 
 
+def simulate_live(*, dry_run: bool = False) -> bool:
+    """The game simulator from every NFL game in progress, as its own run. True when it failed.
+
+    After the live model, and never in its way: the simulator supplies the
+    field animation and the quarter and half numbers (phase S2), the live
+    model the full game.
+    """
+    try:
+        if dry_run:
+            run_game_sims.run_live(dry_run=True)
+        elif run_game_sims.due_live():
+            with pipeline_run(run_game_sims.LIVE_JOB_NAME) as run_id:
+                set_rows_written(run_id, run_game_sims.run_live())
+    except Exception as exc:
+        log.error("Live game simulations failed: %s", exc, exc_info=True)
+        return True
+    return False
+
+
 def second_nfl_pass(
     *,
     sleep: Callable[[float], None] = time.sleep,
@@ -123,7 +142,8 @@ def second_nfl_pass(
     sleep(SECOND_NFL_POLL_SECONDS)
     now = clock()
     failed = poll_nfl(now)
-    return project(now) or failed
+    failed = project(now) or failed
+    return simulate_live() or failed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -174,6 +194,8 @@ def main(argv: list[str] | None = None) -> int:
     if nfl_due and poll_nfl(now, dry_run=args.dry_run):
         failed = True
     if project(now, dry_run=args.dry_run):
+        failed = True
+    if nfl_due and simulate_live(dry_run=args.dry_run):
         failed = True
     if nfl_due and not args.dry_run and second_nfl_pass():
         failed = True

@@ -414,6 +414,12 @@ services:
   # refreshed ~06:00 UTC, so 08:20 takes that morning's snapshot); injuries last,
   # because Sleeper is the only outside service in the chain. Sleeper asks for
   # one player call a day, and this is it.
+  #
+  # Then, after `;` so nothing above can be stopped by it, the game simulator's
+  # weekly fit (phase S2, migration 0099): a no-op unless the saved engine is
+  # six days old, so it refits once a week, the morning after Sunday's games.
+  # One thread each for polars and scikit-learn: so fitted it peaks ~450 MB,
+  # under the starter plan's 512 (measured 2026-10-20; ~900 MB at defaults).
   - type: cron
     name: nfl-props-ingest-results
     runtime: python
@@ -430,7 +436,9 @@ services:
       python -m worker.jobs.build_usage_shares --current --sport nfl &&
       python -m worker.jobs.nfl_ingest_charting --current &&
       python -m worker.jobs.nfl_ingest_depth_charts --current &&
-      python -m worker.jobs.nfl_ingest_injuries --current
+      python -m worker.jobs.nfl_ingest_injuries --current;
+      POLARS_MAX_THREADS=1 OMP_NUM_THREADS=1
+      python -m worker.jobs.fit_sim_engine --if-older-than-days 6
     envVars:
       - fromGroup: cfb-props-worker
 
@@ -442,6 +450,10 @@ services:
   # run before a Thursday or Sunday kickoff. CBS KEEPS NO HISTORY, so the last
   # successful run before kickoff is the week's only record. Eight small pages a
   # run, no quota.
+  #
+  # Then the game simulator's pregame runs (phase S2): 2,000 games each for
+  # the coming week, from the projections just written. Frozen at kickoff by
+  # trigger, so 15:40 is the last one a Thursday or Sunday game keeps.
   - type: cron
     name: nfl-fantasy-inputs
     runtime: python
@@ -449,7 +461,9 @@ services:
     rootDir: worker
     schedule: "40 9,15 * * *"
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m worker.jobs.nfl_fantasy_inputs --current
+    startCommand: >-
+      python -m worker.jobs.nfl_fantasy_inputs --current;
+      python -m worker.jobs.run_game_sims --pregame
     envVars:
       - fromGroup: cfb-props-worker
 

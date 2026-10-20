@@ -532,6 +532,39 @@ No odds, no API credits. The first full run (2026-10-20) tied the live model on
 the full game, so the live model keeps it; the simulator supplies the
 animation, the first-quarter total and the first-half winner.
 
+#### `fit_sim_engine` — daily 08:20 UTC, refits weekly (NFL game simulator, S2)
+
+```bash
+python -m worker.jobs.fit_sim_engine --if-older-than-days 6   # what the chain runs
+python -m worker.jobs.fit_sim_engine                          # refit now
+```
+
+Fits the game simulator on nflverse's play-by-play (four seasons back plus this
+one) and saves it to `sim_engines` (~2.5 MB), because fitting takes minutes and
+the live poller needs it in seconds. Last step of `nfl-props-ingest-results`,
+after `;`, with `POLARS_MAX_THREADS=1 OMP_NUM_THREADS=1`: at default threads it
+peaked ~900 MB, over the starter plan's 512; single-threaded ~450 MB, ~5
+minutes. The `--if-older-than-days 6` guard makes it a no-op six days in seven.
+If it fails, the previous engine keeps running; nothing on the site breaks.
+
+#### `run_game_sims` — after `nfl_fantasy_inputs` (09:40, 15:40 UTC) and in the live poller
+
+```bash
+python -m worker.jobs.run_game_sims --pregame             # every NFL game in the next 8 days
+python -m worker.jobs.run_game_sims --live --dry-run      # the live pass, printing only
+```
+
+Plays each NFL game 2,000 times from the client's fantasy-model projection and
+writes `game_sims`: points per quarter and half with ranges, the whole total and
+margin distribution of each (so S3 can price any book line), and one simulated
+game play by play for the field animation. `'pregame'` rows are **frozen at
+kickoff by trigger** (migration 0099); `'live'` rows are rewritten by
+`poll_live_scores` every minute an NFL game is on (job name `game_sims_live`),
+from ESPN's down, distance and spot, after the live model and never in its way.
+No full-game win %: the live model owns that. Logs a warning when the saved
+engine was fitted with a different scikit-learn than the one loading it (the
+library is not pinned).
+
 #### `ingest_game_lines` — daily 10:00 UTC
 
 ```bash

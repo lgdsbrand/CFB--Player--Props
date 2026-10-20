@@ -149,6 +149,30 @@ def load_seasons(seasons: Iterable[int], current: int | None = None) -> pl.DataF
     return pl.concat(frames, how="vertical_relaxed")
 
 
+def events_by_season(
+    seasons: Iterable[int], current: int | None = None
+) -> tuple[SimEvents, pl.DataFrame]:
+    """`sim_events` and `period_scores` for several seasons, one season in memory at a time.
+
+    The same tables as `sim_events(load_seasons(...))`, built for the 512 MB
+    Render instance: all five seasons at once peaked at ~900 MB (measured
+    2026-10-20), one at a time well under half that. A play's next snap never
+    crosses a season, so nothing is lost.
+    """
+    parts: list[SimEvents] = []
+    scores: list[pl.DataFrame] = []
+    for s in sorted(seasons):
+        frame = pbp(s, max_age=CURRENT_SEASON_MAX_AGE if s == current else None)
+        parts.append(sim_events(frame))
+        scores.append(period_scores(frame.filter(pl.col("season_type") == "REG")))
+        del frame
+    names = ("decisions", "scrimmage", "punts", "field_goals", "kickoffs", "pats")
+    joined = SimEvents(
+        *(pl.concat([getattr(p, n) for p in parts], how="vertical_relaxed") for n in names)
+    )
+    return joined, pl.concat(scores, how="vertical_relaxed")
+
+
 def _with_next(frame: pl.DataFrame) -> pl.DataFrame:
     """Each real row with the next snap's columns (same game) beside it."""
     real = frame.filter(pl.col("play_type").is_in(REAL)).with_columns(

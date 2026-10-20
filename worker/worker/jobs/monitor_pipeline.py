@@ -453,6 +453,23 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
              "nfl_ingest_stats -- so a stale run here leaves snap share current "
              "and the two derived shares behind.",
     ),
+    JobExpectation(
+        name="fit_sim_engine",
+        max_age_hours=8.5 * 24,
+        sport="nfl",
+        note="daily 08:20 UTC after the NFL results chain, but it only logs a run when "
+             "it refits (once a week; the other days are a no-op). A warning: a stale "
+             "engine still simulates, from older plays and last week's kickoffs.",
+    ),
+    JobExpectation(
+        name="run_game_sims",
+        max_age_hours=36,
+        sport="nfl",
+        note="09:40 and 15:40 UTC, after nfl_fantasy_inputs -- the game simulator's "
+             "pregame runs (migration 0099). A warning: a game with no run before "
+             "kickoff has no simulation or quarter numbers, and the pregame row is "
+             "frozen at kickoff, so a missed day cannot be made up.",
+    ),
 )
 
 

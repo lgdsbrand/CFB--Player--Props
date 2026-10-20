@@ -247,7 +247,7 @@ def test_the_committed_model_files_load_and_survive_a_round_trip(sport):
 # --- the second NFL pass (2026-10-20) ---------------------------------------
 
 
-def _second_pass(monkeypatch, *, in_progress, poll_fails=False, project_fails=False):
+def _second_pass(monkeypatch, *, in_progress, poll_fails=False, project_fails=False, sim_fails=False):
     from worker.jobs import poll_live_scores as pls
 
     calls: list[str] = []
@@ -258,6 +258,7 @@ def _second_pass(monkeypatch, *, in_progress, poll_fails=False, project_fails=Fa
     monkeypatch.setattr(
         pls, "project", lambda now: calls.append(f"project {now:%H:%M}") or project_fails
     )
+    monkeypatch.setattr(pls, "simulate_live", lambda: calls.append("simulate") or sim_fails)
     later = datetime(2026, 10, 20, 1, 1, tzinfo=UTC)
     failed = pls.second_nfl_pass(sleep=lambda s: calls.append(f"sleep {s}"), clock=lambda: later)
     return failed, calls
@@ -266,7 +267,7 @@ def _second_pass(monkeypatch, *, in_progress, poll_fails=False, project_fails=Fa
 def test_while_an_nfl_game_is_on_the_run_polls_and_projects_again_a_minute_later(monkeypatch):
     failed, calls = _second_pass(monkeypatch, in_progress=True)
     assert not failed
-    assert calls == ["sleep 60", "poll 01:01", "project 01:01"]
+    assert calls == ["sleep 60", "poll 01:01", "project 01:01", "simulate"]
 
 
 def test_no_nfl_game_in_progress_means_no_wait_and_no_second_call(monkeypatch):
@@ -278,4 +279,20 @@ def test_no_nfl_game_in_progress_means_no_wait_and_no_second_call(monkeypatch):
 def test_a_failed_second_poll_still_reruns_the_model_and_reports_the_failure(monkeypatch):
     failed, calls = _second_pass(monkeypatch, in_progress=True, poll_fails=True)
     assert failed
-    assert calls[-1] == "project 01:01"
+    assert calls[-2:] == ["project 01:01", "simulate"]
+
+
+def test_a_failed_simulation_is_reported_after_the_model_has_run(monkeypatch):
+    failed, calls = _second_pass(monkeypatch, in_progress=True, sim_fails=True)
+    assert failed
+    assert calls == ["sleep 60", "poll 01:01", "project 01:01", "simulate"]
+
+
+def test_the_simulator_failing_is_caught_and_reported_not_raised(monkeypatch):
+    from worker.jobs import poll_live_scores as pls
+
+    def boom():
+        raise RuntimeError("no engine saved")
+
+    monkeypatch.setattr(pls.run_game_sims, "due_live", boom)
+    assert pls.simulate_live() is True

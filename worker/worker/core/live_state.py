@@ -81,6 +81,21 @@ def situation(
     return down, None
 
 
+def distance(text: str | None, yards_to_goal: int | None = None) -> int | None:
+    """Yards to a first down from "2nd & 7 at TROY 34": 7. "& Goal" is the yards to goal; "& inches" is 1."""
+    if not text:
+        return None
+    m = _SITUATION.match(str(text))
+    if not m:
+        return None
+    word = m.group(2).lower()
+    if word == "goal":
+        return yards_to_goal
+    if word == "inches":
+        return 1
+    return int(word)
+
+
 def game_state(
     *,
     period: int | None,

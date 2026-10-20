@@ -111,17 +111,23 @@ class _Tables(HTMLParser):
 
 
 class CbsWeekNotServed(CbsError):
-    """CBS answered with another week's table: the week asked is not served.
+    """CBS answered with another page: the week asked is not served.
 
     Raised for a week CBS has not published yet (a team on a bye next week
-    has its open week two ahead) as much as for one it has dropped. The page
-    itself is fine, so `fetch_weeks` skips that week rather than failing.
+    has its open week two ahead) as much as for one it has dropped. CBS
+    answers such a week with another week's table, or (2026-10-20, week 8
+    TE) with a stats page that names no week at all. The page itself is
+    fine, so `fetch_weeks` skips that week rather than failing; a run where
+    no week is served still fails, so a format change on every page is not
+    hidden.
     """
 
-    def __init__(self, asked: int, shown: int) -> None:
+    def __init__(self, asked: int, shown: int | None, title: str | None = None) -> None:
         super().__init__(
             f"asked CBS for week {asked}, the page shows week {shown}: "
             "CBS serves only the current weeks and substitutes silently"
+            if shown is not None
+            else f"asked CBS for week {asked}, the page names no week ({title!r})"
         )
         self.asked = asked
         self.shown = shown
@@ -131,7 +137,7 @@ def check_week(title: str | None, week: int) -> None:
     """Raise unless the page title says it shows `week`."""
     match = _TITLE_WEEK.search(title or "")
     if match is None:
-        raise CbsError(f"projection page has no week in its title ({title!r})")
+        raise CbsWeekNotServed(week, None, title)
     shown = int(match.group(1))
     if shown != week:
         raise CbsWeekNotServed(week, shown)

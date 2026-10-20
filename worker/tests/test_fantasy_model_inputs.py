@@ -19,6 +19,7 @@ import pytest
 from worker.adapters.cbs.client import CbsError
 from worker.adapters.cbs.projections import (
     CbsProjection,
+    CbsWeekNotServed,
     build_rows,
     check_week,
     fetch_weeks,
@@ -61,7 +62,7 @@ def test_a_page_showing_another_week_is_refused():
     check_week("Week 7 Proj Fantasy Football Stats - QB Points - CBS Sports", 7)
     with pytest.raises(CbsError, match="page shows week 6"):
         check_week("Week 6 Proj Fantasy Football Stats - QB Points - CBS Sports", 7)
-    with pytest.raises(CbsError, match="no week"):
+    with pytest.raises(CbsWeekNotServed, match="names no week"):
         check_week("Fantasy Football Stats", 7)
 
 
@@ -114,6 +115,20 @@ def test_a_week_cbs_does_not_serve_yet_is_skipped_not_fatal(small_pages):
     pages = fetch_weeks(_FakeCbs({6, 7}), 2026, [7, 8, 7], counts)
     assert {w for w, _ in pages} == {7}
     assert len(pages) == 4  # one player per position, week 7 only
+    assert counts.skipped == {"cbs: week 8 not served": 1}
+
+
+def test_a_week_answered_with_a_page_naming_no_week_is_skipped_too(small_pages):
+    # 2026-10-20: CBS answered week 8 TE with "Fantasy Football Stats - TE
+    # Points - CBS Sports", no week in the title, and the run failed again.
+    class NoWeekForEight(_FakeCbs):
+        def projection_page(self, position, season, week):
+            html = super().projection_page(position, season, week)
+            return html.replace("Week 6 Proj ", "") if week == 8 else html
+
+    counts = NflReferenceCounts()
+    pages = fetch_weeks(NoWeekForEight({7}), 2026, [7, 8], counts)
+    assert {w for w, _ in pages} == {7}
     assert counts.skipped == {"cbs: week 8 not served": 1}
 
 

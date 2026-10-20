@@ -35,7 +35,7 @@ import { getDefenseRatings } from "@/lib/data/defense";
 import { getEvWagers } from "@/lib/data/ev";
 import { getFantasyScores } from "@/lib/data/fantasy";
 import { PICK_BOOKS, withBookLines } from "@/lib/core/fantasy-view";
-import { getLiveScores } from "@/lib/data/live";
+import { getLiveProjections, getLiveScores } from "@/lib/data/live";
 import {
   getFullGameBookOdds,
   getGameOddsSummaries,
@@ -182,6 +182,8 @@ export default async function Games({
   // Started now so it runs beside the reads below rather than after them.
   const hasLive = LIVE_SPORTS.includes(sport);
   const livePromise = hasLive ? getLiveScores(shownIds) : Promise.resolve([]);
+  // The live model's win % rides on the strip's chips (phase L3).
+  const liveModelPromise = hasLive ? getLiveProjections(shownIds) : Promise.resolve([]);
   // Projections in both views: the cards carry the projected score. The NFL
   // has no game model; its cards take the fantasy model's score instead, and
   // the book line its game pages show (CFBD's consensus is college-only).
@@ -231,10 +233,11 @@ export default async function Games({
           getAppConfig(),
         ])
       : [new Map(), null];
-  const [liveInitial, fantasyScores, nflOdds] = await Promise.all([
+  const [liveInitial, fantasyScores, nflOdds, liveModelInitial] = await Promise.all([
     livePromise,
     fantasyScoresPromise,
     nflOddsPromise,
+    liveModelPromise,
   ]);
 
   const conferenceLabel = params.conference ?? "displayed conferences";
@@ -389,6 +392,7 @@ export default async function Games({
       {hasLive && shown.length > 0 ? (
         <LiveStrip
           initial={liveInitial}
+          initialProjections={liveModelInitial}
           games={shown.map((game) => ({
             gameId: game.gameId,
             startDate: game.startDate,

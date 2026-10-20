@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 
 import { TeamChip } from "@/components/board/team-chip";
 import { GameLive } from "@/components/live/game-live";
+import { LiveModelPanel } from "@/components/live/live-model-panel";
 import { BookOddsPanel } from "@/components/games/book-odds-panel";
 import { CoachPanel } from "@/components/games/coach-panel";
 import { EvWagersPanel } from "@/components/games/ev-wagers-panel";
@@ -43,7 +44,7 @@ import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
 import { getEvWagers } from "@/lib/data/ev";
 import { getFantasyGame, getMatchupInputs } from "@/lib/data/fantasy";
-import { getLiveScores } from "@/lib/data/live";
+import { getLiveHistory, getLiveProjections, getLiveScores } from "@/lib/data/live";
 import {
   getEarliestSeason,
   getGameBookOdds,
@@ -116,6 +117,7 @@ export default async function GamePage({
   if (!game) notFound();
 
   const raw = await searchParams;
+  const liveModelShown = LIVE_SPORTS.includes(game.sport) && hasKickedOff(game.startDate);
   const boardParams = parseBoardParams(raw, { edgesOnlyDefault: false });
 
   const [
@@ -135,6 +137,8 @@ export default async function GamePage({
     liveRows,
     fantasy,
     matchupInputs,
+    liveProjections,
+    liveHistory,
   ] = await Promise.all([
     getDefenseRatings(game.season, game.week, game.sport),
     // Joins the existing wave rather than forming its own. A wave costs one
@@ -162,6 +166,10 @@ export default async function GamePage({
       : null,
     // Its team numbers, the whole league's for this week, ranked by the panel.
     game.sport === "nfl" ? getMatchupInputs(game.season, game.week) : [],
+    // The live model (migration 0098), once the game has kicked off; it stays
+    // after the final as how the model saw the game.
+    liveModelShown ? getLiveProjections([gameId]) : [],
+    liveModelShown ? getLiveHistory(gameId) : [],
   ]);
 
   // +EV rows are the last capture's prices: an offer before kickoff, history
@@ -333,6 +341,19 @@ export default async function GamePage({
           </p>
         )}
       </header>
+
+      {/* The live model straight under the scoreboard it reads (phase L3).
+          Renders nothing until the first projection, then refreshes itself. */}
+      {liveModelShown ? (
+        <LiveModelPanel
+          gameId={gameId}
+          startDate={game.startDate}
+          home={game.homeAbbreviation ?? game.homeSchool}
+          away={game.awayAbbreviation ?? game.awaySchool}
+          initial={liveProjections[0] ?? null}
+          initialHistory={liveHistory}
+        />
+      ) : null}
 
       {/* Above the matchups on purpose. Conditions are one glance and they
           frame everything below — a 20 mph crosswind is the reason a passing

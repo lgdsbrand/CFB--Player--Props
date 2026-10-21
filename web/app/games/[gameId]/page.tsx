@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { TeamChip } from "@/components/board/team-chip";
 import { GameLive } from "@/components/live/game-live";
 import { LiveModelPanel } from "@/components/live/live-model-panel";
+import { GameSimPanel } from "@/components/sim/game-sim-panel";
 import { BookOddsPanel } from "@/components/games/book-odds-panel";
 import { CoachPanel } from "@/components/games/coach-panel";
 import { EvWagersPanel } from "@/components/games/ev-wagers-panel";
@@ -44,6 +45,7 @@ import { getAppConfig } from "@/lib/data/config";
 import { getDefenseRatings } from "@/lib/data/defense";
 import { getEvWagers } from "@/lib/data/ev";
 import { getFantasyGame, getMatchupInputs } from "@/lib/data/fantasy";
+import { getGameSims, getSimEdges } from "@/lib/data/game-sim";
 import { getLiveHistory, getLiveProjections, getLiveScores } from "@/lib/data/live";
 import {
   getEarliestSeason,
@@ -139,6 +141,8 @@ export default async function GamePage({
     matchupInputs,
     liveProjections,
     liveHistory,
+    sims,
+    simEdges,
   ] = await Promise.all([
     getDefenseRatings(game.season, game.week, game.sport),
     // Joins the existing wave rather than forming its own. A wave costs one
@@ -170,6 +174,10 @@ export default async function GamePage({
     // after the final as how the model saw the game.
     liveModelShown ? getLiveProjections([gameId]) : [],
     liveModelShown ? getLiveHistory(gameId) : [],
+    // The NFL game simulator (phases S2-S4): its pregame run with the replay,
+    // the live run while the game is on, and the period calls against the book.
+    game.sport === "nfl" ? getGameSims(gameId) : { pregame: null, live: null },
+    game.sport === "nfl" ? getSimEdges(gameId) : { edges: [], books: {} },
   ]);
 
   // +EV rows are the last capture's prices: an offer before kickoff, history
@@ -352,6 +360,27 @@ export default async function GamePage({
           away={game.awayAbbreviation ?? game.awaySchool}
           initial={liveProjections[0] ?? null}
           initialHistory={liveHistory}
+        />
+      ) : null}
+
+      {/* The game simulator (phase S4): one simulated game on a field and the
+          first quarter's and half's calls against the book. NFL only, and
+          only once the game has a pregame run. */}
+      {sims.pregame ? (
+        <GameSimPanel
+          gameId={gameId}
+          startDate={game.startDate}
+          kickedOff={hasKickedOff(game.startDate)}
+          completed={game.completed}
+          home={game.homeAbbreviation ?? game.homeSchool}
+          away={game.awayAbbreviation ?? game.awaySchool}
+          homeColor={game.homeColor}
+          awayColor={game.awayColor}
+          pregame={sims.pregame}
+          initialLive={sims.live}
+          edges={simEdges.edges}
+          books={simEdges.books}
+          initialProjection={liveProjections[0] ?? null}
         />
       ) : null}
 

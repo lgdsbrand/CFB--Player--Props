@@ -381,6 +381,19 @@ for "a better way" if there is one.
   > season, 64-45, 58.7% won against 55.6% shown, +3.2%. This is the only
   > exception: the projection, the fair line, the table's edges and the v1/v2
   > picks never read a price. Refit each offseason with `run_game_backtest`.
+
+  > **2026-10-21 — written decision: the NFL quarter and half edges are shown
+  > shrunk toward the book.** The game simulator's period edges
+  > (`game_sim_edges`, phase S3) came out at 3-8% on average and up to 17%,
+  > the size the full-game table's raw edges were before calibration. The
+  > user chose to shrink them, and then (after shrinking toward 50% was found
+  > to flip first-quarter -0.5 spreads and to invent underdog moneyline
+  > edges) chose to shrink THE EDGE: the site shows `k × edge` on our side and
+  > `book + k × (ours − book)` as our %, with the full-game slopes as k
+  > (totals 0.256, spreads and moneylines 0.0565), in the view
+  > `v_game_sim_edge_results` (migration 0101). Display only: the simulator,
+  > the baseline and the frozen `model_prob` never read a price. Refit k on
+  > graded period results each offseason.
 - **A distribution, not a point.** Project the joint distribution of the two
   scores, then derive win probability, cover probability and total probability
   from it, including 1Q/1H. Every market is a probability per pick, as in §1.

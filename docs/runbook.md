@@ -588,6 +588,9 @@ DraftKings, then FanDuel).
   warning until the next refit.
 - **Frozen at kickoff** by trigger, like `game_sims`' pregame rows. Graded by the
   view `v_game_sim_edge_results` from `live_scores` line scores; no grading job.
+- **What the site shows is shrunk** in that view (migration 0101, CLAUDE.md §11
+  decision of 2026-10-21): `shown_edge = k × edge` on the same side, k = 0.256
+  for totals and 0.0565 for spreads and moneylines. The raw row is untouched.
 - No API calls. **Monitored:** warning, `max_age_hours=3`.
 
 #### `ingest_game_lines` — daily 10:00 UTC

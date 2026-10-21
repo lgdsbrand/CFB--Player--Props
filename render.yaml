@@ -497,6 +497,13 @@ services:
   # 90 minutes, his gap rule (spread 4+, total 6+) against the close just
   # captured, once per game, market and version. No API calls.
   #
+  # (BEFORE THE FANTASY PICKS in the chain) THE GAME SIMULATOR'S QUARTERS AND
+  # HALVES (phase S3, migration 0100):
+  # capture_game_periods --sport nfl buys the first-quarter and first-half
+  # lines on the paid key, twice per game (when posted, and in the hour before
+  # kickoff; ~180 credits a week), and price_sim_edges sets our probability
+  # beside each one's no-vig price. The second makes no API calls.
+  #
   # LAST, reprice_picks then lock_prop_picks (migration 0096): the board's
   # prop calls priced against the lines just captured, then those for games
   # starting soon copied into the props record. No API calls.
@@ -510,6 +517,8 @@ services:
     startCommand: >-
       python -m worker.jobs.ingest_odds --sport nfl --event-limit 120 --close-window-minutes 60;
       python -m worker.jobs.ingest_game_odds --sport nfl --paid --close-window-minutes 90;
+      python -m worker.jobs.capture_game_periods --sport nfl;
+      python -m worker.jobs.price_sim_edges;
       python -m worker.jobs.nfl_fantasy_picks --close-window-minutes 90;
       python -m worker.jobs.reprice_picks --sport nfl;
       python -m worker.jobs.lock_prop_picks --sport nfl

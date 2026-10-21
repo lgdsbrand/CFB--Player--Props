@@ -196,6 +196,7 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
     JobExpectation(
         name="capture_game_periods",
         max_age_hours=3,
+        sport_scoped=True,
         note="hourly, chained after the college props capture — first-half and "
              "first-quarter game lines, open and close. Most runs ask about no "
              "game, so staleness means the cron stopped. A name of its own so it "
@@ -460,6 +461,25 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
         note="daily 08:20 UTC after the NFL results chain, but it only logs a run when "
              "it refits (once a week; the other days are a no-op). A warning: a stale "
              "engine still simulates, from older plays and last week's kickoffs.",
+    ),
+    JobExpectation(
+        name="capture_game_periods",
+        max_age_hours=3,
+        sport="nfl",
+        sport_scoped=True,
+        note="hourly at :20 (--sport nfl), chained in nfl-props-odds-refresh -- "
+             "first-quarter and first-half NFL lines for the game simulator's "
+             "edges (phase S3). Most runs ask about no game, so staleness means "
+             "the chain stopped.",
+    ),
+    JobExpectation(
+        name="price_sim_edges",
+        max_age_hours=3,
+        sport="nfl",
+        note="hourly at :20, after the NFL period capture -- the game simulator's "
+             "quarter and half probabilities against the book's no-vig price "
+             "(migration 0100). No API calls. Rows freeze at kickoff, so a stopped "
+             "chain loses those games' edges for good.",
     ),
     JobExpectation(
         name="run_game_sims",

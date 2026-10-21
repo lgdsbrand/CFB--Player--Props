@@ -45,6 +45,7 @@ class Summary:
     q1_total: np.ndarray  # (C, k) kept for line probabilities
     h1_total: np.ndarray
     h1_margin: np.ndarray
+    q1_margin: np.ndarray
 
 
 def summarize(res: Result, k: int) -> Summary:
@@ -63,6 +64,7 @@ def summarize(res: Result, k: int) -> Summary:
         q1_total=q[:, :, 0, :].sum(axis=2),
         h1_total=q[:, :, :2, :].sum(axis=(2, 3)),
         h1_margin=q[:, :, :2, 0].sum(axis=2) - q[:, :, :2, 1].sum(axis=2),
+        q1_margin=q[:, :, 0, 0] - q[:, :, 0, 1],
     )
 
 
@@ -138,15 +140,21 @@ class PeriodBaseline:
     q1_sd: float
     h1_sd: float
     h1_margin_sd: float
+    q1_margin_share: float
+    q1_margin_sd: float
 
     @classmethod
-    def fit(cls, prior_margin, prior_total, q1_total, h1_total, h1_margin) -> PeriodBaseline:
+    def fit(
+        cls, prior_margin, prior_total, q1_total, h1_total, h1_margin, q1_margin
+    ) -> PeriodBaseline:
         prior_margin = np.asarray(prior_margin, float)
         prior_total = np.asarray(prior_total, float)
         q1s = float(np.sum(q1_total) / np.sum(prior_total))
         h1s = float(np.sum(h1_total) / np.sum(prior_total))
-        # Least squares through the origin: how much of the projected margin shows by the half.
-        hms = float(np.sum(prior_margin * h1_margin) / max(np.sum(prior_margin**2), 1e-9))
+        # Least squares through the origin: how much of the projected margin shows by the period.
+        denom = max(float(np.sum(prior_margin**2)), 1e-9)
+        hms = float(np.sum(prior_margin * h1_margin) / denom)
+        qms = float(np.sum(prior_margin * q1_margin) / denom)
         return cls(
             q1s,
             h1s,
@@ -154,7 +162,31 @@ class PeriodBaseline:
             float(np.std(q1_total - q1s * prior_total)),
             float(np.std(h1_total - h1s * prior_total)),
             float(np.std(h1_margin - hms * prior_margin)),
+            qms,
+            float(np.std(q1_margin - qms * prior_margin)),
         )
+
+    def mean_sd(
+        self, period: str, market: str, prior_margin: float, prior_total: float
+    ) -> tuple[float, float]:
+        """(mean, sd) of a period's total (market "totals") or home margin, from the projection."""
+        if market == "totals":
+            if period == "q1":
+                return self.q1_share * prior_total, self.q1_sd
+            return self.h1_share * prior_total, self.h1_sd
+        share, sd = (
+            (self.q1_margin_share, self.q1_margin_sd)
+            if period == "q1"
+            else (self.h1_margin_share, self.h1_margin_sd)
+        )
+        return share * prior_margin, sd
+
+    def to_dict(self) -> dict:
+        return {k: round(float(v), 5) for k, v in self.__dict__.items()}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> PeriodBaseline:
+        return cls(**{k: float(d[k]) for k in cls.__dataclass_fields__})
 
 
 def period_rows(
@@ -168,9 +200,12 @@ def period_rows(
     pm = np.asarray(prior_margin, float)
     pt = np.asarray(prior_total, float)
     out = {}
+    # A spread is the home margin over a line, so it is priced like a total.
     for name, sims, mean_b, sd_b in (
         ("q1_total", s.q1_total, base.q1_share * pt, base.q1_sd),
         ("h1_total", s.h1_total, base.h1_share * pt, base.h1_sd),
+        ("q1_margin", s.q1_margin, base.q1_margin_share * pm, base.q1_margin_sd),
+        ("h1_margin", s.h1_margin, base.h1_margin_share * pm, base.h1_margin_sd),
     ):
         line = half_line(mean_b)
         out[f"{name}_line"] = line
@@ -183,16 +218,25 @@ def period_rows(
         out[f"{name}_base_lo"] = mean_b - 1.2815515655446004 * sd_b
         out[f"{name}_base_hi"] = mean_b + 1.2815515655446004 * sd_b
         out[f"{name}_actual"] = actual[name]
-    # The first-half moneyline: who leads at the half, a tie excluded (a push).
-    lead = (s.h1_margin > 0).mean(axis=1)
-    trail = (s.h1_margin < 0).mean(axis=1)
-    out["h1_sim_p_home"] = lead / np.maximum(lead + trail, 1e-9)
-    hm = base.h1_margin_share * pm
-    out["h1_base_p_home"] = norm.cdf(hm / base.h1_margin_sd)
-    out["h1_margin_sim_mean"] = s.h1_margin.mean(axis=1)
-    out["h1_margin_base_mean"] = hm
-    out["h1_margin_actual"] = actual["h1_margin"]
+    # The period moneylines: who leads, a tie excluded (a push).
+    for period, margin in (("q1", s.q1_margin), ("h1", s.h1_margin)):
+        lead = (margin > 0).mean(axis=1)
+        trail = (margin < 0).mean(axis=1)
+        out[f"{period}_sim_p_home"] = lead / np.maximum(lead + trail, 1e-9)
+        out[f"{period}_base_p_home"] = norm.cdf(
+            out[f"{period}_margin_base_mean"] / getattr(base, f"{period}_margin_sd")
+        )
     return pl.DataFrame(out)
+
+
+#: Markets graded as P(above a line): totals, and spreads as the home margin over a line.
+LINE_MARKETS = (
+    ("q1_total", "1st quarter total"),
+    ("h1_total", "1st half total"),
+    ("q1_margin", "1st quarter spread"),
+    ("h1_margin", "1st half spread"),
+)
+WINNER_MARKETS = (("q1", "1st quarter winner"), ("h1", "1st half winner"))
 
 
 def _brier(p: np.ndarray, y: np.ndarray) -> float:
@@ -207,7 +251,7 @@ def _ll(p: np.ndarray, y: np.ndarray) -> float:
 def period_scores(frame: pl.DataFrame) -> list[dict]:
     """Per market: Brier and log loss of P(over the line) or P(home leads), mean miss, 80% coverage."""
     rows = []
-    for name, label in (("q1_total", "1st quarter total"), ("h1_total", "1st half total")):
+    for name, label in LINE_MARKETS:
         y = (frame[f"{name}_actual"].to_numpy() > frame[f"{name}_line"].to_numpy()).astype(float)
         act = frame[f"{name}_actual"].to_numpy()
         for who in ("sim", "base"):
@@ -230,24 +274,27 @@ def period_scores(frame: pl.DataFrame) -> list[dict]:
                     "went_over": float(np.mean(y)),
                 }
             )
-    hm = frame["h1_margin_actual"].to_numpy()
-    decided = hm != 0
-    y = (hm[decided] > 0).astype(float)
-    for who in ("sim", "base"):
-        p = frame[f"h1_{who}_p_home"].to_numpy()[decided]
-        rows.append(
-            {
-                "market": "1st half winner",
-                "method": "simulator" if who == "sim" else "projection × league share",
-                "n": int(decided.sum()),
-                "brier": _brier(p, y),
-                "log_loss": _ll(p, y),
-                "mae": float(np.mean(np.abs(frame[f"h1_margin_{who}_mean"].to_numpy() - hm))),
-                "cover80": None,
-                "said_over": float(np.mean(p)),
-                "went_over": float(np.mean(y)),
-            }
-        )
+    for period, label in WINNER_MARKETS:
+        hm = frame[f"{period}_margin_actual"].to_numpy()
+        decided = hm != 0
+        y = (hm[decided] > 0).astype(float)
+        for who in ("sim", "base"):
+            p = frame[f"{period}_{who}_p_home"].to_numpy()[decided]
+            rows.append(
+                {
+                    "market": label,
+                    "method": "simulator" if who == "sim" else "projection × league share",
+                    "n": int(decided.sum()),
+                    "brier": _brier(p, y),
+                    "log_loss": _ll(p, y),
+                    "mae": float(
+                        np.mean(np.abs(frame[f"{period}_margin_{who}_mean"].to_numpy() - hm))
+                    ),
+                    "cover80": None,
+                    "said_over": float(np.mean(p)),
+                    "went_over": float(np.mean(y)),
+                }
+            )
     return rows
 
 

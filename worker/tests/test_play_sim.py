@@ -213,3 +213,27 @@ def test_scales_sharpen_an_underconfident_win_percentage():
     )
     scales = sb.fit_scales(frame, 10_000)
     assert scales[0] == pytest.approx(2.0, rel=0.15)
+
+
+def test_every_period_market_is_graded_for_both_methods(tables):
+    rng = np.random.default_rng(16)
+    res = ps.simulate(tables, ps.pregame(600, rng, np.zeros(600), np.zeros(600), tables.whole_kick_pool()), rng)
+    s = sb.summarize(res, 200)
+    pm, pt = np.array([3.0, -2.0, 0.5]), np.array([44.0, 40.0, 47.0])
+    base = sb.PeriodBaseline.fit(pm, pt, pt * 0.2 + [1, 0, -1], pt * 0.5 + [2, -1, 0], pm * 0.6 + [1, 0, -1], pm * 0.3 + [1, -1, 0])
+    assert sb.PeriodBaseline.from_dict(base.to_dict()).q1_margin_share == pytest.approx(
+        base.q1_margin_share, abs=1e-5
+    )
+    actual = {
+        "q1_total": np.array([10.0, 7.0, 3.0]),
+        "h1_total": np.array([24.0, 17.0, 20.0]),
+        "h1_margin": np.array([7.0, -3.0, 0.0]),
+        "q1_margin": np.array([3.0, 0.0, -7.0]),
+    }
+    rows = sb.period_scores(sb.period_rows(s, base, pm, pt, actual))
+    markets = {(r["market"], r["method"]) for r in rows}
+    assert len(markets) == 12 and {"1st quarter spread", "1st quarter winner"} <= {
+        m for m, _ in markets
+    }
+    winners = [r for r in rows if r["market"].endswith("winner")]
+    assert all(r["n"] == 2 for r in winners), "a period tied at its end is a push, not graded"

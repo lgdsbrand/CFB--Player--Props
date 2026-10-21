@@ -31,6 +31,7 @@ from worker.core.play_sim import (
     snap_start,
     solve_thetas,
 )
+from worker.core.sim_backtest import PeriodBaseline
 
 #: Games per run (the client's reference shows 2,000).
 SIMS = 2000
@@ -71,6 +72,12 @@ class Engine:
         return cls(
             tables, StrengthCurve(tuple(state["curve"])), state["sigma"], kick_pool, state["meta"]
         )
+
+    @property
+    def baseline(self) -> PeriodBaseline | None:
+        """The period baseline saved with the engine (phase S3); None on an S2 engine."""
+        d = self.meta.get("period_baseline")
+        return PeriodBaseline.from_dict(d) if d else None
 
     def thetas(self, home_points: float, away_points: float) -> tuple[float, float]:
         return solve_thetas(self.curve, home_points, away_points)

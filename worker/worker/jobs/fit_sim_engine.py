@@ -16,6 +16,13 @@ this season's when there are enough (150), else last season's: the kickoff
 rule changed in 2024 and 2025. Team-strength spread σθ is the value the
 backtest fitted for 2026.
 
+THE PERIOD BASELINE (phase S3) is saved with it, in `meta`: the share of a
+game's projected points and margin that the first quarter and first half carry,
+and the spread around them, fitted on last season's games exactly as the S1
+backtest fitted it (on the Massey projection the backtest graded, joined to
+nflverse's period scores). `price_sim_edges` uses it for the markets where it
+beat the simulator.
+
 No odds, no API credits. Runs inside the NFL results chain after the plays
 are in; `--if-older-than-days` makes six of its seven daily runs a no-op.
 """
@@ -35,8 +42,10 @@ import sklearn
 from worker.adapters.nflverse.sim_plays import events_by_season
 from worker.config import ConfigError, get_settings
 from worker.core.play_sim import SimTables, fit_quarter_offsets, fit_strength_curve
+from worker.core.sim_backtest import PeriodBaseline
 from worker.core.sim_runtime import Engine
-from worker.db import fetch_one, get_config_value, pipeline_run, set_rows_written, upsert
+from worker.db import fetch_all, fetch_one, get_config_value, pipeline_run, set_rows_written, upsert
+from worker.jobs.run_live_backtest import _FINALS_SQL, nfl_priors
 from worker.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -69,6 +78,7 @@ def fit(current: int, rng: np.random.Generator) -> Engine:
     offsets = fit_quarter_offsets(tables, pool, real_q, rng)
     curve = fit_strength_curve(tables, pool, rng)
     last_week = int(this["week"].max() or 0) if this.height else 0
+    baseline = fit_period_baseline(current - 1, ps)
     meta = {
         "seasons": seasons,
         "through_week": last_week,
@@ -77,12 +87,44 @@ def fit(current: int, rng: np.random.Generator) -> Engine:
         "real_quarters": [round(x, 3) for x in real_q],
         "curve": [round(c, 4) for c in curve.coef],
         "sigma": SIGMA_THETA,
+        "period_baseline": baseline.to_dict(),
         "plays": ev.scrimmage.height,
         "sklearn": sklearn.__version__,
         "seconds": round(time.time() - t0),
     }
     log.info("Fitted the %s simulator in %ds: %s", SPORT, meta["seconds"], meta)
     return Engine(tables, curve, SIGMA_THETA, pool, meta)
+
+
+def fit_period_baseline(season: int, period_scores: pl.DataFrame) -> PeriodBaseline:
+    """The S1 backtest's period baseline, fitted on one season's regular-season games."""
+    finals = pl.DataFrame(
+        fetch_all(_FINALS_SQL, {"sport": SPORT, "seasons": [season - 1, season]}),
+        infer_schema_length=None,
+    )
+    means = nfl_priors(finals)
+    nfl_id = {
+        int(r["game_id"]): r["nflverse_id"]
+        for r in finals.filter(pl.col("season") == season).iter_rows(named=True)
+        if r["nflverse_id"]
+    }
+    scores = {r["game_id"]: r for r in period_scores.iter_rows(named=True)}
+    pm, pt, q1, h1, hm, qm = [], [], [], [], [], []
+    for gid, nid in nfl_id.items():
+        p = scores.get(nid)
+        if gid not in means or p is None or p["h2"] is None:
+            continue
+        pm.append(means[gid][0])
+        pt.append(means[gid][1])
+        q1.append(p["h1"] + p["a1"])
+        h1.append(p["h2"] + p["a2"])
+        hm.append(p["h2"] - p["a2"])
+        qm.append(p["h1"] - p["a1"])
+    if len(pm) < 100:
+        raise RuntimeError(f"Only {len(pm)} {season} games to fit the period baseline on.")
+    base = PeriodBaseline.fit(pm, pt, np.array(q1), np.array(h1), np.array(hm), np.array(qm))
+    log.info("Period baseline from %d %s games: %s", len(pm), season, base)
+    return base
 
 
 def version_name(meta: dict) -> str:

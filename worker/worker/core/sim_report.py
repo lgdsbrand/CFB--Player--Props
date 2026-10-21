@@ -13,6 +13,7 @@ import polars as pl
 
 from worker.core.live_backtest import minutes_left, score
 from worker.core.live_report import STYLE
+from worker.core.sim_backtest import LINE_MARKETS, WINNER_MARKETS
 
 SIM = "simulator"
 LIVE = "A: live model"
@@ -138,7 +139,7 @@ def _periods(block: dict) -> str:
                 f"<td>{_pct(r['went_over'])}</td></tr>"
             )
     out.append("</table></div>")
-    for name, label in (("q1_total", "1st quarter total"), ("h1_total", "1st half total")):
+    for name, label in LINE_MARKETS:
         cal = block["period_cal"].get(name, [])
         if not cal:
             continue
@@ -161,7 +162,7 @@ def _period_verdict(blocks: list[dict]) -> str:
             acc.setdefault((r["market"], r["method"]), []).append(r["log_loss"] * r["n"])
             acc.setdefault((r["market"], r["method"] + "#n"), []).append(r["n"])
     lines = []
-    for market in ("1st quarter total", "1st half total", "1st half winner"):
+    for market in [label for _, label in LINE_MARKETS + WINNER_MARKETS]:
         s = acc.get((market, "simulator"))
         base = acc.get((market, "projection × league share"))
         if not s or not base:

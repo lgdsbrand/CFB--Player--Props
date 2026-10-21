@@ -54,6 +54,7 @@ from worker.core.play_sim import (
     solve_thetas,
 )
 from worker.core.sim_backtest import (
+    LINE_MARKETS,
     PeriodBaseline,
     apply_scales,
     choose_sigma,
@@ -176,7 +177,7 @@ def fit_sigma(engine, games, priors, weeks, finals, rng, n: int = SIGMA_SIMS) ->
 
 
 def period_baseline(engine, games, priors, nfl_id, ps_by_game) -> PeriodBaseline:
-    pm, pt, q1, h1, hm = [], [], [], [], []
+    pm, pt, q1, h1, hm, qm = [], [], [], [], [], []
     for g in games:
         p = ps_by_game.get(nfl_id[g])
         if p is None:
@@ -186,7 +187,8 @@ def period_baseline(engine, games, priors, nfl_id, ps_by_game) -> PeriodBaseline
         q1.append(p["h1"] + p["a1"])
         h1.append(p["h2"] + p["a2"])
         hm.append(p["h2"] - p["a2"])
-    return PeriodBaseline.fit(pm, pt, np.array(q1), np.array(h1), np.array(hm))
+        qm.append(p["h1"] - p["a1"])
+    return PeriodBaseline.fit(pm, pt, np.array(q1), np.array(h1), np.array(hm), np.array(qm))
 
 
 def simulate_moments(
@@ -358,6 +360,7 @@ def run_test(
                     "q1_total": np.array([act["h1"] + act["a1"]], float),
                     "h1_total": np.array([act["h2"] + act["a2"]], float),
                     "h1_margin": np.array([act["h2"] - act["a2"]], float),
+                    "q1_margin": np.array([act["h1"] - act["a1"]], float),
                 },
             )
         )
@@ -415,7 +418,7 @@ def run_test(
             for f in [frames[k]]
         },
         "periods": grade_periods(periods) if periods.height else [],
-        "period_cal": {n: period_calibration(periods, n) for n in ("q1_total", "h1_total")}
+        "period_cal": {n: period_calibration(periods, n) for n, _ in LINE_MARKETS}
         if periods.height
         else {},
         "frames": frames,

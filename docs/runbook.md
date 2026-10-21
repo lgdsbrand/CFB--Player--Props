@@ -565,6 +565,31 @@ No full-game win %: the live model owns that. Logs a warning when the saved
 engine was fitted with a different scikit-learn than the one loading it (the
 library is not pinned).
 
+#### `price_sim_edges` — hourly at :20, in `nfl-props-odds-refresh` (NFL game simulator, S3)
+
+```bash
+python -m worker.jobs.price_sim_edges             # what the chain runs
+python -m worker.jobs.price_sim_edges --dry-run   # price and print, write nothing
+```
+
+For each NFL game not yet started with a pregame `game_sims` row and first-quarter
+or first-half lines in `game_odds` (bought just before it by
+`capture_game_periods --sport nfl`), writes `game_sim_edges` (migration 0100):
+our probability of each side at the book's line, the book's vig-free price, the
+side we favour and the edge (CLAUDE.md §6), for moneyline, spread and total in
+each period. The book is chosen as the game table chooses (Pinnacle, then
+DraftKings, then FanDuel).
+
+- **Which number:** `SOURCE` in `worker/core/sim_edges.py`, per market the
+  method that scored better in the S1 backtest (`docs/nfl-sim-backtest.html`):
+  the simulator, or the projection x league share baseline saved with the
+  engine (`meta.period_baseline`, fitted by `fit_sim_engine`). If the saved
+  engine predates S3 it has no baseline and those markets are skipped with a
+  warning until the next refit.
+- **Frozen at kickoff** by trigger, like `game_sims`' pregame rows. Graded by the
+  view `v_game_sim_edge_results` from `live_scores` line scores; no grading job.
+- No API calls. **Monitored:** warning, `max_age_hours=3`.
+
 #### `ingest_game_lines` — daily 10:00 UTC
 
 ```bash
@@ -818,9 +843,16 @@ NFL-only (`markets_for` refuses them for college, before any call).
 #### `capture_game_periods` — hourly at :00, after the college props capture
 
 ```bash
-python -m worker.jobs.capture_game_periods             # what the cron runs
-python -m worker.jobs.capture_game_periods --dry-run   # resolve, write nothing
+python -m worker.jobs.capture_game_periods                # college, what its cron runs
+python -m worker.jobs.capture_game_periods --sport nfl    # NFL, in nfl-props-odds-refresh at :20
+python -m worker.jobs.capture_game_periods --dry-run      # resolve, write nothing
 ```
+
+**NFL (phase S3, 2026-10-21):** the same capture runs with `--sport nfl` in
+`nfl-props-odds-refresh`, on that service's paid key, for the game simulator's
+quarter and half edges (`price_sim_edges`). About 15 games x 2 x 6 credits,
+~180 a week. Both sports log as `capture_game_periods` with `sport` in the
+metadata; the monitor checks each separately.
 
 College **first-half and first-quarter game lines** (spread, total, moneyline
 per period) from the US books, for the game page's "1st half lines" and "1st

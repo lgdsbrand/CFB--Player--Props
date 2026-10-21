@@ -1,7 +1,8 @@
 """Capture first-half and first-quarter game lines, open and close.
 
-    python -m worker.jobs.capture_game_periods             # what the cron runs
-    python -m worker.jobs.capture_game_periods --dry-run   # resolve, write nothing
+    python -m worker.jobs.capture_game_periods                # college, what its cron runs
+    python -m worker.jobs.capture_game_periods --sport nfl    # NFL (phase S3)
+    python -m worker.jobs.capture_game_periods --dry-run      # resolve, write nothing
 
 The client asked for 1Q and 1H lines beside the full game, from FanDuel and
 DraftKings and likely Caesars (CLAUDE.md §11). The bulk endpoint that makes
@@ -20,6 +21,12 @@ RUNS INSIDE `cfb-props-odds-refresh`, after the props capture, so it needs no
 Render service (and no key pasted) of its own. It logs under its own job name
 so its hourly runs can never stand in for the full-game capture in
 `monitor_pipeline`.
+
+NFL (phase S3, approved 2026-10-21): the same capture in `nfl-props-odds-refresh`,
+for the game simulator's quarter and half numbers against the book
+(`price_sim_edges`). About 15 games x 2 calls x 6 credits, ~180 a week. Both
+sports log under this name with `sport` in the metadata, so the monitor checks
+each on its own.
 """
 
 from __future__ import annotations
@@ -38,7 +45,7 @@ from worker.logging_setup import configure_logging, get_logger
 log = get_logger(__name__)
 
 JOB_NAME = "capture_game_periods"
-SPORT = "cfb"
+SPORTS = ("cfb", "nfl")
 
 # Equal to the cron period, so every kickoff falls in exactly one run's window.
 WINDOW_MINUTES = 60
@@ -51,7 +58,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Resolve and report, write nothing. Still bills every game asked about.",
     )
     parser.add_argument("--window-minutes", type=int, default=WINDOW_MINUTES)
+    parser.add_argument("--sport", choices=SPORTS, default="cfb")
     args = parser.parse_args(argv)
+    sport = args.sport
 
     if args.window_minutes <= 0:
         configure_logging("INFO")
@@ -77,12 +86,12 @@ def main(argv: list[str] | None = None) -> int:
         log.error("%s", exc)
         return 2
 
-    adapter = TheOddsApiAdapter(key, sport_key=sport_key_for(SPORT))
+    adapter = TheOddsApiAdapter(key, sport_key=sport_key_for(sport))
     try:
         with pipeline_run(
             JOB_NAME,
             metadata={
-                "sport": SPORT,
+                "sport": sport,
                 "season": season,
                 "window_minutes": args.window_minutes,
                 "dry_run": args.dry_run,
@@ -91,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
             report = run_periods(
                 season=season,
                 adapter=adapter,
-                sport=SPORT,
+                sport=sport,
                 close_window_minutes=args.window_minutes,
                 dry_run=args.dry_run,
             )

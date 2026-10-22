@@ -156,6 +156,26 @@ export function asOfLabel(
   return `${liveStateLabel(p)} · ${away} ${p.awayPoints}, ${home} ${p.homePoints}`;
 }
 
+/** How long after kickoff the panel still says the first numbers are coming. */
+const FIRST_UPDATE_WAIT_MS = 5 * 3_600_000;
+
+/**
+ * What the live panel shows before the model's first projection for a game
+ * (2026-10-21). The client looked for the Refresh button on a game that had
+ * not started and found nothing, because the panel used to render only once a
+ * projection existed. "before" until kickoff, "waiting" for a while after it,
+ * then nothing: a game long over that the model never saw is not "starting".
+ */
+export function waitingState(
+  startDate: string | null,
+  now: number = Date.now(),
+): "before" | "waiting" | null {
+  const at = startDate ? Date.parse(startDate) : NaN;
+  if (!Number.isFinite(at)) return null;
+  if (now < at) return "before";
+  return now - at <= FIRST_UPDATE_WAIT_MS ? "waiting" : null;
+}
+
 /** Minutes since the row was written, for "updated 2 min ago". */
 export function minutesSince(iso: string, now: number = Date.now()): number {
   return Math.max(0, Math.round((now - Date.parse(iso)) / 60_000));

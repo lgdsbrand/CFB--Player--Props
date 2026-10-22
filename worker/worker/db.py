@@ -27,6 +27,26 @@ class DatabaseConnectionError(RuntimeError):
     """A connection attempt failed, reported without the password in it."""
 
 
+# A connection that dies silently must fail, not wait forever (2026-10-21).
+# reprice_picks on Render sat 'running' for nine hours with no session open on
+# the server: the connection had dropped and the client was still waiting on
+# it, and Render skips every later run of a cron while one is active, so the
+# whole NFL odds chain stopped. libpq's defaults wait without limit. With
+# these, a dead connection raises within about two minutes. A query the
+# server is still working on is unaffected: the server answers keepalive
+# probes while it runs, so no long job is cut short. tcp_user_timeout covers
+# the case keepalives miss, a request sent and never acknowledged; libpq
+# ignores it where the OS lacks it (Windows).
+CONNECTION_TIMEOUTS: dict[str, int] = {
+    "connect_timeout": 15,
+    "keepalives": 1,
+    "keepalives_idle": 60,
+    "keepalives_interval": 15,
+    "keepalives_count": 4,
+    "tcp_user_timeout": 120_000,
+}
+
+
 def open_connection(
     url: str, autocommit: bool = False
 ) -> psycopg.Connection:
@@ -47,7 +67,9 @@ def open_connection(
     """
     detail: str | None = None
     try:
-        return psycopg.connect(url, autocommit=autocommit, row_factory=dict_row)
+        return psycopg.connect(
+            url, autocommit=autocommit, row_factory=dict_row, **CONNECTION_TIMEOUTS
+        )
     except psycopg.Error as exc:
         detail = redact_secrets(str(exc))
     raise DatabaseConnectionError(f"Could not connect to the database: {detail}")

@@ -10,8 +10,21 @@ import {
   projectedScore,
   spreadLabel,
   toLiveProjection,
+  waitingState,
   winLabel,
 } from "./live-model.ts";
+
+test("waitingState: before kickoff, a while after it, then nothing", () => {
+  const kickoff = "2026-10-23T00:15:00Z";
+  const at = Date.parse(kickoff);
+  assert.equal(waitingState(kickoff, at - 86_400_000), "before");
+  assert.equal(waitingState(kickoff, at - 1), "before");
+  assert.equal(waitingState(kickoff, at), "waiting");
+  assert.equal(waitingState(kickoff, at + 5 * 3_600_000), "waiting");
+  assert.equal(waitingState(kickoff, at + 5 * 3_600_000 + 1), null);
+  assert.equal(waitingState(null, at), null);
+  assert.equal(waitingState("not a date", at), null);
+});
 
 const ROW = {
   game_id: 16487, status: "in_progress", period: 4, clock: "9:22", elapsed: 3038,

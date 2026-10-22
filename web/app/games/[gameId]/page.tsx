@@ -119,7 +119,8 @@ export default async function GamePage({
   if (!game) notFound();
 
   const raw = await searchParams;
-  const liveModelShown = LIVE_SPORTS.includes(game.sport) && hasKickedOff(game.startDate);
+  const liveSport = LIVE_SPORTS.includes(game.sport);
+  const liveModelShown = liveSport && hasKickedOff(game.startDate);
   const boardParams = parseBoardParams(raw, { edgesOnlyDefault: false });
 
   const [
@@ -351,8 +352,9 @@ export default async function GamePage({
       </header>
 
       {/* The live model straight under the scoreboard it reads (phase L3).
-          Renders nothing until the first projection, then refreshes itself. */}
-      {liveModelShown ? (
+          Before kickoff it holds its place ("starts at kickoff") and switches
+          on by itself once the first projection lands. */}
+      {liveModelShown || (liveSport && notStarted) ? (
         <LiveModelPanel
           gameId={gameId}
           startDate={game.startDate}

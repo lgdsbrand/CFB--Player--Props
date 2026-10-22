@@ -20,6 +20,7 @@ import {
   minutesSince,
   projectedScore,
   spreadLabel,
+  waitingState,
   type LivePoint,
   type LiveProjection,
 } from "@/lib/core/live-model";
@@ -62,7 +63,10 @@ export function LiveModelPanel({
     { historyFor: gameId, initialHistory },
   );
   const p = projections.find((row) => row.gameId === gameId);
-  if (!p) return null;
+  if (!p) {
+    const state = waitingState(startDate);
+    return state ? <WaitingPanel state={state} /> : null;
+  }
   const final = p.status === "completed";
   const overtime = !final && p.elapsed >= 3600;
   const fav = favourite(p, home, away);
@@ -174,6 +178,28 @@ export function LiveModelPanel({
           "score, the clock, who has the ball and where. No odds are used, so there is no edge " +
           "here: set these numbers against your book’s live line yourself. Tested on past " +
           "games, its win % came true about as often as it said."}
+      </p>
+    </section>
+  );
+}
+
+/** The panel's place on the page before its first numbers, so the client knows where to look. */
+function WaitingPanel({ state }: { state: "before" | "waiting" }) {
+  return (
+    <section className="panel flex flex-col gap-2 p-4">
+      <div className="flex items-center gap-2">
+        <h2 className="section-header">📡 Live model</h2>
+        <span className="pill bg-panel-inset text-muted">
+          {state === "before" ? "Starts at kickoff" : "Starting"}
+        </span>
+      </div>
+      <p className="text-muted text-xs">
+        {state === "before"
+          ? "From kickoff, this panel shows each side’s win %, the projected final score and the " +
+            "fair spread and total, updated every minute or two, with a ↻ Refresh now button to " +
+            "load the latest at once. It switches on by itself; there is no need to reload the page."
+          : "The game has kicked off. The first numbers appear here within a few minutes, " +
+            "without reloading the page."}
       </p>
     </section>
   );

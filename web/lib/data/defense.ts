@@ -25,7 +25,7 @@ import type {
   PositionGroup,
 } from "@/lib/core/types";
 import { type DbRow, MAX_ROWS_PER_REQUEST, unwrap } from "@/lib/data/query";
-import { cachedRead } from "@/lib/data/cache";
+import { cachedLiveRead, cachedRead } from "@/lib/data/cache";
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 
 /**
@@ -364,7 +364,7 @@ export async function getDefenseCharting(
  * Returns 0 for a sport with no charting, which `blitzStyleFor` reads as "say
  * nothing" rather than as an empty ordering.
  */
-export async function getChartingFieldSize(
+async function readChartingFieldSize(
   season: number,
   asOfWeek: number,
 ): Promise<number> {
@@ -380,3 +380,5 @@ export async function getChartingFieldSize(
   );
   return rows.length;
 }
+
+export const getChartingFieldSize = cachedLiveRead("charting-field-size", readChartingFieldSize);

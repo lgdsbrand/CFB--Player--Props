@@ -22,6 +22,7 @@ import type {
   OddsMarket,
 } from "@/lib/core/game-lines";
 import { type DbRow, unwrap } from "@/lib/data/query";
+import { cachedLiveMapRead } from "@/lib/data/cache";
 
 const SUMMARY_COLUMNS =
   "game_id, market, books, consensus_line, consensus_first_line, consensus_fair, " +
@@ -61,7 +62,7 @@ function toSummary(row: DbRow): GameMarketSummary {
  * Full-game summaries for a set of games, keyed by game id. Three rows per
  * game at most, so a 100-game slate is 300 rows.
  */
-export async function getGameOddsSummaries(
+async function readGameOddsSummaries(
   gameIds: number[],
 ): Promise<Map<number, GameOddsSummary>> {
   const out = new Map<number, GameOddsSummary>();
@@ -83,6 +84,8 @@ export async function getGameOddsSummaries(
   }
   return out;
 }
+
+export const getGameOddsSummaries = cachedLiveMapRead("game-odds-summaries", readGameOddsSummaries);
 
 // =============================================================================
 // The game model's fair lines (CLAUDE.md §11, G4)
@@ -161,7 +164,7 @@ function toProjection(row: DbRow): GameProjection {
 }
 
 /** The model's projection per game, keyed by game id. One row per game. */
-export async function getGameProjections(
+async function readGameProjections(
   gameIds: number[],
 ): Promise<Map<number, GameProjection>> {
   const out = new Map<number, GameProjection>();
@@ -178,6 +181,8 @@ export async function getGameProjections(
   for (const row of rows) out.set(row.game_id as number, toProjection(row));
   return out;
 }
+
+export const getGameProjections = cachedLiveMapRead("game-projections", readGameProjections);
 
 const BOOK_COLUMNS =
   "period, sportsbook_key, sportsbook_name, market_role, market, line, home_price, " +

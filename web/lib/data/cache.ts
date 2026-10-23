@@ -25,9 +25,17 @@ import { unstable_cache } from "next/cache";
  * uncached catalogue read is one database query per page view per reader, for
  * data that is identical for all of them.
  *
- * NOT USED FOR ANYTHING PER-WEEK-PER-PLAYER. Projections, picks, board rows and
- * game logs are all read live. They are what the reader came for, they change
- * when the pipeline runs, and a stale board is a worse failure than a slow one.
+ * PER-WEEK READS GET A SHORTER CACHE, NOT NONE (`cachedLiveRead`). They used to
+ * be read live on the rule that a stale board is a worse failure than a slow
+ * one. That rule did not survive 2026-10-22: the production database (Micro)
+ * crashed nine times in three hours on Thursday night football while the board
+ * was rendered about twice a second, each render running six uncached queries
+ * that returned the same rows to every reader (120 `v_slate_games` and 120
+ * `board_counts` calls a minute, measured in `pg_stat_statements`). A board
+ * that is down is staler than one a minute old. Odds land every 20 minutes and
+ * picks lock at kickoff, so a minute changes nothing a reader acts on. Truly
+ * live data (scores, the live model, the live simulation) is not read through
+ * here: the browser polls it directly.
  */
 
 /**
@@ -59,4 +67,44 @@ export function cachedRead<Args extends unknown[], Result>(
     revalidate: CATALOGUE_TTL_SECONDS,
     tags: [CATALOGUE_TAG],
   });
+}
+
+/**
+ * How long a per-week read (board rows, the slate, game odds) may be reused.
+ * Agreed 2026-10-22: a minute behind, in exchange for
+ * one database read per page per minute instead of one per reader.
+ */
+export const LIVE_READ_TTL_SECONDS = 60;
+
+/** Tag for the per-week reads, separate so they can be dropped on their own. */
+export const LIVE_READ_TAG = "live-reads";
+
+/**
+ * Wrap a per-week read whose result is the same for every reader of the page.
+ *
+ * Same contract as `cachedRead`: `name` identifies the function, the arguments
+ * key the entry, and the result must be plain JSON (see `getTeamDirectory` for
+ * what a Map does on the first cache hit). Use `cachedLiveMapRead` for a read
+ * that returns a Map.
+ */
+export function cachedLiveRead<Args extends unknown[], Result>(
+  name: string,
+  read: (...args: Args) => Promise<Result>,
+): (...args: Args) => Promise<Result> {
+  return unstable_cache(read, [name], {
+    revalidate: LIVE_READ_TTL_SECONDS,
+    tags: [LIVE_READ_TAG],
+  });
+}
+
+/**
+ * `cachedLiveRead` for a read that returns a Map: the entries are what is
+ * cached, and the Map is rebuilt on the way out, on hits and misses alike.
+ */
+export function cachedLiveMapRead<Args extends unknown[], K, V>(
+  name: string,
+  read: (...args: Args) => Promise<Map<K, V>>,
+): (...args: Args) => Promise<Map<K, V>> {
+  const cached = cachedLiveRead(name, async (...args: Args) => [...(await read(...args))]);
+  return async (...args: Args) => new Map(await cached(...args));
 }

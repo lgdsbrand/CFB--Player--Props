@@ -27,6 +27,7 @@ import {
   unwrap,
   upcomingOnly,
 } from "@/lib/data/query";
+import { cachedLiveRead } from "@/lib/data/cache";
 
 /**
  * The sort switch lives in the core (`lib/core/board-view.ts`) because the
@@ -314,7 +315,7 @@ function applySort(query: BoardQuery, sort: BoardSort = "edge"): BoardQuery {
   return sorted;
 }
 
-export async function getBoardRows(filters: BoardFilters): Promise<BoardPage> {
+async function readBoardRows(filters: BoardFilters): Promise<BoardPage> {
   const limit = Math.min(filters.limit ?? 200, MAX_ROWS_PER_REQUEST);
   const offset = filters.offset ?? 0;
 
@@ -331,6 +332,8 @@ export async function getBoardRows(filters: BoardFilters): Promise<BoardPage> {
     total: result.count ?? rows.length,
   };
 }
+
+export const getBoardRows = cachedLiveRead("board-rows", readBoardRows);
 
 /**
  * One page of board ROWS, for the table layout — as two cheap queries.
@@ -356,7 +359,7 @@ export async function getBoardRows(filters: BoardFilters): Promise<BoardPage> {
  * instead of on player-game: establish WHICH rows and in what order, then fetch
  * exactly those. Total 957ms where the single query would not finish at all.
  */
-export async function getBoardRowPage(
+async function readBoardRowPage(
   filters: BoardFilters,
 ): Promise<BoardRow[]> {
   const limit = Math.min(filters.limit ?? 50, MAX_ROWS_PER_REQUEST);
@@ -389,6 +392,8 @@ export async function getBoardRowPage(
     );
 }
 
+export const getBoardRowPage = cachedLiveRead("board-row-page", readBoardRowPage);
+
 /**
  * How many rows match, without fetching any.
  *
@@ -403,13 +408,15 @@ export async function getBoardRowPage(
  * `head: true` returns the count and no body, which measured 455ms against the
  * free tier where the full read of the same filter times out.
  */
-export async function getBoardRowCount(filters: BoardFilters): Promise<number> {
+async function readBoardRowCount(filters: BoardFilters): Promise<number> {
   const result = await buildBoardQuery("projection_id", filters, "exact", true);
   if (result.error) {
     throw new Error(`Board row count failed: ${result.error.message}`);
   }
   return result.count ?? 0;
 }
+
+export const getBoardRowCount = cachedLiveRead("board-row-count", readBoardRowCount);
 
 export type CardKey = { playerId: number; gameId: number };
 
@@ -451,7 +458,7 @@ export type CardKeyPage = {
  */
 const KEY_SCAN_MAX_ROWS = 12000;
 
-export async function getBoardCardKeys(
+async function readBoardCardKeys(
   filters: BoardFilters,
   maxRows: number = KEY_SCAN_MAX_ROWS,
 ): Promise<CardKeyPage> {
@@ -504,6 +511,8 @@ export async function getBoardCardKeys(
   return { keys, truncated: total > scanned };
 }
 
+export const getBoardCardKeys = cachedLiveRead("board-card-keys", readBoardCardKeys);
+
 /**
  * Every row for a specific set of player-games.
  *
@@ -513,7 +522,7 @@ export async function getBoardCardKeys(
  * with a 72% receiving-yards call should show his other markets too; hiding
  * them would make the card claim he has one market this week.
  */
-export async function getRowsForCards(
+async function readRowsForCards(
   keys: CardKey[],
   filters: Pick<
     BoardFilters,
@@ -568,6 +577,8 @@ export async function getRowsForCards(
     .map(toBoardRow)
     .filter((row) => wanted.has(`${row.playerId}-${row.gameId}`));
 }
+
+export const getRowsForCards = cachedLiveRead("board-card-rows", readRowsForCards);
 
 export type BoardCounts = {
   rows: number;
@@ -625,7 +636,7 @@ export type BoardCounts = {
  * different facts while `--synthetic-lines` is in use, and the board has to be
  * able to say which it is looking at.
  */
-export async function getBoardCounts(
+async function readBoardCounts(
   season: number,
   week: number,
   edgeThreshold: number,
@@ -674,8 +685,10 @@ export async function getBoardCounts(
   };
 }
 
+export const getBoardCounts = cachedLiveRead("board-counts", readBoardCounts);
+
 /** One player's rows for a week — every market, for the detail view. */
-export async function getPlayerBoardRows(
+async function readPlayerBoardRows(
   playerId: number,
   season: number,
   week: number,
@@ -693,6 +706,8 @@ export async function getPlayerBoardRows(
   );
   return rows.map(toBoardRow);
 }
+
+export const getPlayerBoardRows = cachedLiveRead("player-board-rows", readPlayerBoardRows);
 
 function toBoardRow(row: Record<string, unknown>): BoardRow {
   return {

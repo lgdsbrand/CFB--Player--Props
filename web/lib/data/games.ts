@@ -19,6 +19,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { GameSummary } from "@/lib/core/types";
 import { type DbRow, unwrap } from "@/lib/data/query";
+import { cachedLiveRead } from "@/lib/data/cache";
 
 const COLUMNS =
   "game_id, sport, season, week, start_date, start_time_tbd, neutral_site, completed, " +
@@ -78,7 +79,7 @@ function toGame(row: DbRow): GameSummary {
  * across requests — without it the list reshuffles between renders and a game
  * card appears to move on its own.
  */
-export async function getSlateGames(
+async function readSlateGames(
   season: number,
   week: number,
   sport: Sport = DEFAULT_SPORT,
@@ -98,6 +99,8 @@ export async function getSlateGames(
   return rows.map(toGame);
 }
 
+export const getSlateGames = cachedLiveRead("slate-games", readSlateGames);
+
 /**
  * One game, by id.
  *
@@ -105,7 +108,7 @@ export async function getSlateGames(
  * requiring the caller to carry a matching season and week would mean a URL
  * with a stale week silently 404s a game that exists.
  */
-export async function getGame(gameId: number): Promise<GameSummary | null> {
+async function readGame(gameId: number): Promise<GameSummary | null> {
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
     await supabase
@@ -117,3 +120,5 @@ export async function getGame(gameId: number): Promise<GameSummary | null> {
   );
   return rows.length > 0 ? toGame(rows[0]) : null;
 }
+
+export const getGame = cachedLiveRead("game", readGame);

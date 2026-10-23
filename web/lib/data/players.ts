@@ -17,6 +17,7 @@ import {
   thisAndLastSeason,
   unwrap,
 } from "@/lib/data/query";
+import { cachedLiveMapRead } from "@/lib/data/cache";
 
 const COLUMNS =
   "player_id, game_id, season, week, position_group, is_home, " +
@@ -166,7 +167,7 @@ const LOG_BATCH_PLAYERS_TWO_SEASONS = 20;
  * with the answers visible. `includePriorSeason` is the single-player read's
  * option too, and costs smaller batches.
  */
-export async function getGameLogsByPlayer(
+async function readGameLogsByPlayer(
   playerIds: number[],
   {
     season,
@@ -228,6 +229,8 @@ export async function getGameLogsByPlayer(
 
   return byPlayer;
 }
+
+export const getGameLogsByPlayer = cachedLiveMapRead("game-logs-by-player", readGameLogsByPlayer);
 
 function toGameLogRow(row: Record<string, unknown>): PlayerGameLogRow {
   const n = (key: string) => (row[key] as number | null) ?? null;

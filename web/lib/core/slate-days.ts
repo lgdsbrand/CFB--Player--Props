@@ -104,7 +104,11 @@ function wallClockParts(at: Date) {
 function zoneOffsetMinutes(at: Date): number {
   const p = wallClockParts(at);
   const asIfUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
-  return (asIfUtc - at.getTime()) / 60_000;
+  // Rounded because the wall-clock parts stop at the second while `at` does
+  // not: unrounded, `at`'s milliseconds came back as a fraction of a minute and
+  // leaked into `slateDayStart`, which made the board's cache key change on
+  // every request (2026-10-22). Eastern offsets are whole minutes.
+  return Math.round((asIfUtc - at.getTime()) / 60_000);
 }
 
 /**

@@ -92,6 +92,17 @@ test("the cutoff is 04:00 Eastern on the day being played", () => {
   assert.equal(cutoff.toISOString(), "2026-09-06T08:00:00.000Z");
 });
 
+test("the cutoff carries no milliseconds from the clock it was read at", () => {
+  // THE CACHE KEY BUG OF 2026-10-22. Real clocks have milliseconds, and the
+  // offset arithmetic once leaked them into the answer: two requests a second
+  // apart got 08:00:00.333Z and 08:00:00.777Z, so the board's cached reads,
+  // keyed on the cutoff, never hit. Every other test here reads a whole second.
+  const a = kickoffCutoff(new Date("2026-10-22T21:31:07.333Z"));
+  const b = kickoffCutoff(new Date("2026-10-22T21:31:08.777Z"));
+  assert.equal(a.toISOString(), "2026-10-22T08:00:00.000Z");
+  assert.equal(b.getTime(), a.getTime());
+});
+
 test("before 04:00 Eastern the slate is still yesterday's", () => {
   // Sunday 01:00 EDT — the tail of Saturday night's games.
   const cutoff = kickoffCutoff(new Date("2026-09-06T05:00:00Z"));

@@ -8,6 +8,7 @@ import type { RulePlay } from "@/lib/core/rule-plays";
 import type { Sport } from "@/lib/core/sport";
 import { type DbRow, num, unwrap } from "@/lib/data/query";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { cachedLiveRead } from "@/lib/data/cache";
 
 const COLUMNS =
   "id, game_id, market, side, line, price, model_prob, raw_prob, edge, model_line, gap, " +
@@ -19,7 +20,7 @@ const COLUMNS =
  * A failed read is an empty list, logged, not a failed page: the panel sits
  * above the whole slate, and losing it must not take Analyze Games down.
  */
-export async function getRulePlays(sport: Sport, season: number, week: number): Promise<RulePlay[]> {
+async function readRulePlays(sport: Sport, season: number, week: number): Promise<RulePlay[]> {
   const supabase = createServerSupabaseClient();
   try {
     const rows = unwrap<DbRow[]>(
@@ -40,7 +41,7 @@ export async function getRulePlays(sport: Sport, season: number, week: number): 
 }
 
 /** One game's rule plays, for its share graphic. Same failure rule as above. */
-export async function getGameRulePlays(gameId: number): Promise<RulePlay[]> {
+async function readGameRulePlays(gameId: number): Promise<RulePlay[]> {
   const supabase = createServerSupabaseClient();
   try {
     const rows = unwrap<DbRow[]>(
@@ -85,3 +86,11 @@ function toPlay(row: DbRow): RulePlay {
     awayAltColor: (row.away_alt_color as string | null) ?? null,
   };
 }
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getRulePlays = cachedLiveRead("rule-plays", readRulePlays);
+export const getGameRulePlays = cachedLiveRead("game-rule-plays", readGameRulePlays);

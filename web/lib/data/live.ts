@@ -9,13 +9,14 @@ import {
   type LivePoint,
   type LiveProjection,
 } from "@/lib/core/live-model";
+import { cachedLiveRead } from "@/lib/data/cache";
 
 /**
  * The live rows for these games, for the first paint (migration 0088). The
  * browser then refreshes them itself (`useLiveScores`) without re-rendering
  * the page. A game never polled has no row.
  */
-export async function getLiveScores(gameIds: number[]): Promise<LiveScore[]> {
+async function readLiveScores(gameIds: number[]): Promise<LiveScore[]> {
   if (gameIds.length === 0) return [];
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
@@ -30,7 +31,7 @@ export async function getLiveScores(gameIds: number[]): Promise<LiveScore[]> {
  * paint; `useLiveProjections` refreshes them from the browser after that.
  * A game the model has not projected has no row.
  */
-export async function getLiveProjections(gameIds: number[]): Promise<LiveProjection[]> {
+async function readLiveProjections(gameIds: number[]): Promise<LiveProjection[]> {
   if (gameIds.length === 0) return [];
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
@@ -41,7 +42,7 @@ export async function getLiveProjections(gameIds: number[]): Promise<LiveProject
 }
 
 /** Every moment the live model projected for one game, oldest first: the chart. ~100 rows. */
-export async function getLiveHistory(gameId: number): Promise<LivePoint[]> {
+async function readLiveHistory(gameId: number): Promise<LivePoint[]> {
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
     await supabase
@@ -53,3 +54,12 @@ export async function getLiveHistory(gameId: number): Promise<LivePoint[]> {
   );
   return rows.map((r) => toLivePoint(r));
 }
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getLiveScores = cachedLiveRead("live-scores", readLiveScores);
+export const getLiveProjections = cachedLiveRead("live-projections", readLiveProjections);
+export const getLiveHistory = cachedLiveRead("live-history", readLiveHistory);

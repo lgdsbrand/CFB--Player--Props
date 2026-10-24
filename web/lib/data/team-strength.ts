@@ -2,6 +2,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { type DbRow, unwrap } from "@/lib/data/query";
 import type { Sport } from "@/lib/core/sport";
 import type { StrengthRow } from "@/lib/core/team-strength";
+import { cachedRead } from "@/lib/data/cache";
 
 /**
  * The league a team is ranked within, per sport. College ranks among FBS:
@@ -25,7 +26,7 @@ const RANKED_CLASSIFICATION: Record<Sport, string | null> = { cfb: "fbs", nfl: n
  * joined to `teams.sport`. The NFL has no rows today, so its page simply has
  * no panel.
  */
-export async function getTeamStrength(
+async function readTeamStrength(
   season: number,
   week: number,
   sport: Sport,
@@ -69,3 +70,10 @@ export async function getTeamStrength(
       defSuccess: num(r.def_success),
     }));
 }
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getTeamStrength = cachedRead("team-strength", readTeamStrength);

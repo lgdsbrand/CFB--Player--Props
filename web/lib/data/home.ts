@@ -1,30 +1,73 @@
 /**
  * The home page's counts.
  *
- * FOUR HEAD-COUNTS, NOT `getBoardCounts`. That function runs five and returns
- * three fields this page has no use for, and the home page is the first thing a
- * reader loads — the board already carries about two seconds of server render
- * and there is no reason to inherit any of it here.
- *
- * `head: true` asks PostgREST for the count and no rows at all, so each of
- * these is a `count(*)` over an indexed predicate rather than a page of data.
+ * THE FIVE BOARD COUNTS COME FROM THE BOARD INDEX (2026-10-24), the cached week
+ * the board itself lists from (`getBoardIndex`, migration 0104), so a home view
+ * costs the database nothing for them. They were five uncached `head: true`
+ * counts over `v_board_rows` on every view of the landing page.
  *
  * SCOPED THE SAME WAY THE BOARD IS. Every number here is a promise about what a
  * tile leads to, so it has to be counted under the filter the destination
- * applies — the displayed conferences. A count of the whole FBS slate beside a
- * link to a narrowed board is a tile that lies by a factor of two.
+ * applies — the displayed conferences and the games still to kick. A count of
+ * the whole FBS slate beside a link to a narrowed board is a tile that lies by
+ * a factor of two. See `countHomeBoard`.
+ *
+ * The cheat-sheet tile counts from the sheet's own cached read; the tracker
+ * count is one fixed statement, cached for a minute.
  */
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import {
-  CHEAT_TIERS,
-  DEFAULT_CHEAT_WINDOW,
-  minDecidedFor,
-} from "@/lib/core/cheat-sheet";
+import { countHomeBoard } from "@/lib/core/board-index";
+import { CHEAT_TIERS, DEFAULT_CHEAT_WINDOW } from "@/lib/core/cheat-sheet";
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { HomeCounts } from "@/lib/core/home-view";
+import { getBoardIndex } from "@/lib/data/board";
+import { cachedLiveRead } from "@/lib/data/cache";
+import { getCheatSheet } from "@/lib/data/cheat-sheet";
 import { SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
-import { upcomingOnly } from "@/lib/data/query";
+
+/**
+ * The cheat-sheet tile's number, from the same cached read the sheet itself
+ * renders from (`getCheatSheet`), at the default window and the lowest tier:
+ * the tile promises what the reader will find when they click it.
+ */
+async function getCheatSheetCount(
+  sport: Sport,
+  season: number,
+  week: number,
+  kickoffCutoff: Date,
+): Promise<number> {
+  const sheet = await getCheatSheet({
+    sport,
+    season,
+    week,
+    windowSize: DEFAULT_CHEAT_WINDOW,
+    minHitRate: CHEAT_TIERS[CHEAT_TIERS.length - 1].min,
+    kickoffCutoff,
+  });
+  return sheet.total;
+}
+
+/**
+ * The tracker tile: graded picks, both engines the page shows. Across the whole
+ * history, not this week, because that is what the page opens on.
+ */
+async function readTrackedCount(sport: Sport): Promise<number> {
+  const supabase = createServerSupabaseClient();
+  const result = await supabase
+    .from("v_tracker_picks")
+    .select("id", { count: "exact", head: true })
+    .eq("sport", sport)
+    .eq("period", "full")
+    .in("engine", ["v2", "rules"])
+    .neq("result", "pending");
+  if (result.error) {
+    throw new Error(`Home count failed (tracker): ${result.error.message}`);
+  }
+  return result.count ?? 0;
+}
+
+const getTrackedCount = cachedLiveRead("home-tracked-count", readTrackedCount);
 
 export async function getHomeCounts(
   season: number,
@@ -34,97 +77,19 @@ export async function getHomeCounts(
   kickoffCutoff: Date,
   sport: Sport = DEFAULT_SPORT,
 ): Promise<HomeCounts> {
-  const supabase = createServerSupabaseClient();
-
-  // Every tile promises what its destination shows, and the destination hides
-  // games that have kicked off — so these count under the same cut or the tile
-  // lies. On 2026 week 1 the difference is 247 rows.
-  const base = () =>
-    supabase
-      .from("v_board_rows")
-      .select("projection_id", { count: "exact", head: true })
-      .eq("sport", sport)
-      .eq("season", season)
-      .eq("week", week)
-      .eq("conference_is_displayed", true)
-      .or(upcomingOnly(kickoffCutoff));
-
-  /**
-   * The cheat-sheet tile's number, counted exactly as `getCheatSheet` selects
-   * — same window, same floors, same exclusion — because the tile promises what
-   * the reader will find when they click it.
-   *
-   * IT IS THE ONE COUNT HERE THAT IS NOT A PREDICATE ON AN INDEXED COLUMN: it
-   * grades every priced prop on the slate. Measured warm on the fullest week in
-   * the database (2025 week 12, 405 entries) it runs in 300-530 ms, which is
-   * the same order as the five above and it shares their wave, so it costs the
-   * page nothing sequentially. A cold first hit measured 2.4 s; if this page
-   * ever needs to be faster than its slowest count, that is the one to cache.
-   */
-  const cheatSheet = supabase
-    .from("v_cheat_sheet")
-    .select("projection_id", { count: "exact", head: true })
-    .eq("sport", sport)
-    .eq("season", season)
-    .eq("week", week)
-    .eq("window_size", DEFAULT_CHEAT_WINDOW)
-    .eq("conference_is_displayed", true)
-    .gte("hit_rate", CHEAT_TIERS[CHEAT_TIERS.length - 1].min)
-    .gte("decided", minDecidedFor(DEFAULT_CHEAT_WINDOW))
-    .or("is_binary.eq.false,hit_side.eq.over")
-    .or(upcomingOnly(kickoffCutoff));
-
-  // The tracker tile: graded picks, both engines the page shows. Across the
-  // whole history, not this week, because that is what the page opens on.
-  const tracked = supabase
-    .from("v_tracker_picks")
-    .select("id", { count: "exact", head: true })
-    .eq("sport", sport)
-    .eq("period", "full")
-    .in("engine", ["v2", "rules"])
-    .neq("result", "pending");
-
-  const [props, calls, edges, developmentLine, bookLine, sheet, graded] = await Promise.all(
-    [
-      base(),
-      // The population "best plays" ORDERS, not a threshold within it. A
-      // confidence floor was tried and returned zero on both live weeks — the
-      // top confidence on an opening slate is 0.574.
-      base().eq("has_call", true),
-      base().gte("edge", edgeThreshold),
-      base().eq("sportsbook_key", SYNTHETIC_BOOK_KEY),
-      // "Priced by a real book" is the complement of the synthetic one WITHIN
-      // the priced rows, not the complement of it overall — most rows have no
-      // line at all, and counting those as book-priced would report a market
-      // that does not exist yet.
-      base().eq("has_book_line", true).neq("sportsbook_key", SYNTHETIC_BOOK_KEY),
-      cheatSheet,
-      tracked,
-    ],
-  );
-
-  for (const [result, label] of [
-    [props, "props"],
-    [calls, "calls"],
-    [edges, "edges"],
-    [developmentLine, "development line"],
-    [bookLine, "book line"],
-    [sheet, "cheat sheet"],
-    [graded, "tracker"],
-  ] as const) {
-    if (result.error) {
-      throw new Error(`Home count failed (${label}): ${result.error.message}`);
-    }
-  }
-
-  return {
-    props: props.count ?? 0,
-    games,
-    calls: calls.count ?? 0,
-    edges: edges.count ?? 0,
-    developmentLine: developmentLine.count ?? 0,
-    bookLine: bookLine.count ?? 0,
-    cheatSheet: sheet.count ?? 0,
-    tracked: graded.count ?? 0,
-  };
+  const [index, cheatSheet, tracked] = await Promise.all([
+    getBoardIndex(sport, season, week),
+    getCheatSheetCount(sport, season, week, kickoffCutoff),
+    getTrackedCount(sport),
+  ]);
+  // "Best plays" ORDERS the called population rather than thresholding it: a
+  // confidence floor returned zero on both live weeks (top confidence on an
+  // opening slate is 0.574). "Priced by a real book" is the complement of the
+  // synthetic book WITHIN the priced rows — most rows have no line at all.
+  const board = countHomeBoard(index, {
+    edgeThreshold,
+    syntheticBookKey: SYNTHETIC_BOOK_KEY,
+    kickoffCutoff,
+  });
+  return { ...board, games, cheatSheet, tracked };
 }

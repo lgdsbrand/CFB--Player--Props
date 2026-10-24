@@ -6,11 +6,16 @@
  * stated and tested in `lib/core/cheat-sheet.ts` — what is here is their
  * translation into predicates the DATABASE applies.
  *
- * THEY HAVE TO BE APPLIED IN THE QUERY, not after the fetch. A week holds ~5,200
- * graded rows across both windows and PostgREST caps a response at 1,000
- * silently, so filtering in the page would filter an arbitrary truncation of the
- * slate and drop qualifying players off the sheet in a way indistinguishable
- * from them not qualifying. Same reason the board pushes every filter down.
+ * THE SHEET'S OWN RULES ARE IN THE QUERY; THE READER'S FILTERS ARE NOT
+ * (2026-10-24). The fixed inclusion rules (window, displayed conferences, the
+ * hit-rate floor of the lowest tier, the decided floor, the yes/no rule) cut a
+ * week's ~5,200 graded rows to the few hundred that qualify, and that set is
+ * read whole — paged past the 1,000-row cap, never truncated — and cached for a
+ * minute per sport, week and window. Position, side, market, games, tier and
+ * kickoff are then applied here. Pushing those into SQL made every combination a
+ * different statement, and planning `v_cheat_sheet` takes ~24 MB with ~1.2 MB
+ * kept per prepared statement on each PostgREST connection: the same memory
+ * leak that was restarting production through the board (see `board.ts`).
  *
  * ALWAYS PINNED TO ONE SEASON AND WEEK. Unfiltered, the view grades every priced
  * prop in the database; the planner pushes these two predicates into
@@ -18,7 +23,12 @@
  * at ~800 ms on the heaviest week measured.
  */
 
-import { minDecidedFor, type CheatSheetRow } from "@/lib/core/cheat-sheet";
+import {
+  CHEAT_TIERS,
+  compareRows,
+  minDecidedFor,
+  type CheatSheetRow,
+} from "@/lib/core/cheat-sheet";
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { BetSide, PositionGroup } from "@/lib/core/types";
 import {
@@ -28,6 +38,7 @@ import {
   unwrap,
   upcomingOnly,
 } from "@/lib/data/query";
+import { cachedLiveRead } from "@/lib/data/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 const COLUMNS =
@@ -90,65 +101,88 @@ export type CheatSheetFilters = {
   kickoffCutoff?: Date;
 };
 
+/** The lowest hit rate any tier shows: the floor the cached base read applies. */
+const SHEET_FLOOR = Math.min(0.8, ...CHEAT_TIERS.map((tier) => tier.min));
+
+/**
+ * Every row that qualifies for the sheet this week at this window, by the
+ * sheet's fixed rules only. One statement whatever the reader filters on.
+ */
+async function readCheatSheetBase(
+  sport: Sport,
+  season: number,
+  week: number,
+  windowSize: number,
+  floor: number,
+): Promise<DbRow[]> {
+  const supabase = createServerSupabaseClient();
+  const rows: DbRow[] = [];
+  for (let offset = 0; ; offset += MAX_ROWS_PER_REQUEST) {
+    const page = unwrap<DbRow[]>(
+      await supabase
+        .from("v_cheat_sheet")
+        .select(COLUMNS)
+        .eq("sport", sport)
+        .eq("season", season)
+        .eq("week", week)
+        .eq("window_size", windowSize)
+        // The board's scope (CLAUDE.md §7). A sheet entry whose player the board
+        // will not show is a dead end — see `lib/core/board-scope.ts`.
+        .eq("conference_is_displayed", true)
+        .gte("hit_rate", floor)
+        // The floor under the denominator. Without it, week 3 puts every player
+        // who has played twice on the perfect list.
+        .gte("decided", minDecidedFor(windowSize))
+        // "Has failed to score in five straight" is true of most of the slate
+        // and is not a play. Stated in `qualifies`.
+        .or("is_binary.eq.false,hit_side.eq.over")
+        // A stable order so the pages neither repeat nor skip a row.
+        .order("projection_id")
+        .range(offset, offset + MAX_ROWS_PER_REQUEST - 1),
+      "v_cheat_sheet",
+    );
+    rows.push(...page);
+    if (page.length < MAX_ROWS_PER_REQUEST) return rows;
+  }
+}
+
+const getCheatSheetBase = cachedLiveRead("cheat-sheet-base", readCheatSheetBase);
+
 export async function getCheatSheet(
   filters: CheatSheetFilters,
 ): Promise<CheatSheetPage> {
-  const supabase = createServerSupabaseClient();
+  const minHitRate = filters.minHitRate ?? 0.8;
+  const base = await getCheatSheetBase(
+    filters.sport ?? DEFAULT_SPORT,
+    filters.season,
+    filters.week,
+    filters.windowSize,
+    Math.min(SHEET_FLOOR, minHitRate),
+  );
+  const cutoff = filters.kickoffCutoff?.getTime();
 
-  let query = supabase
-    .from("v_cheat_sheet")
-    .select(COLUMNS, { count: "exact" })
-    .eq("sport", filters.sport ?? DEFAULT_SPORT)
-    .eq("season", filters.season)
-    .eq("week", filters.week)
-    .eq("window_size", filters.windowSize)
-    // The board's scope (CLAUDE.md §7). A sheet entry whose player the board
-    // will not show is a dead end, and this product has shipped that link three
-    // times — see `lib/core/board-scope.ts`.
-    .eq("conference_is_displayed", true)
-    .gte("hit_rate", filters.minHitRate ?? 0.8)
-    // The floor under the denominator. Without it, week 3 puts every player who
-    // has played twice on the perfect list.
-    .gte("decided", minDecidedFor(filters.windowSize))
-    // "Has failed to score in five straight" is true of most of the slate and
-    // is not a play. Stated in `qualifies`; this is the same rule as a
-    // predicate, because the row cap makes it wrong to apply it afterwards.
-    .or("is_binary.eq.false,hit_side.eq.over");
+  const matched = base
+    .map(toCheatSheetRow)
+    .filter(
+      (row) =>
+        row.hitRate >= minHitRate &&
+        (filters.belowHitRate === undefined || row.hitRate < filters.belowHitRate) &&
+        // A streak against a line already settled is a result, not a play.
+        // Same cut as the board: kickoff at or after the cutoff, or TBD.
+        (cutoff === undefined ||
+          row.startDate === null ||
+          Date.parse(row.startDate) >= cutoff) &&
+        (!filters.positionGroup || row.positionGroup === filters.positionGroup) &&
+        (!filters.side || row.hitSide === filters.side) &&
+        (!filters.marketKey || row.marketKey === filters.marketKey) &&
+        (!filters.gameIds || filters.gameIds.includes(row.gameId)),
+    )
+    // `compareRows` is the order the sheet is shown in, and now also the one
+    // that decides which rows survive the limit.
+    .sort(compareRows);
 
-  // A streak against a line that has already been settled is a result, not a
-  // play. Same cut as the board, so a sheet entry always has a board row behind
-  // it — see `lib/core/kickoff.ts`.
-  if (filters.kickoffCutoff) {
-    query = query.or(upcomingOnly(filters.kickoffCutoff));
-  }
-
-  if (filters.positionGroup) {
-    query = query.eq("position_group", filters.positionGroup);
-  }
-  if (filters.side) query = query.eq("hit_side", filters.side);
-  if (filters.marketKey) query = query.eq("market_key", filters.marketKey);
-  if (filters.gameIds) query = query.in("game_id", filters.gameIds);
-  if (filters.belowHitRate !== undefined) {
-    query = query.lt("hit_rate", filters.belowHitRate);
-  }
-
-  // Mirrors `compareRows` in the core. The two must agree: this decides which
-  // rows survive the limit, and that one decides the order they are shown in.
-  const result = await query
-    .order("hit_rate", { ascending: false })
-    .order("decided", { ascending: false })
-    .order("display_confidence", { ascending: false, nullsFirst: false })
-    .order("projection_id", { ascending: true })
-    .limit(Math.min(SHEET_LIMIT, MAX_ROWS_PER_REQUEST));
-
-  const rows = unwrap<DbRow[]>(result, "v_cheat_sheet");
-  const total = result.count ?? rows.length;
-
-  return {
-    rows: rows.map(toCheatSheetRow),
-    truncated: total > rows.length,
-    total,
-  };
+  const rows = matched.slice(0, SHEET_LIMIT);
+  return { rows, truncated: matched.length > rows.length, total: matched.length };
 }
 
 /**
@@ -167,7 +201,7 @@ export async function getCheatSheet(
  * Between them they separate the two structural empties from the ordinary one,
  * which is all the page needs to say something true.
  */
-export async function getCheatSheetContext(
+async function readCheatSheetContext(
   season: number,
   week: number,
   kickoffCutoff: Date,
@@ -207,6 +241,8 @@ export async function getCheatSheetContext(
 
   return { pricedProps: priced.count ?? 0, playedGames: played.count ?? 0 };
 }
+
+export const getCheatSheetContext = cachedLiveRead("cheat-sheet-context", readCheatSheetContext);
 
 function toCheatSheetRow(row: DbRow): CheatSheetRow {
   return {

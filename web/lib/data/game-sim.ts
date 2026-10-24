@@ -9,13 +9,14 @@ import {
   type GameSim,
   type SimEdge,
 } from "@/lib/core/game-sim";
+import { cachedLiveRead } from "@/lib/data/cache";
 
 /**
  * One NFL game's simulations (migration 0099): the pregame run with its
  * replay, frozen at kickoff, and the live run (no replay) while the game is on.
  * Either may be missing: a game with no projection is never simulated.
  */
-export async function getGameSims(
+async function readGameSims(
   gameId: number,
 ): Promise<{ pregame: GameSim | null; live: GameSim | null }> {
   const supabase = createServerSupabaseClient();
@@ -43,7 +44,7 @@ export async function getGameSims(
  * The first quarter's and first half's markets against one book each
  * (migrations 0100, 0101), as the site shows them, with each book's name.
  */
-export async function getSimEdges(
+async function readSimEdges(
   gameId: number,
 ): Promise<{ edges: SimEdge[]; books: Record<number, string> }> {
   const supabase = createServerSupabaseClient();
@@ -65,3 +66,11 @@ export async function getSimEdges(
   for (const b of bookRows) books[Number(b.id)] = String(b.display_name);
   return { edges, books };
 }
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getGameSims = cachedLiveRead("game-sims", readGameSims);
+export const getSimEdges = cachedLiveRead("sim-edges", readSimEdges);

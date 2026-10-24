@@ -22,7 +22,7 @@ import type {
   OddsMarket,
 } from "@/lib/core/game-lines";
 import { type DbRow, unwrap } from "@/lib/data/query";
-import { cachedLiveMapRead } from "@/lib/data/cache";
+import { cachedLiveMapRead, cachedLiveRead, cachedRead } from "@/lib/data/cache";
 
 const SUMMARY_COLUMNS =
   "game_id, market, books, consensus_line, consensus_first_line, consensus_fair, " +
@@ -193,7 +193,7 @@ const BOOK_COLUMNS =
  * game, first half and first quarter (capture_game_periods). About 85 full-game
  * rows plus up to ~50 for the periods, well inside PostgREST's 1,000.
  */
-export async function getGameBookOdds(gameId: number): Promise<BookOdds[]> {
+async function readGameBookOdds(gameId: number): Promise<BookOdds[]> {
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
     await supabase
@@ -210,7 +210,7 @@ export async function getGameBookOdds(gameId: number): Promise<BookOdds[]> {
  * by game: what the NFL game cards need to show the same book as each game's
  * page (`chooseBook`). 16 games x 3 books x 2 markets is ~100 rows.
  */
-export async function getFullGameBookOdds(
+async function readFullGameBookOdds(
   gameIds: number[],
   books: readonly string[],
 ): Promise<Map<number, BookOdds[]>> {
@@ -351,7 +351,7 @@ async function withPollRanks(games: GradedGame[]): Promise<GradedGame[]> {
  * Bounded by kickoff rather than week so a postseason game, which CFBD
  * numbers from week 1 again, cannot leak in (see the bowl-week collision).
  */
-export async function getSeasonResults(
+async function readSeasonResults(
   season: number,
   teamIds: number[],
   before: string | null,
@@ -372,7 +372,7 @@ export async function getSeasonResults(
 }
 
 /** Every completed meeting between two teams we hold, newest first. */
-export async function getHeadToHead(
+async function readHeadToHead(
   teamA: number,
   teamB: number,
   before: string | null,
@@ -392,7 +392,7 @@ export async function getHeadToHead(
 }
 
 /** The earliest season this database holds games for, for honest captions. */
-export async function getEarliestSeason(sport: string): Promise<number | null> {
+async function readEarliestSeason(sport: string): Promise<number | null> {
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
     await supabase
@@ -405,3 +405,14 @@ export async function getEarliestSeason(sport: string): Promise<number | null> {
   );
   return rows.length > 0 ? (rows[0].season as number) : null;
 }
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getGameBookOdds = cachedLiveRead("game-book-odds", readGameBookOdds);
+export const getFullGameBookOdds = cachedLiveMapRead("full-game-book-odds", readFullGameBookOdds);
+export const getSeasonResults = cachedRead("season-results", readSeasonResults);
+export const getHeadToHead = cachedRead("head-to-head", readHeadToHead);
+export const getEarliestSeason = cachedRead("earliest-season", readEarliestSeason);

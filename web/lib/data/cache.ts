@@ -16,8 +16,11 @@ import { unstable_cache } from "next/cache";
  * together; every one of those changes when the worker runs, at most weekly, so
  * caching them removes an entire wait rather than shaving a query. Caching one
  * member of a wave whose other members still go to the database saves nothing
- * at all — which is the trap this file is written to avoid, and the reason
- * `getPlayerIdentity` is deliberately NOT here (see the player page).
+ * at all, for LATENCY. For LOAD it is a different story, and load is what
+ * decided 2026-10-24: production kept restarting from memory pressure, and
+ * nearly every read a page made went to the database on every view. Since then
+ * almost every read is cached here, wave or not (`getPlayerIdentity` included),
+ * and the board reads a whole week as one fixed statement (`lib/data/board.ts`).
  *
  * IN PRODUCTION THIS MATTERS LESS AND STILL MATTERS. Deployed with the Vercel
  * function in Supabase's own region the round trip falls to single-digit
@@ -95,6 +98,15 @@ export function cachedLiveRead<Args extends unknown[], Result>(
     revalidate: LIVE_READ_TTL_SECONDS,
     tags: [LIVE_READ_TAG],
   });
+}
+
+/** `cachedRead` for a read that returns a Map; see `cachedLiveMapRead`. */
+export function cachedMapRead<Args extends unknown[], K, V>(
+  name: string,
+  read: (...args: Args) => Promise<Map<K, V>>,
+): (...args: Args) => Promise<Map<K, V>> {
+  const cached = cachedRead(name, async (...args: Args) => [...(await read(...args))]);
+  return async (...args: Args) => new Map(await cached(...args));
 }
 
 /**

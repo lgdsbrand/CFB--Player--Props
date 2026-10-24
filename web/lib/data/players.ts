@@ -17,7 +17,7 @@ import {
   thisAndLastSeason,
   unwrap,
 } from "@/lib/data/query";
-import { cachedLiveMapRead } from "@/lib/data/cache";
+import { cachedLiveMapRead, cachedRead } from "@/lib/data/cache";
 
 const COLUMNS =
   "player_id, game_id, season, week, position_group, is_home, " +
@@ -51,7 +51,7 @@ const COLUMNS =
  * seasons, but this season sorts first, so it only ever cuts last season's
  * oldest games.
  */
-export async function getPlayerGameLog(
+async function readPlayerGameLog(
   playerId: number,
   {
     season,
@@ -113,7 +113,7 @@ export type PlayerIdentity = {
  * actual name, and it has to be distinguishable from an id that does not exist,
  * which is a 404.
  */
-export async function getPlayerIdentity(
+async function readPlayerIdentity(
   playerId: number,
 ): Promise<PlayerIdentity | null> {
   const supabase = createServerSupabaseClient();
@@ -276,3 +276,11 @@ function toGameLogRow(row: Record<string, unknown>): PlayerGameLogRow {
     snapShare: n("snap_share"),
   };
 }
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getPlayerGameLog = cachedRead("player-game-log", readPlayerGameLog);
+export const getPlayerIdentity = cachedRead("player-identity", readPlayerIdentity);

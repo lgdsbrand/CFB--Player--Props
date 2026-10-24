@@ -5,28 +5,40 @@
  * board useful before books post (CLAUDE.md §7). Every pick-derived field is
  * therefore nullable and `hasCall` discriminates — see `BoardRow`.
  *
- * FILTERING HAPPENS IN POSTGRES, NOT IN THE PAGE. A week holds ~6,000 rows and
- * PostgREST caps a response at 1,000 silently, so a filter applied after the
- * fetch would operate on an arbitrary truncation of the week and quietly show
- * the wrong players. Every filter below is pushed into the query for that
- * reason, not for speed.
+ * FILTERING HAPPENS ON A CACHED INDEX OF THE WHOLE WEEK, NOT IN POSTGRES
+ * (2026-10-24). Every filter used to be pushed into SQL, so every combination of
+ * the board's controls was a different statement, and PostgREST keeps every
+ * statement it prepares on its connection: 474 of them in 13 minutes, each
+ * carrying the expanded view, was the memory that kept restarting production.
+ * Now `board_index` (migration 0104) returns the week's filter, sort and count
+ * columns as one JSON value, cached for a minute per sport and week; the
+ * predicates in `lib/core/board-index.ts` mirror the old SQL ones; and the wide
+ * columns are read only for the rows on the page, by id. Any combination of
+ * filters costs the same three statements.
+ *
+ * The old reason for filtering in SQL — PostgREST caps a response at 1,000 rows,
+ * so filtering a capped fetch shows the wrong players — does not apply: the
+ * index is a single scalar result holding every row of the week.
  */
 
+import { cache } from "react";
+
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { MAJOR_BOOKS } from "@/lib/core/board-params";
-import { type BoardSort, boardSortKeys } from "@/lib/core/board-view";
+import {
+  type IndexFilters,
+  type IndexRow,
+  countIndex,
+  decodeIndex,
+  matchesBoardFilters,
+  matchesCardFilters,
+  sortIndexRows,
+} from "@/lib/core/board-index";
+import type { BoardSort } from "@/lib/core/board-view";
 import { parseLadder } from "@/lib/core/ladder-view";
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { BetSide, BoardRow, PositionGroup } from "@/lib/core/types";
 import { SYNTHETIC_BOOK_KEY } from "@/lib/data/odds";
-import {
-  type DbRow,
-  MAX_ROWS_PER_REQUEST,
-  num,
-  requireNum,
-  unwrap,
-  upcomingOnly,
-} from "@/lib/data/query";
+import { type DbRow, MAX_ROWS_PER_REQUEST, num, unwrap } from "@/lib/data/query";
 import { cachedLiveRead } from "@/lib/data/cache";
 
 /**
@@ -183,246 +195,119 @@ export type BoardPage = {
 };
 
 /**
- * Build a filtered board query.
+ * The week's board index, read once per sport and week per minute.
  *
- * ONE definition of "which rows match", shared by the row read and the card-key
- * scan. Those two must agree exactly — the scan decides which players make the
- * page and the read fills their cards — and two copies of a dozen predicates
- * would eventually disagree about an edge case and paginate wrongly.
+ * ONE STATEMENT, WHATEVER THE FILTERS. The cache key is only (sport, season,
+ * week), so every reader and every filter combination shares the entry.
+ * Cached RAW (arrays) and decoded per render, because the cached value must be
+ * plain JSON and stay under the 2 MB data-cache entry limit — a full college
+ * week is ~1 MB as arrays and would be well over as objects.
  */
-function buildBoardQuery(
-  select: string,
-  filters: BoardFilters,
-  count?: "exact",
-  /** Return the count and NO rows. Only meaningful alongside `count`. */
-  head?: boolean,
-) {
+async function readBoardIndex(
+  sport: Sport,
+  season: number,
+  week: number,
+): Promise<unknown[][]> {
   const supabase = createServerSupabaseClient();
-
-  let query = supabase
-    .from("v_board_rows")
-    .select(select, count ? { count, head } : undefined)
-    .eq("sport", filters.sport ?? DEFAULT_SPORT)
-    .eq("season", filters.season)
-    .eq("week", filters.week);
-
-  // Scope first, then the reader's own market choice inside it. Both apply: a
-  // selected market is always one the scope already admits, so the pair can
-  // only ever narrow, never contradict.
-  if (filters.marketKeys) query = query.in("market_key", filters.marketKeys);
-  if (filters.marketKey) query = query.eq("market_key", filters.marketKey);
-  if (filters.positionGroup) {
-    query = query.eq("position_group", filters.positionGroup);
+  const { data, error } = await supabase.rpc("board_index", {
+    p_sport: sport,
+    p_season: season,
+    p_week: week,
+  });
+  if (error) {
+    throw new Error(`Board index failed: ${error.message}`);
   }
-  // One day of the slate, expressed as the games played on it. Resolved to ids
-  // by `slateDays` rather than to a timestamp range, because the day boundary
-  // is an Eastern calendar day and a late kickoff crosses midnight UTC — see
-  // `lib/core/slate-days.ts`.
-  //
-  // An EMPTY array is a real filter meaning "no games", not "no filter". It
-  // cannot arise from a resolved day (a day exists because it has games) but
-  // could from a caller building filters by hand, and `.in` on an empty list
-  // correctly returns nothing rather than everything.
-  if (filters.gameIds) query = query.in("game_id", filters.gameIds);
-  // A settled prop is not a bet. Applied before the conference narrowing so it
-  // is part of every count the page prints, not just the rows it lists.
-  if (filters.kickoffCutoff) {
-    query = query.or(upcomingOnly(filters.kickoffCutoff));
-  }
-  if (filters.conferenceName) {
-    query = query.eq("conference_name", filters.conferenceName);
-  } else if (filters.displayedConferencesOnly !== false) {
-    query = query.eq("conference_is_displayed", true);
-  }
-
-  if (filters.search) {
-    // `ilike` with escaped wildcards: a player named "%" is not a query.
-    const escaped = filters.search.replace(/[%_]/g, (c) => `\\${c}`);
-    query = query.ilike("player_name", `%${escaped}%`);
-  }
-
-  if (filters.withBookLineOnly) query = query.eq("has_book_line", true);
-  if (filters.withCallOnly) query = query.eq("has_call", true);
-  if (filters.majorBooksOnly) query = query.in("sportsbook_key", [...MAJOR_BOOKS]);
-
-  // `not null` rather than `lte 25`: the column only ever holds 1-25, and a
-  // numeric bound would silently start meaning something else if a poll with a
-  // longer tail (the CFP committee publishes 25, but "others receiving votes"
-  // is a real concept) were ever exposed through this column.
-  if (filters.rankedOnly) {
-    query = query.not("team_poll_rank", "is", null);
-  }
-
-  query = applySide(query, filters.side);
-
-  if (filters.edgesOnly) {
-    // A null edge means "no edge computable", not "below threshold" — gte on a
-    // null column already excludes those rows, which is the behaviour we want.
-    query = query.gte("edge", filters.edgeThreshold ?? 0.05);
-  }
-  if (filters.minConfidence !== undefined) {
-    query = query.gte("display_confidence", filters.minConfidence);
-  }
-  // Rank 1 is the BEST defense, so "only show me soft matchups" is a FLOOR on
-  // the rank, not a ceiling. This was `lte` on a field called maxOpponentRank
-  // under the old convention; renaming it forced every call site to be looked
-  // at rather than quietly leaving a filter that now selects the exact
-  // opposite set of rows while still type-checking.
-  if (filters.minOpponentRank !== undefined) {
-    query = query.gte("opponent_rank_vs_position", filters.minOpponentRank);
-  }
-
-  return query;
+  return (data ?? []) as unknown[][];
 }
 
-type BoardQuery = ReturnType<typeof buildBoardQuery>;
+const getRawBoardIndex = cachedLiveRead("board-index", readBoardIndex);
 
-/**
- * The Over / Under switch as predicates, shared by the row read and the card
- * read so the two cannot disagree about which sub-cards a side admits.
- *
- * `eq` on `side` already drops rows with no call: a NULL side matches
- * neither value. Under also drops the yes/no markets — an anytime-TD "under"
- * is the model declining the market, not a bet a book offers.
- */
-function applySide<Q extends { eq: (column: string, value: unknown) => Q }>(
-  query: Q,
-  side: BetSide | undefined,
-): Q {
-  if (!side) return query;
-  const sided = query.eq("side", side);
-  return side === "under" ? sided.eq("is_binary", false) : sided;
+/** Decoded once per render, however many board reads the page makes. */
+const loadBoardIndex = cache(
+  async (sport: Sport, season: number, week: number): Promise<IndexRow[]> =>
+    decodeIndex(await getRawBoardIndex(sport, season, week)),
+);
+
+/** The decoded week, for other pages that count off the board (the home tiles). */
+export function getBoardIndex(sport: Sport, season: number, week: number): Promise<IndexRow[]> {
+  return loadBoardIndex(sport, season, week);
+}
+
+function indexFor(filters: Pick<BoardFilters, "sport" | "season" | "week">) {
+  return loadBoardIndex(filters.sport ?? DEFAULT_SPORT, filters.season, filters.week);
+}
+
+/** The board's matching rows, in board order. */
+async function matchingRows(filters: BoardFilters): Promise<IndexRow[]> {
+  const index = await indexFor(filters);
+  const matched = index.filter((row) => matchesBoardFilters(row, filters as IndexFilters));
+  return sortIndexRows(matched, filters.sort, new Date());
 }
 
 /**
- * Apply the sort switch (CLAUDE.md §7).
- *
- * The chain itself — including why every sort ends in opponent rank before the
- * id tiebreak — is `boardSortKeys` in the core. This only translates it into
- * PostgREST calls.
- *
- * Opponent rank sorts DESCENDING wherever it appears. Rank 1 is the BEST
- * defense, and nobody sorts a props board to see the toughest matchups first.
+ * The wide columns for exactly these projections. One statement shape for any
+ * list (`projection_id = ANY($1)`), so a new page never prepares a new one.
  */
-function applySort(query: BoardQuery, sort: BoardSort = "edge"): BoardQuery {
-  let sorted = query;
-  for (const key of boardSortKeys(sort)) {
-    sorted = sorted.order(key.column, {
-      ascending: key.ascending,
-      nullsFirst: key.nullsFirst,
-    });
-  }
-  return sorted;
+async function readRowsByIds(ids: number[], orderByMarket: boolean): Promise<BoardRow[]> {
+  if (ids.length === 0) return [];
+  const supabase = createServerSupabaseClient();
+  let query = supabase.from("v_board_rows").select(COLUMNS).in("projection_id", ids);
+  // Cards list a player's markets in market order, decided by the database's
+  // collation as before; the table restores the index's order itself.
+  if (orderByMarket) query = query.order("market_key");
+  return unwrap<DbRow[]>(await query, "v_board_rows (by id)").map(toBoardRow);
 }
 
-async function readBoardRows(filters: BoardFilters): Promise<BoardPage> {
+const getRowsByIds = cachedLiveRead("board-rows-by-id", readRowsByIds);
+
+/** Rows in the order of `ids`, which came from the index sort. */
+async function rowsInOrder(ids: number[]): Promise<BoardRow[]> {
+  const order = new Map(ids.map((id, index) => [id, index]));
+  return (await getRowsByIds(ids, false)).sort(
+    (a, b) => (order.get(a.projectionId) ?? 0) - (order.get(b.projectionId) ?? 0),
+  );
+}
+
+/** One page of matching rows, with the total before paging. */
+export async function getBoardRows(filters: BoardFilters): Promise<BoardPage> {
   const limit = Math.min(filters.limit ?? 200, MAX_ROWS_PER_REQUEST);
   const offset = filters.offset ?? 0;
-
-  const query = applySort(
-    buildBoardQuery(COLUMNS, filters, "exact"),
-    filters.sort,
-  ).range(offset, offset + limit - 1);
-
-  const result = await query;
-  const rows = unwrap<DbRow[]>(result, "v_board_rows");
-
-  return {
-    rows: rows.map(toBoardRow),
-    total: result.count ?? rows.length,
-  };
+  const matched = await matchingRows(filters);
+  const ids = matched.slice(offset, offset + limit).map((row) => row.projectionId);
+  return { rows: await rowsInOrder(ids), total: matched.length };
 }
 
-export const getBoardRows = cachedLiveRead("board-rows", readBoardRows);
-
 /**
- * One page of board ROWS, for the table layout — as two cheap queries.
- *
- * WHY NOT JUST `getBoardRows` WITH A LIMIT. Because that times out, and the
- * measurement is worth recording. On 2025 week 9 filtered to `rank >= 100`
- * (764 matching rows), against the free tier:
- *
- *   wide select + sort + exact count, 50 rows    500, statement timeout at 3.5s
- *   wide select + sort, NO count,     50 rows    500, statement timeout at 3.4s
- *   exact count alone                            206, 455ms
- *   `projection_id` only + sort + count          206, 613ms
- *   wide select by `projection_id in (50 ids)`   200, 344ms
- *
- * THE COUNT IS NOT THE COST — dropping it changed nothing. What times out is
- * projecting all 53 columns of `v_board_rows` across a week-wide sort: the view
- * is a wide join, and asking for every column of it forces a plan that the free
- * tier's `statement_timeout` will not sit through. Asking for one column is
- * fine, and asking for 53 columns of fifty rows named by id is fine. Only the
- * combination is not.
- *
- * So this is the same two-step the card path takes, keyed on `projection_id`
- * instead of on player-game: establish WHICH rows and in what order, then fetch
- * exactly those. Total 957ms where the single query would not finish at all.
+ * One page of board ROWS, for the table layout: which rows from the index, then
+ * their wide columns by id. (The single wide, sorted query this once replaced
+ * did not finish inside the free tier's `statement_timeout`; the index keeps
+ * that two-step shape without either query depending on the filters.)
  */
-async function readBoardRowPage(
-  filters: BoardFilters,
-): Promise<BoardRow[]> {
+export async function getBoardRowPage(filters: BoardFilters): Promise<BoardRow[]> {
   const limit = Math.min(filters.limit ?? 50, MAX_ROWS_PER_REQUEST);
   const offset = filters.offset ?? 0;
-
-  const scan = await applySort(
-    buildBoardQuery("projection_id", filters),
-    filters.sort,
-  ).range(offset, offset + limit - 1);
-
-  const scanned = unwrap<DbRow[]>(scan, "v_board_rows (row ids)");
-  const ids = scanned.map((row) => row.projection_id as number);
-  if (ids.length === 0) return [];
-
-  const supabase = createServerSupabaseClient();
-  const result = await supabase
-    .from("v_board_rows")
-    .select(COLUMNS)
-    .in("projection_id", ids);
-
-  // The second query has no ORDER BY — adding one would put the week-wide sort
-  // back, which is the thing being avoided. `projection_id` is unique, so the
-  // scan's order is restored here exactly rather than approximated.
-  const order = new Map(ids.map((id, index) => [id, index]));
-  return unwrap<DbRow[]>(result, "v_board_rows (page)")
-    .map(toBoardRow)
-    .sort(
-      (a, b) =>
-        (order.get(a.projectionId) ?? 0) - (order.get(b.projectionId) ?? 0),
-    );
+  const matched = await matchingRows(filters);
+  return rowsInOrder(matched.slice(offset, offset + limit).map((row) => row.projectionId));
 }
-
-export const getBoardRowPage = cachedLiveRead("board-row-page", readBoardRowPage);
 
 /**
- * How many rows match, without fetching any.
- *
- * SEPARATE FROM THE PAGE READ, AND FETCHED FIRST, because PostgREST answers a
- * range past the end of the result with an ERROR — "Requested range not
- * satisfiable" — not with an empty page. Asking for page 999 of a 70-page week
- * therefore 500s the board, and stale links and narrowed filters both produce
- * exactly that request. Knowing the total first makes the out-of-range range
- * impossible to ask for, which is a better answer than catching the error after
- * the fact and guessing what the reader meant.
- *
- * `head: true` returns the count and no body, which measured 455ms against the
- * free tier where the full read of the same filter times out.
+ * How many rows match. Fetched before the page so the page can be clamped;
+ * PostgREST no longer sees the range at all, but a page past the end still has
+ * to land on the last real page.
  */
-async function readBoardRowCount(filters: BoardFilters): Promise<number> {
-  const result = await buildBoardQuery("projection_id", filters, "exact", true);
-  if (result.error) {
-    throw new Error(`Board row count failed: ${result.error.message}`);
-  }
-  return result.count ?? 0;
+export async function getBoardRowCount(filters: BoardFilters): Promise<number> {
+  return (await matchingRows(filters)).length;
 }
-
-export const getBoardRowCount = cachedLiveRead("board-row-count", readBoardRowCount);
 
 export type CardKey = { playerId: number; gameId: number };
 
 export type CardKeyPage = {
   keys: CardKey[];
-  /** True when the scan hit the row cap, so `keys` is not the whole week. */
+  /**
+   * True when the week was not fully scanned. The SQL scan was capped at
+   * 12,000 rows; the index is the whole week, so this is now always false. Kept
+   * so the page's partial-slate banner has nothing new to learn.
+   */
   truncated: boolean;
 };
 
@@ -430,102 +315,36 @@ export type CardKeyPage = {
  * The player-games matching the filters, in board order.
  *
  * WHY THIS EXISTS RATHER THAN PAGINATING ROWS. The board is one card per
- * player, but the read layer returns one row per player-MARKET. Slicing rows
- * into pages would cut a player's markets across a page boundary, so a card
- * would silently show three of a player's five markets and look complete.
- *
- * So pagination works in two steps: this establishes which players belong on
- * the page and in what order, and `getRowsForCards` then fetches every row for
- * exactly those players. Two cheap queries instead of one wrong one.
- *
- * Selecting two columns keeps the scan light even at the row cap.
+ * player, but a row is one player-MARKET, so slicing rows into pages would cut
+ * a player's markets across a page boundary and a card would silently show
+ * three of his five markets. This establishes which players make the page and
+ * in what order; `getRowsForCards` then fetches every row for exactly those.
  */
-/**
- * Ceiling on the card-key scan, in rows.
- *
- * Deduplicating player-games means scanning every matching ROW, and PostgREST
- * returns at most `MAX_ROWS_PER_REQUEST` per response regardless of the range
- * asked for — so a whole week takes several requests.
- *
- * THE BUG THIS REPLACES IS WORTH RECORDING. A single request with a 2,000-row
- * range returned 1,000 rows and a count of 3,788, without error. The board
- * showed 694 cards unfiltered and 827 when filtered to one market — MORE cards
- * from a narrower query, because fewer rows per player fit under the cap. A
- * filter that increases the result count is what silent truncation looks like
- * from the outside.
- *
- * The largest week ingested is ~7,000 rows across all FBS; this clears it.
- */
-const KEY_SCAN_MAX_ROWS = 12000;
-
-async function readBoardCardKeys(
-  filters: BoardFilters,
-  maxRows: number = KEY_SCAN_MAX_ROWS,
-): Promise<CardKeyPage> {
-  const chunk = (offset: number, withCount: boolean) =>
-    applySort(
-      buildBoardQuery("player_id, game_id", filters, withCount ? "exact" : undefined),
-      filters.sort,
-    ).range(offset, offset + MAX_ROWS_PER_REQUEST - 1);
-
-  // The first request also reports the exact total, which is what says how many
-  // more are needed — rather than paging until a short response, which cannot
-  // tell "that was the end" from "the server capped me".
-  const head = await chunk(0, true);
-  const first = unwrap<DbRow[]>(head, "v_board_rows (card keys)");
-  const total = head.count ?? first.length;
-
-  const wanted = Math.min(total, maxRows);
-  const offsets: number[] = [];
-  for (
-    let offset = MAX_ROWS_PER_REQUEST;
-    offset < wanted;
-    offset += MAX_ROWS_PER_REQUEST
-  ) {
-    offsets.push(offset);
-  }
-
-  // Order is deterministic (the sort ends in a projection_id tiebreak), so the
-  // chunks can be fetched in parallel and concatenated by offset.
-  const rest = await Promise.all(
-    offsets.map(async (offset) =>
-      unwrap<DbRow[]>(await chunk(offset, false), "v_board_rows (card keys)"),
-    ),
-  );
-
+export async function getBoardCardKeys(filters: BoardFilters): Promise<CardKeyPage> {
   const seen = new Set<string>();
   const keys: CardKey[] = [];
-  let scanned = 0;
-  for (const rows of [first, ...rest]) {
-    scanned += rows.length;
-    for (const row of rows) {
-      const playerId = row.player_id as number;
-      const gameId = row.game_id as number;
-      const id = `${playerId}-${gameId}`;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      keys.push({ playerId, gameId });
-    }
+  for (const row of await matchingRows(filters)) {
+    const id = `${row.playerId}-${row.gameId}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    keys.push({ playerId: row.playerId, gameId: row.gameId });
   }
-
-  return { keys, truncated: total > scanned };
+  return { keys, truncated: false };
 }
-
-export const getBoardCardKeys = cachedLiveRead("board-card-keys", readBoardCardKeys);
 
 /**
  * Every row for a specific set of player-games.
  *
- * The market and position filters still apply — they decide which sub-cards a
- * card shows — but the row-level filters that pick WHICH players make the page
- * (edge, confidence, rank) deliberately do NOT. A player who earns his place
- * with a 72% receiving-yards call should show his other markets too; hiding
- * them would make the card claim he has one market this week.
+ * The scope, market, position, side and book filters still apply — they decide
+ * which sub-cards a card shows — but the filters that pick WHICH players make
+ * the page (edge, confidence, rank) deliberately do NOT. A player who earns his
+ * place with a 72% receiving-yards call should show his other markets too.
  */
-async function readRowsForCards(
+export async function getRowsForCards(
   keys: CardKey[],
   filters: Pick<
     BoardFilters,
+    | "sport"
     | "season"
     | "week"
     | "marketKey"
@@ -536,49 +355,18 @@ async function readRowsForCards(
   >,
 ): Promise<BoardRow[]> {
   if (keys.length === 0) return [];
-
-  const supabase = createServerSupabaseClient();
-  let query = supabase
-    .from("v_board_rows")
-    .select(COLUMNS)
-    .eq("season", filters.season)
-    .eq("week", filters.week)
-    .in("player_id", [...new Set(keys.map((key) => key.playerId))])
-    .in("game_id", [...new Set(keys.map((key) => key.gameId))]);
-
-  // THE SCOPE HAS TO REACH HERE TOO. This read deliberately drops the filters
-  // that pick which PLAYERS make the page, and keeps the ones that decide which
-  // sub-cards a card shows. Scope is the second kind: without it a full-game
-  // card would grow three first-quarter sub-cards that the board's own query
-  // had already excluded, which is the panel-and-board disagreement in
-  // `lib/core/board-scope.ts` repeated one level down.
-  if (filters.marketKeys) query = query.in("market_key", filters.marketKeys);
-  if (filters.marketKey) query = query.eq("market_key", filters.marketKey);
-  if (filters.positionGroup) {
-    query = query.eq("position_group", filters.positionGroup);
-  }
-  // SIDE DECIDES SUB-CARDS, like market and unlike edge or confidence. A
-  // reader who chose Over and opened a card showing that player's unders
-  // would read the switch as broken, not as "his other markets".
-  query = applySide(query, filters.side);
-  // So does the book filter: a FanDuel/DraftKings board whose cards grew
-  // sub-cards no one of them prices would show what the reader turned off.
-  if (filters.majorBooksOnly) query = query.in("sportsbook_key", [...MAJOR_BOOKS]);
-
-  const rows = unwrap<DbRow[]>(
-    await query.order("market_key"),
-    "v_board_rows (cards)",
-  );
-
-  // The `in` pair above is a cross product, so it can return a player paired
-  // with someone else's game. Keep only the pairs actually asked for.
   const wanted = new Set(keys.map((key) => `${key.playerId}-${key.gameId}`));
-  return rows
-    .map(toBoardRow)
-    .filter((row) => wanted.has(`${row.playerId}-${row.gameId}`));
+  const ids = (await indexFor(filters))
+    .filter(
+      (row) =>
+        wanted.has(`${row.playerId}-${row.gameId}`) &&
+        matchesCardFilters(row, filters as IndexFilters),
+    )
+    .map((row) => row.projectionId)
+    // Sorted so the same set of cards is the same cache entry.
+    .sort((a, b) => a - b);
+  return getRowsByIds(ids, true);
 }
-
-export const getRowsForCards = cachedLiveRead("board-card-rows", readRowsForCards);
 
 export type BoardCounts = {
   rows: number;
@@ -601,31 +389,20 @@ export type BoardCounts = {
 };
 
 /**
- * Headline counts for a week, in ONE scan, without transferring the rows.
+ * Headline counts for a week, without transferring the rows.
  *
- * WAS SIX PARALLEL `head: true` COUNTS, and that was the free half of the
- * board's concurrency ceiling. Six exact counts over `v_board_rows` with the
- * same base filter meant one render evaluated that view six times, so twelve
- * concurrent readers meant seventy-two simultaneous evaluations. Measured on
- * production 2026-09-09, cfb 2026 week 2: the six in parallel took 1.78-1.94 s
- * EACH and 2,012 ms of wall clock, against ~100 ms for all six as
- * `count(*) filter` in a single query — each is only ~100 ms alone, and they
- * were competing with each other for the same CPU.
+ * WAS SIX PARALLEL `head: true` COUNTS, then one `board_counts` scan (six exact
+ * counts meant one render evaluated the view six times; measured 2026-09-09 at
+ * 1.8-1.9 s each in parallel against ~100 ms as one query).
  *
- * The aggregate lives in `board_counts` (migration 0059) because PostgREST
- * refuses aggregate functions for anon. A FUNCTION rather than a grouped view
- * like `v_no_vig_markets`, because the edge threshold and the kickoff cutoff
- * are only known at request time.
+ * NOW COUNTED FROM THE BOARD INDEX (2026-10-24), the same cached week the board
+ * lists from, by `countIndex` in the core — which reproduces `board_counts`
+ * (migration 0059) predicate for predicate. The RPC cost ~170 ms of database
+ * time per call; this costs none beyond the index the board reads anyway.
  *
- * IT ALSO TAKES A SPORT NOW, AND DID NOT BEFORE. The six counts filtered
- * season, week, conference and cutoff — never sport — so on 2026 week 1 they
- * returned 4,449, which is college's 2,954 plus the NFL's 1,495. Both boards
- * printed banner numbers describing both sports summed. That is the sixth time
- * a sport-blind read has shipped here; see `lib/core/sport.ts`.
- *
- * Nothing is counted here that nothing renders. Two counts (`thin` and
- * `ranked`) were dropped when the slate-level evidence note was removed at the
- * client's request; they had no other reader.
+ * It takes a sport, and must: the six counts this began as filtered season,
+ * week, conference and cutoff but never sport, so on 2026 week 1 both boards
+ * printed college's and the NFL's rows summed. See `lib/core/sport.ts`.
  *
  * THESE ARE RAW COUNTS OF DISJOINT CONDITIONS AND NOTHING ELSE. Turning them
  * into "how many are still waiting for a book" is `lineCoverage` in the core,
@@ -636,7 +413,7 @@ export type BoardCounts = {
  * different facts while `--synthetic-lines` is in use, and the board has to be
  * able to say which it is looking at.
  */
-async function readBoardCounts(
+export async function getBoardCounts(
   season: number,
   week: number,
   edgeThreshold: number,
@@ -650,42 +427,15 @@ async function readBoardCounts(
     kickoffCutoff?: Date;
   } = {},
 ): Promise<BoardCounts> {
-  const supabase = createServerSupabaseClient();
-
-  const { data, error } = await supabase.rpc("board_counts", {
-    p_sport: sport,
-    p_season: season,
-    p_week: week,
-    p_edge_threshold: edgeThreshold,
-    p_synthetic_book_key: SYNTHETIC_BOOK_KEY,
-    p_displayed_only: displayedConferencesOnly,
-    // Counted under the same cut the board lists under. These numbers feed the
-    // pricing banners, and a banner counting settled rows would describe a
-    // market the reader cannot see.
-    p_kickoff_cutoff: kickoffCutoff ? kickoffCutoff.toISOString() : null,
+  return countIndex(await loadBoardIndex(sport, season, week), {
+    edgeThreshold,
+    syntheticBookKey: SYNTHETIC_BOOK_KEY,
+    displayedConferencesOnly,
+    // Counted under the same cut the board lists under: a banner counting
+    // settled rows would describe a market the reader cannot see.
+    kickoffCutoff,
   });
-
-  if (error) {
-    throw new Error(`Board counts failed: ${error.message}`);
-  }
-
-  // `returns table` arrives as an array of one row.
-  const row = (Array.isArray(data) ? data[0] : data) as DbRow | undefined;
-  if (!row) {
-    throw new Error("Board counts returned no row");
-  }
-
-  return {
-    rows: requireNum(row.rows_all, "rows_all"),
-    withCall: requireNum(row.with_call, "with_call"),
-    withBookLine: requireNum(row.with_book_line, "with_book_line"),
-    withDevLine: requireNum(row.with_dev_line, "with_dev_line"),
-    withEvenBookPrice: requireNum(row.with_even_book_price, "with_even_book_price"),
-    overThreshold: requireNum(row.over_threshold, "over_threshold"),
-  };
 }
-
-export const getBoardCounts = cachedLiveRead("board-counts", readBoardCounts);
 
 /** One player's rows for a week — every market, for the detail view. */
 async function readPlayerBoardRows(

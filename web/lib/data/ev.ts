@@ -2,6 +2,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { type DbRow, unwrap } from "@/lib/data/query";
 import type { EvSide, EvWager } from "@/lib/core/ev";
 import type { MarketRole, OddsMarket } from "@/lib/core/game-lines";
+import { cachedLiveRead } from "@/lib/data/cache";
 
 /**
  * Full-game +EV wagers for these games, at or above `minEv` (migration 0087).
@@ -14,7 +15,7 @@ import type { MarketRole, OddsMarket } from "@/lib/core/game-lines";
  * left as its last capture before kickoff saw them, so a started game's list
  * is history, not an offer.
  */
-export async function getEvWagers(gameIds: number[], minEv = 0): Promise<EvWager[]> {
+async function readEvWagers(gameIds: number[], minEv = 0): Promise<EvWager[]> {
   if (gameIds.length === 0) return [];
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
@@ -48,3 +49,10 @@ export async function getEvWagers(gameIds: number[], minEv = 0): Promise<EvWager
     };
   });
 }
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getEvWagers = cachedLiveRead("ev-wagers", readEvWagers);

@@ -1,6 +1,7 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { type DbRow, unwrap } from "@/lib/data/query";
 import { OFFENSE_GROUP, type DepthRow, type InjuryRow } from "@/lib/core/starters";
+import { cachedRead } from "@/lib/data/cache";
 
 const SKILL_POSITIONS = ["QB", "RB", "WR", "TE"];
 
@@ -12,7 +13,7 @@ const SKILL_POSITIONS = ["QB", "RB", "WR", "TE"];
  * Only the offense group's skill positions are read from the depth chart,
  * which is all the page shows: about 40 rows a team rather than 70.
  */
-export async function getStartersAndInjuries(
+async function readStartersAndInjuries(
   season: number,
   week: number,
   teamIds: number[],
@@ -56,3 +57,10 @@ export async function getStartersAndInjuries(
     })),
   };
 }
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getStartersAndInjuries = cachedRead("starters-and-injuries", readStartersAndInjuries);

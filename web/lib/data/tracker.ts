@@ -11,6 +11,7 @@
 import type { Engine, TrackerPick, TrackerResult } from "@/lib/core/tracker";
 import type { Sport } from "@/lib/core/sport";
 import { type DbRow, MAX_ROWS_PER_REQUEST, num, unwrap } from "@/lib/data/query";
+import { cachedRead } from "@/lib/data/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 const COLUMNS =
@@ -21,7 +22,7 @@ const COLUMNS =
 /** Twenty pages: far past a full season of both engines. */
 const MAX_PAGES = 20;
 
-export async function getTrackerPicks(sport: Sport, engines: Engine[]): Promise<TrackerPick[]> {
+async function readTrackerPicks(sport: Sport, engines: Engine[]): Promise<TrackerPick[]> {
   const supabase = createServerSupabaseClient();
   const rows: DbRow[] = [];
   for (let page = 0; page < MAX_PAGES; page += 1) {
@@ -42,6 +43,15 @@ export async function getTrackerPicks(sport: Sport, engines: Engine[]): Promise<
   }
   return rows.map(toPick);
 }
+
+/**
+ * Cached for five minutes (2026-10-24): every view read every pick for the
+ * sport, in up to 20 sequential pages, and the period and market filters were
+ * already applied in the page — so one entry per sport and engine set serves
+ * every tracker URL. Picks are frozen before kickoff and graded after the game;
+ * nothing here moves within minutes.
+ */
+export const getTrackerPicks = cachedRead("tracker-picks", readTrackerPicks);
 
 function toPick(row: DbRow): TrackerPick {
   return {

@@ -32,6 +32,7 @@ import {
   unwrap,
   upcomingOnly,
 } from "@/lib/data/query";
+import { cachedLiveRead } from "@/lib/data/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 const COLUMNS =
@@ -162,7 +163,7 @@ export type NoVigSummary = {
  * `getNoVigCount` on production for no filter, position, shoppable and market
  * (2511/765/2220/179, all exact).
  */
-export async function getNoVigSummary(
+async function readNoVigSummary(
   filters: NoVigFilters,
 ): Promise<NoVigSummary> {
   const supabase = createServerSupabaseClient();
@@ -241,7 +242,7 @@ export async function getNoVigSummary(
  * sort under the DISTINCT ON entirely — it is ~5 MB, and production had 9 MB
  * of headroom on 2026-09-08, so it waits for Supabase Pro.
  */
-export async function getNoVigPage(filters: NoVigFilters): Promise<NoVigPage> {
+async function readNoVigPage(filters: NoVigFilters): Promise<NoVigPage> {
   const sort: NoVigSort = filters.sort ?? "hold";
   const query = buildNoVigQuery(COLUMNS, filters);
 
@@ -365,7 +366,7 @@ export type NoVigMarket = { key: string; label: string; quotes: number };
  * is `upcomingOnly` — the same helper, the same predicate string, the same
  * instant the table uses. The rule stays stated once, in `lib/core`.
  */
-export async function getNoVigMarkets(
+async function readNoVigMarkets(
   season: number,
   week: number,
   sport: Sport = DEFAULT_SPORT,
@@ -415,3 +416,13 @@ export async function getNoVigMarkets(
     .filter((market) => market.quotes > 0)
     .sort((a, b) => b.quotes - a.quotes || a.key.localeCompare(b.key));
 }
+
+/**
+ * Cached for a minute like the board (2026-10-24): every view of the page read
+ * 1,000 rows and the summary uncached. Prices land every 20 minutes, and the
+ * sort and filters key the entry, so a reader changing them still gets their
+ * own rows.
+ */
+export const getNoVigSummary = cachedLiveRead("no-vig-summary", readNoVigSummary);
+export const getNoVigPage = cachedLiveRead("no-vig-page", readNoVigPage);
+export const getNoVigMarkets = cachedLiveRead("no-vig-markets", readNoVigMarkets);

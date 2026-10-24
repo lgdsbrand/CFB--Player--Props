@@ -14,6 +14,7 @@
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { type DbRow, unwrap } from "@/lib/data/query";
+import { cachedRead } from "@/lib/data/cache";
 
 export type AiRead = {
   content: string;
@@ -22,7 +23,7 @@ export type AiRead = {
   generatedAt: string;
 };
 
-export async function getAiRead(
+async function readAiRead(
   playerId: number,
   season: number,
   week: number,
@@ -47,3 +48,10 @@ export async function getAiRead(
     generatedAt: rows[0].generated_at as string,
   };
 }
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getAiRead = cachedRead("ai-read", readAiRead);

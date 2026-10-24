@@ -19,7 +19,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 import type { GameSummary } from "@/lib/core/types";
 import { type DbRow, unwrap } from "@/lib/data/query";
-import { cachedLiveRead } from "@/lib/data/cache";
+import { cachedRead } from "@/lib/data/cache";
 
 const COLUMNS =
   "game_id, sport, season, week, start_date, start_time_tbd, neutral_site, completed, " +
@@ -99,7 +99,15 @@ async function readSlateGames(
   return rows.map(toGame);
 }
 
-export const getSlateGames = cachedLiveRead("slate-games", readSlateGames);
+/**
+ * Five minutes, not one (2026-10-24). `v_slate_games` counts every game's
+ * projections and checks picks for each — 250-340 ms a call, and the most
+ * expensive read left on the site by total time once the board stopped
+ * multiplying statements. Nothing it returns moves faster than the odds chain
+ * (every 20 minutes): scores of record come from the daily results ingest, and
+ * live scores are polled separately.
+ */
+export const getSlateGames = cachedRead("slate-games", readSlateGames);
 
 /**
  * One game, by id.
@@ -121,4 +129,5 @@ async function readGame(gameId: number): Promise<GameSummary | null> {
   return rows.length > 0 ? toGame(rows[0]) : null;
 }
 
-export const getGame = cachedLiveRead("game", readGame);
+/** Five minutes, for the same reason as `getSlateGames`: one heavy row per game id. */
+export const getGame = cachedRead("game", readGame);

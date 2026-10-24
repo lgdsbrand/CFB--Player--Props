@@ -25,7 +25,7 @@ import type {
   PositionGroup,
 } from "@/lib/core/types";
 import { type DbRow, MAX_ROWS_PER_REQUEST, unwrap } from "@/lib/data/query";
-import { cachedLiveRead, cachedRead } from "@/lib/data/cache";
+import { cachedLiveRead, cachedMapRead, cachedRead } from "@/lib/data/cache";
 import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
 
 /**
@@ -35,7 +35,7 @@ import { DEFAULT_SPORT, type Sport } from "@/lib/core/sport";
  * exists at all: there is deliberately no view returning "current" splits
  * without one, because that is the shape of query that produces lookahead.
  */
-export async function getDefenseSplitsThrough(
+async function readDefenseSplitsThrough(
   season: number,
   week: number,
 ): Promise<DefenseSplitRow[]> {
@@ -85,7 +85,7 @@ const GAME_LOG_COLUMNS =
  * the caller's cutoff is the caller's to state — but note there is deliberately
  * no way to ask for "the season so far" without naming a week.
  */
-export async function getDefenseGameLog(
+async function readDefenseGameLog(
   defenseTeamId: number,
   season: number,
   positionGroup: PositionGroup,
@@ -234,7 +234,7 @@ export function rankKey(defenseTeamId: number, week: number): string {
  * cross product, so this over-fetches (teams × weeks) and discards the pairs it
  * did not ask for. A season's log is ~15 games, so that is a few hundred rows.
  */
-export async function getDefenseRanksAt(
+async function readDefenseRanksAt(
   season: number,
   positionGroup: PositionGroup,
   pairs: { defenseTeamId: number; week: number }[],
@@ -308,7 +308,7 @@ export const getDefenseRatings = cachedRead("defense-ratings", readDefenseRating
  * NFL ONLY in practice. A college call returns `charting: null` with
  * `fieldSize: 0`, which is what "no charting source" looks like.
  */
-export async function getDefenseCharting(
+async function readDefenseCharting(
   defenseTeamId: number,
   season: number,
   asOfWeek: number,
@@ -382,3 +382,13 @@ async function readChartingFieldSize(
 }
 
 export const getChartingFieldSize = cachedLiveRead("charting-field-size", readChartingFieldSize);
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getDefenseSplitsThrough = cachedRead("defense-splits-through", readDefenseSplitsThrough);
+export const getDefenseGameLog = cachedRead("defense-game-log", readDefenseGameLog);
+export const getDefenseRanksAt = cachedMapRead("defense-ranks-at", readDefenseRanksAt);
+export const getDefenseCharting = cachedRead("defense-charting", readDefenseCharting);

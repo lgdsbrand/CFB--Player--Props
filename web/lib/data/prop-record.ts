@@ -10,12 +10,13 @@
 import type { PropPick, PropRecordRow, WeekKey } from "@/lib/core/prop-record";
 import type { Sport } from "@/lib/core/sport";
 import { type DbRow, MAX_ROWS_PER_REQUEST, num, unwrap } from "@/lib/data/query";
+import { cachedRead } from "@/lib/data/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 const MAX_PAGES = 10;
 export const PICKS_PER_PAGE = 50;
 
-export async function getPropRecord(sport: Sport): Promise<PropRecordRow[]> {
+async function readPropRecord(sport: Sport): Promise<PropRecordRow[]> {
   const supabase = createServerSupabaseClient();
   const rows: DbRow[] = [];
   for (let page = 0; page < MAX_PAGES; page += 1) {
@@ -55,7 +56,7 @@ export async function getPropRecord(sport: Sport): Promise<PropRecordRow[]> {
  * One page of graded picks, newest first. Asks for one more row than it shows,
  * so the page knows whether there is a next page without a count query.
  */
-export async function getPropPicks(
+async function readPropPicks(
   sport: Sport,
   scope: {
     season: number;
@@ -106,3 +107,11 @@ export async function getPropPicks(
     })),
   };
 }
+
+/**
+ * Both cached for five minutes (2026-10-24): every tracker view read the whole
+ * record in a paging loop, uncached. Graded results change after games, not
+ * within minutes.
+ */
+export const getPropRecord = cachedRead("prop-record", readPropRecord);
+export const getPropPicks = cachedRead("prop-picks", readPropPicks);

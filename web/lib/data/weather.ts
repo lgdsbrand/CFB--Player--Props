@@ -14,6 +14,7 @@
 import type { GameConditions } from "@/lib/core/types";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { type DbRow, unwrap } from "@/lib/data/query";
+import { cachedMapRead, cachedRead } from "@/lib/data/cache";
 
 const COLUMNS =
   "game_id, venue_name, venue_is_dome, completed, source, is_forecast, " +
@@ -53,7 +54,7 @@ function toNumber(value: unknown): number | null {
 }
 
 /** Conditions for one game, or null if the game does not exist. */
-export async function getGameConditions(
+async function readGameConditions(
   gameId: number,
 ): Promise<GameConditions | null> {
   const supabase = createServerSupabaseClient();
@@ -76,7 +77,7 @@ export async function getGameConditions(
  * silent truncation here would drop the conditions line off the tail of the
  * index, which looks exactly like "those games have no forecast".
  */
-export async function getSlateConditions(
+async function readSlateConditions(
   season: number,
   week: number,
 ): Promise<Map<number, GameConditions>> {
@@ -98,3 +99,11 @@ export async function getSlateConditions(
     }),
   );
 }
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getGameConditions = cachedRead("game-conditions", readGameConditions);
+export const getSlateConditions = cachedMapRead("slate-conditions", readSlateConditions);

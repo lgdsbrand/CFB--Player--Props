@@ -17,13 +17,14 @@ import {
 import type { MatchupInputRow } from "@/lib/core/matchup-stats";
 import { type DbRow, num, unwrap } from "@/lib/data/query";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { cachedLiveMapRead, cachedLiveRead, cachedRead } from "@/lib/data/cache";
 
 export interface FantasyGame {
   projections: FantasyProjection[];
   lineups: LineupEntry[];
 }
 
-export async function getFantasyGame(
+async function readFantasyGame(
   gameId: number,
   season: number,
   week: number,
@@ -77,7 +78,7 @@ export async function getFantasyGame(
  * the two teams, because the panel ranks them: 32 rows. `as_of_week = week`
  * holds games before that week only, the numbers the projection used.
  */
-export async function getMatchupInputs(season: number, week: number): Promise<MatchupInputRow[]> {
+async function readMatchupInputs(season: number, week: number): Promise<MatchupInputRow[]> {
   const supabase = createServerSupabaseClient();
   const rows = unwrap<DbRow[]>(
     await supabase
@@ -111,7 +112,7 @@ export async function getMatchupInputs(season: number, week: number): Promise<Ma
  * (client, 2026-10-19: "fantasy model isn't showing proj score on the front
  * view"). One read for the list, at most one row per game.
  */
-export async function getFantasyScores(
+async function readFantasyScores(
   gameIds: number[],
 ): Promise<Map<number, { home: number; away: number }>> {
   const out = new Map<number, { home: number; away: number }>();
@@ -137,3 +138,12 @@ export async function getFantasyScores(
   }
   return out;
 }
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getFantasyGame = cachedLiveRead("fantasy-game", readFantasyGame);
+export const getMatchupInputs = cachedRead("matchup-inputs", readMatchupInputs);
+export const getFantasyScores = cachedLiveMapRead("fantasy-scores", readFantasyScores);

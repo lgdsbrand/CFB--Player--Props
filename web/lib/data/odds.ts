@@ -19,6 +19,7 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import type { BookQuote } from "@/lib/core/types";
 import { type DbRow, unwrap } from "@/lib/data/query";
+import { cachedLiveMapRead, cachedLiveRead } from "@/lib/data/cache";
 
 const COLUMNS =
   "line_id, game_id, player_id, market_key, sportsbook_key, sportsbook_name, " +
@@ -35,7 +36,7 @@ const COLUMNS =
 export const SYNTHETIC_BOOK_KEY = "dev";
 
 /** Every book's current quote for one player in one week. */
-export async function getPlayerQuotes(
+async function readPlayerQuotes(
   playerId: number,
   season: number,
   week: number,
@@ -62,7 +63,7 @@ export async function getPlayerQuotes(
  * `playerIds` short-circuits: PostgREST turns `in.()` into a syntax error
  * rather than an empty result.
  */
-export async function getQuotesByPlayer(
+async function readQuotesByPlayer(
   playerIds: number[],
   season: number,
   week: number,
@@ -105,3 +106,11 @@ function toQuote(row: Record<string, unknown>): BookQuote {
     capturedAt: row.captured_at as string,
   };
 }
+
+/**
+ * Cached (2026-10-24): these ran uncached on every page view. History reads
+ * keep five minutes, odds, sims and live reads one; the browser pollers still
+ * refresh live panels between renders.
+ */
+export const getPlayerQuotes = cachedLiveRead("player-quotes", readPlayerQuotes);
+export const getQuotesByPlayer = cachedLiveMapRead("quotes-by-player", readQuotesByPlayer);

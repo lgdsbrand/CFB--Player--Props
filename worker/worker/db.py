@@ -8,6 +8,7 @@ enters Supabase (CLAUDE.md §2).
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -17,6 +18,7 @@ import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
+from worker import time_limit
 from worker.config import ConfigError, get_settings, redact_secrets
 from worker.logging_setup import get_logger
 
@@ -513,6 +515,88 @@ def record_failed_run(
         log.warning("Could not record the failed run for %s: %s", job_name, exc)
 
 
+# Runs this process has opened and not yet finished, for the time limit to close.
+_open_runs: set[uuid.UUID] = set()
+
+# A row still 'running' this long after it started belongs to a dead process:
+# every job on Render is stopped at its time limit, the longest of which is
+# below this. The audit flags such a row at 2 hours and the monitor at 6.
+ABANDONED_AFTER_SECONDS = time_limit.LONGEST_LIMIT_SECONDS + 15 * 60
+
+# Waits between attempts to record how a run ended (2026-10-23: a blip that
+# dropped every connection left ingest_stats 'running' for a day, because the
+# outcome was written on the connection that had just died).
+FINISH_RETRY_SECONDS: tuple[float, ...] = (5.0, 20.0)
+
+
+def _close_abandoned_runs(cur: psycopg.Cursor, job_name: str) -> None:
+    """Mark this job's earlier runs that can no longer be running as failed.
+
+    The final update rewrites status unconditionally, so a run closed here by
+    mistake (a local backfill with no limit, say) still ends as what it was.
+    """
+    try:
+        cur.execute(
+            """
+            update pipeline_runs
+               set status = 'failed',
+                   finished_at = now(),
+                   error = 'Abandoned: still marked running '
+                           || round(extract(epoch from now() - started_at) / 3600, 1)
+                           || ' h after it started; its process had died without '
+                           || 'recording how it ended. Closed by the next run.'
+             where job_name = %s
+               and status = 'running'
+               and started_at < now() - make_interval(secs => %s)
+            """,
+            (job_name, ABANDONED_AFTER_SECONDS),
+        )
+        if cur.rowcount:
+            log.warning("Closed %d abandoned %s run(s)", cur.rowcount, job_name)
+    except psycopg.Error as exc:
+        log.warning("Could not close abandoned %s runs: %s", job_name, exc)
+
+
+def _finish_run(run_id: uuid.UUID, status: str, error: str | None) -> None:
+    """Record how a run ended, on a fresh connection, retrying a brief outage."""
+    delays = (0.0, *FINISH_RETRY_SECONDS)
+    for attempt, delay in enumerate(delays, start=1):
+        time.sleep(delay)
+        try:
+            with connect(autocommit=True) as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    update pipeline_runs
+                       set status = %s,
+                           finished_at = now(),
+                           error = %s
+                     where id = %s
+                    """,
+                    (status, error, run_id),
+                )
+            return
+        except (psycopg.Error, DatabaseConnectionError) as exc:
+            if attempt == len(delays):
+                raise
+            log.warning(
+                "Could not record pipeline_run %s as %s (attempt %d): %s",
+                run_id, status, attempt, exc,
+            )
+
+
+def fail_open_runs(error: str) -> None:
+    """Mark every run this process still has open as failed. Best-effort.
+
+    For the time limit, which ends the process without unwinding the stack, so
+    no `pipeline_run` block gets to record its own failure.
+    """
+    for run_id in list(_open_runs):
+        try:
+            _finish_run(run_id, "failed", redact_secrets(error))
+        except Exception as exc:  # noqa: BLE001 — the process is exiting either way
+            log.warning("Could not record pipeline_run %s as failed: %s", run_id, exc)
+
+
 @contextmanager
 def pipeline_run(job_name: str, metadata: dict[str, Any] | None = None) -> Iterator[uuid.UUID]:
     """Record a job execution in pipeline_runs.
@@ -522,58 +606,48 @@ def pipeline_run(job_name: str, metadata: dict[str, Any] | None = None) -> Itera
     monitoring/alerting deliverable in CLAUDE.md §8 Phase 5, and in Phase 1 it
     doubles as proof that the worker's credentials and write path work.
 
-    Uses its own autocommit connection so the bookkeeping row survives even when
-    the job's own transaction rolls back.
+    The outcome goes over its own short connection, never the job's, so the
+    bookkeeping row survives when the job's transaction rolls back. It is not
+    the connection the row was opened on either: one held for the whole run
+    dies with any blip in it, and then the failure it was there to record
+    cannot be written.
     """
     run_id = uuid.uuid4()
-    with connect(autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                insert into pipeline_runs (id, job_name, status, metadata)
-                values (%s, %s, 'running', %s::jsonb)
-                """,
-                (
-                    run_id,
-                    job_name,
-                    # Caller keys win: a job's own metadata is the more specific
-                    # fact, and the marker must never mask it.
-                    psycopg.types.json.Json({**_deploy_marker(), **(metadata or {})}),
-                ),
-            )
-        log.info("pipeline_run %s started (%s)", run_id, job_name)
+    with connect(autocommit=True) as conn, conn.cursor() as cur:
+        _close_abandoned_runs(cur, job_name)
+        cur.execute(
+            """
+            insert into pipeline_runs (id, job_name, status, metadata)
+            values (%s, %s, 'running', %s::jsonb)
+            """,
+            (
+                run_id,
+                job_name,
+                # Caller keys win: a job's own metadata is the more specific
+                # fact, and the marker must never mask it.
+                psycopg.types.json.Json({**_deploy_marker(), **(metadata or {})}),
+            ),
+        )
+    _open_runs.add(run_id)
+    log.info("pipeline_run %s started (%s)", run_id, job_name)
 
+    try:
+        yield run_id
+    except BaseException as exc:
         try:
-            yield run_id
-        except BaseException as exc:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    update pipeline_runs
-                       set status = 'failed',
-                           finished_at = now(),
-                           error = %s
-                     where id = %s
-                    """,
-                    # Redacted because this column does not stay in the database:
-                    # monitor_pipeline reads it and puts it in the alert body,
-                    # which goes out to a third-party webhook.
-                    (redact_secrets(f"{type(exc).__name__}: {exc}"), run_id),
-                )
-            log.error("pipeline_run %s failed: %s", run_id, exc)
-            raise
-        else:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    update pipeline_runs
-                       set status = 'succeeded',
-                           finished_at = now()
-                     where id = %s
-                    """,
-                    (run_id,),
-                )
-            log.info("pipeline_run %s succeeded", run_id)
+            # Redacted because this column does not stay in the database:
+            # monitor_pipeline reads it and puts it in the alert body, which
+            # goes out to a third-party webhook.
+            _finish_run(run_id, "failed", redact_secrets(f"{type(exc).__name__}: {exc}"))
+        except Exception as record_exc:  # noqa: BLE001 — the job's error is the diagnosis
+            log.warning("Could not record pipeline_run %s as failed: %s", run_id, record_exc)
+        log.error("pipeline_run %s failed: %s", run_id, exc)
+        raise
+    else:
+        _finish_run(run_id, "succeeded", None)
+        log.info("pipeline_run %s succeeded", run_id)
+    finally:
+        _open_runs.discard(run_id)
 
 
 def set_rows_written(run_id: uuid.UUID, rows: int) -> None:

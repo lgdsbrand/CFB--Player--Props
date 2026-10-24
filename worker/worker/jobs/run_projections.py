@@ -1180,6 +1180,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
             if not args.dry_run:
+                refresh_slate_weeks()
                 _finish_model_run(model_run_id, "succeeded")
     except Exception as exc:
         log.error("Projection run failed: %s", exc, exc_info=True)
@@ -1195,6 +1196,21 @@ def main(argv: list[str] | None = None) -> int:
         f", {totals['synthetic_lines']} synthetic lines" if args.synthetic_lines else "",
     )
     return 0
+
+
+def refresh_slate_weeks() -> None:
+    """Rebuild `mv_slate_weeks` (migration 0102), the week strip above the board.
+
+    This job is the only writer of `projections`, which is all the MV is built
+    from, so the refresh belongs here, straight after the write. Unconditional,
+    like `refresh_no_vig_rows`: a run that wrote nothing still proves the MV
+    should match the table. Not caught: a failed refresh must fail the run.
+    CONCURRENTLY so the strip stays readable while it rebuilds.
+    """
+    with connect() as conn:
+        conn.execute("refresh materialized view concurrently mv_slate_weeks")
+        conn.commit()
+    log.info("Refreshed mv_slate_weeks")
 
 
 def _record_model_run(model_run_id: uuid.UUID, config: dict[str, Any]) -> None:

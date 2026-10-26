@@ -8,10 +8,10 @@ skipped and written can be pinned.
 from __future__ import annotations
 
 import contextlib
-import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from worker import dispatch
 from worker.adapters.odds.base import OddsEvent
 from worker.adapters.odds.theoddsapi import PERIOD_MARKETS, parse_game_odds
 from worker.core.name_match import TeamResolver
@@ -150,10 +150,8 @@ def test_a_started_game_is_never_asked_about(monkeypatch):
 
 def test_the_cron_runs_hourly_with_a_window_equal_to_its_period():
     text = (Path(__file__).resolve().parents[2] / "render.yaml").read_text(encoding="utf-8")
-    block = next(
-        b for b in text.split("- type: cron") if "worker.jobs.capture_game_periods" in b
-    )
-    schedule = re.search(r'schedule:\s*"([^"]+)"', block).group(1)
+    schedules = dispatch.scheduled_commands(dispatch.render_yaml_crons(text)).values()
+    schedule = next(c for c, cmd in schedules if "worker.jobs.capture_game_periods" in cmd)
     minute, hour, *rest = schedule.split()
     assert minute.isdigit() and hour == "*" and rest == ["*", "*", "*"], schedule
     assert capture_game_periods.WINDOW_MINUTES == 60

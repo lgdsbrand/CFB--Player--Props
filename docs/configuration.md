@@ -177,6 +177,7 @@ backfill, not a schema change. See [odds.md](odds.md#resolved).
 
 | Key | Current | Seeded | What it controls |
 |---|---|---|---|
+| `dispatch_mode` | `{}` | `{}` | Per merged Render dispatcher group (`odds`, `cfb-daily`, `nfl-daily`): `{"mode": "off" \| "shadow" \| "live", "since": ISO time}`. Absent is off. `shadow` records what would run in `dispatch_slots` without running it; `live` runs it, and must be set at the same moment the group's old Render services are suspended. Added by `20261026120000_dispatch_slots.sql`; see the runbook's dispatcher section. |
 | `backfill_seasons` | `[2024, 2025]` | `[2022, 2023, 2024, 2025]` | Seasons the **historical backfill** covers, and the fallback scope of the ingest jobs when neither `--seasons` nor `--current` is given. Narrowed by `20260730101200_backfill_two_seasons.sql`: `play_player_stats` runs ~1M rows per season across all FBS, against a 500 MB free tier. |
 | `current_season` | `2026` | `2026` | The season the **in-season crons** operate on, used by every job run with `--current`. **Update this each August.** Nothing derives it from the clock on purpose: a date-based guess rolls over during bowl season and would start writing the next season's empty schedule over a live one. |
 | `db_size_cap_mb` | `500` | `500` | Storage ceiling `ingest_stats` checks before starting. 500 is the Supabase free tier, where exceeding the cap makes the project **read-only** and every worker write fails. Raise it to the real limit when the project moves to Pro — a row edit, not a deploy. |

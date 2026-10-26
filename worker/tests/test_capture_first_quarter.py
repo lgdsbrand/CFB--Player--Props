@@ -9,10 +9,10 @@ it to `render.yaml`.
 from __future__ import annotations
 
 import contextlib
-import re
 from pathlib import Path
 from types import SimpleNamespace
 
+from worker import dispatch
 from worker.jobs import capture_first_quarter as job
 from worker.jobs.ingest_odds import IngestReport
 
@@ -81,11 +81,8 @@ def test_the_window_tiles_the_cron_schedule():
     equal the cron period. An hourly cron with a shorter window skips games; a
     longer one pays for some twice."""
     text = RENDER_YAML.read_text(encoding="utf-8")
-    block = next(
-        b for b in text.split("- type: cron")
-        if "worker.jobs.capture_first_quarter" in b
-    )
-    schedule = re.search(r'schedule:\s*"([^"]+)"', block).group(1)
+    schedules = dispatch.scheduled_commands(dispatch.render_yaml_crons(text)).values()
+    schedule = next(c for c, cmd in schedules if "worker.jobs.capture_first_quarter" in cmd)
     minute, hour, *rest = schedule.split()
     assert minute.isdigit() and hour == "*" and rest == ["*", "*", "*"], schedule
     assert job.WINDOW_MINUTES == 60

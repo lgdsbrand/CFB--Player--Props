@@ -460,6 +460,9 @@ _DEPLOY_MARKER_ENV_VARS = (
     "RENDER_SERVICE_NAME",
     "RENDER_GIT_COMMIT",
     "RENDER_INSTANCE_ID",
+    # The old service a merged dispatcher ran this as (worker/dispatch.py), so
+    # a run still says which schedule it belonged to.
+    "DISPATCH_TASK",
 )
 
 

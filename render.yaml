@@ -70,6 +70,74 @@ envVarGroups:
         sync: false
 
 services:
+  # ===========================================================================
+  # THE MERGED DISPATCHERS (2026-10-26) — replacing the cron services below.
+  # ===========================================================================
+  # Twenty cron services meant every worker push rebuilt twenty times (~20 build
+  # minutes; the client's spend cap stopped all builds on 2026-10-22) and paid
+  # twenty $1 monthly minimums. These three run the old services' commands on
+  # the old schedules from one table, worker/worker/dispatch.py, whose module
+  # docstring explains the design; cfb-live-scores and cfb-props-monitor stay
+  # as they are. tests/test_dispatch.py holds every task equal to its old
+  # service below for as long as that service is still in this file.
+  #
+  # ROLLOUT, controlled by app_config.dispatch_mode, not by this file:
+  #   1. shadow — these record what they would run (dispatch_slots, mode
+  #      'shadow') while the old services do the work; compared on Render's
+  #      real clock.
+  #   2. live — set per group, at the same moment the old services of that
+  #      group are suspended through the Render API. Undo = mode back to
+  #      shadow + resume them.
+  #   3. the old services are removed from this file and deleted (removal
+  #      alone never deletes a Render service; it would keep running).
+  #
+  # Each schedule fires at every minute any of its tasks is due; a fire with
+  # nothing due ends after one small query. JOB_TIME_LIMIT_SECONDS is the
+  # dispatcher's own limit; it is taken out of each task's environment, so
+  # every job keeps the limit it had (worker/time_limit.py).
+  #
+  # worker-odds NEEDS ODDS_API_KEY_FREE in its Environment tab (set through the
+  # Render API from the old cfb-game-odds services'). The paid ODDS_API_KEY
+  # comes from the group. The Q1 capture runs without the free key, as before.
+  - type: cron
+    name: worker-odds
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "0,20,30,40 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.dispatch --group odds
+    envVars:
+      - fromGroup: cfb-props-worker
+      - key: JOB_TIME_LIMIT_SECONDS
+        value: "1800"
+
+  - type: cron
+    name: worker-cfb-daily
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "*/10 8-16 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.dispatch --group cfb-daily
+    envVars:
+      - fromGroup: cfb-props-worker
+      - key: JOB_TIME_LIMIT_SECONDS
+        value: "14400"
+
+  - type: cron
+    name: worker-nfl-daily
+    runtime: python
+    plan: starter
+    rootDir: worker
+    schedule: "*/10 8-16 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.jobs.dispatch --group nfl-daily
+    envVars:
+      - fromGroup: cfb-props-worker
+      - key: JOB_TIME_LIMIT_SECONDS
+        value: "14400"
+
   # ---------------------------------------------------------------------------
   # Canaries
   # ---------------------------------------------------------------------------

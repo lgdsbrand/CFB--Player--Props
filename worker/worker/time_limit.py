@@ -19,6 +19,12 @@ next scheduled run starts on time instead of being skipped.
 Armed only on Render, from `worker.jobs` itself, so a local backfill or a test
 run is never cut short. `JOB_TIME_LIMIT_SECONDS` overrides the budget
 anywhere, and 0 turns it off.
+
+`JOB_DEADLINE_AT` (Unix seconds, 2026-10-26) shortens the budget to the time
+left before that moment, whatever the job. The merged odds dispatcher sets it
+so every step of a chain stops before the next odds slot (worker/dispatch.py);
+a step started past the deadline still gets DEADLINE_FLOOR_SECONDS to fail
+cleanly rather than none.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from collections.abc import Mapping, Sequence
 
 from worker.logging_setup import get_logger
@@ -34,6 +41,8 @@ from worker.logging_setup import get_logger
 log = get_logger(__name__)
 
 ENV_OVERRIDE = "JOB_TIME_LIMIT_SECONDS"
+ENV_DEADLINE = "JOB_DEADLINE_AT"
+DEADLINE_FLOOR_SECONDS = 30
 
 # Two hours covers every job not listed: the longest of them (run_projections)
 # has taken 12 minutes.
@@ -84,11 +93,23 @@ def job_module(argv: Sequence[str] | None = None) -> str | None:
     return None
 
 
-def limit_for(job: str | None, env: Mapping[str, str] | None = None) -> int | None:
+def limit_for(
+    job: str | None, env: Mapping[str, str] | None = None, now: float | None = None
+) -> int | None:
     """The budget in seconds for `job`, or None for no limit."""
     env = os.environ if env is None else env
     if job is None:
         return None
+    seconds = _base_limit(job, env)
+    deadline = (env.get(ENV_DEADLINE) or "").strip()
+    if deadline:
+        left = int(float(deadline) - (time.time() if now is None else now))
+        left = max(left, DEADLINE_FLOOR_SECONDS)
+        seconds = left if seconds is None else min(seconds, left)
+    return seconds
+
+
+def _base_limit(job: str, env: Mapping[str, str]) -> int | None:
     override = (env.get(ENV_OVERRIDE) or "").strip()
     if override:
         seconds = int(override)

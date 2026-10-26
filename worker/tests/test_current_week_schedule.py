@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from worker import dispatch
 from worker.jobs import run_projections
 
 RENDER_YAML = Path(__file__).resolve().parents[2] / "render.yaml"
@@ -131,8 +132,12 @@ def test_asking_for_no_weeks_at_all_still_errors(monkeypatch):
 # render.yaml
 # -----------------------------------------------------------------------------
 def _cron_blocks() -> list[str]:
+    """One `schedule: "..."` + command text per scheduled service or merged
+    dispatcher task (worker/dispatch.py, 2026-10-26), in the shape the checks
+    below were written against."""
     text = RENDER_YAML.read_text(encoding="utf-8")
-    blocks = text.split("- type: cron")[1:]
+    entries = dispatch.scheduled_commands(dispatch.render_yaml_crons(text)).values()
+    blocks = [f'    schedule: "{cron}"\n    startCommand: {command}\n' for cron, command in entries]
     assert blocks, "no cron services parsed out of render.yaml — the regex broke"
     return blocks
 

@@ -33,6 +33,7 @@ from pathlib import Path
 
 import pytest
 
+from worker import dispatch
 from worker.adapters.ai import KNOWN_ADAPTERS as KNOWN_AI_ADAPTERS
 from worker.adapters.alerts import KNOWN_ADAPTERS as KNOWN_ALERT_ADAPTERS
 from worker.adapters.odds import KNOWN_ADAPTERS as KNOWN_ODDS_ADAPTERS
@@ -67,11 +68,15 @@ def _scheduled_jobs() -> set[str]:
 
     Regex rather than a YAML library for the reason given in test_monitor.py:
     PyYAML is not a dependency and CLAUDE.md §0 requires justifying a new one.
+    Since 2026-10-26 that includes the merged dispatchers' tasks
+    (worker/dispatch.py) and the dispatcher itself.
     """
-    text = RENDER_YAML.read_text(encoding="utf-8")
-    blocks = text.split("- type: cron")[1:]
+    services = dispatch.render_yaml_crons(RENDER_YAML.read_text(encoding="utf-8"))
+    commands = [cmd for _, cmd in services.values()]
+    commands += [cmd for _, cmd in dispatch.scheduled_commands(services).values()]
     return {
-        module for block in blocks for module in re.findall(r"python -m worker\.jobs\.(\w+)", block)
+        module for command in commands
+        for module in re.findall(r"python -m worker\.jobs\.(\w+)", command)
     }
 
 

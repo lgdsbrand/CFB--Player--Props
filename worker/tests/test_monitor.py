@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from worker import dispatch
 from worker.adapters.alerts import (
     Alert,
     AlertAdapterError,
@@ -61,15 +62,13 @@ def _scheduled_jobs() -> dict[str, str]:
     it is the correct one to test `max_age_hours` against: the monitor should
     notice when the *most frequent* run stops.
     """
-    text = RENDER_YAML.read_text(encoding="utf-8")
-    blocks = text.split("- type: cron")[1:]
-
+    # Since 2026-10-26 most schedules live in the merged dispatchers' table
+    # (worker/dispatch.py); scheduled_commands() gives every schedule, wherever
+    # it lives, once.
+    services = dispatch.render_yaml_crons(RENDER_YAML.read_text(encoding="utf-8"))
     found: dict[str, str] = {}
-    for block in blocks:
-        schedule = re.search(r'^\s*schedule:\s*"([^"]+)"', block, re.MULTILINE)
-        assert schedule, "a cron service in render.yaml has no schedule"
-        expression = schedule.group(1)
-        for module in re.findall(r"python -m worker\.jobs\.(\w+)", block):
+    for expression, command in dispatch.scheduled_commands(services).values():
+        for module in re.findall(r"python -m worker\.jobs\.(\w+)", command):
             existing = found.get(module)
             if existing is None or _cron_period_hours(expression) < _cron_period_hours(
                 existing

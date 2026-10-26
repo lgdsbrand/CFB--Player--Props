@@ -72,6 +72,55 @@ Schedules are UTC. Saturday's games finish late Saturday night US time, which is
 Sunday morning UTC — the ingest schedule is built around that, not around a US
 calendar day.
 
+### The merged dispatchers
+
+#### `dispatch` — `worker-odds` at :00/:20/:30/:40, `worker-cfb-daily` and `worker-nfl-daily` every 10 minutes 08:00–16:50 UTC
+
+```bash
+python -m worker.jobs.dispatch --group odds --dry-run     # what is due now; claims and runs nothing
+python -m worker.jobs.dispatch --group cfb-daily
+```
+
+Since 2026-10-26 the scheduled jobs below run inside three dispatcher services
+instead of eighteen cron services of their own (twenty services meant twenty
+builds per push and twenty $1 minimums). The schedule is the table `TASKS` in
+`worker/worker/dispatch.py`: each task is one old service, with its name, cron
+and exact start command, and the times given under each job below are the
+task's. `cfb-live-scores` and `cfb-props-monitor` are still their own services.
+
+A run takes, for each task in its group, the latest scheduled occurrence within
+the group's lookback (odds 60 minutes, daily 12 hours) that `dispatch_slots` has
+no row for, claims it with an insert (at most once, by the primary key) and runs
+its command through bash, so `&&` and `;` mean what they meant in render.yaml.
+A late or delayed run therefore catches up, and an overlapping one finds the
+slot taken. Odds tasks must finish a minute before the group's next slot with
+work in it (`JOB_DEADLINE_AT`, see `worker/time_limit.py`); a task still
+running 90 s after that is killed and its open `pipeline_runs` rows closed.
+Every job keeps its own `pipeline_runs` row and time limit; its metadata gains
+`dispatch_task`, the old service name.
+
+**The mode is a row, per group**, `app_config.dispatch_mode`:
+
+```sql
+-- shadow: record what would run, run nothing (old services still do the work)
+update app_config set value = value || jsonb_build_object('odds',
+  jsonb_build_object('mode', 'shadow', 'since', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')))
+ where key = 'dispatch_mode';
+```
+
+`live` the same way, AT THE SAME MOMENT as the group's old services are
+suspended through the Render API, or every task runs twice. To undo: set the
+group back to `shadow` and resume the old services. `since` stops a group
+running anything scheduled before it was switched.
+
+**Reviewing a shadow period**: `select task, slot_at, note from dispatch_slots
+where mode = 'shadow' order by slot_at` against `pipeline_runs` rows whose
+`metadata->>'render_service_name'` is the old service. A note reading `MISSING
+<KEY>` means the dispatcher service lacks a key that task needs.
+
+**Monitored:** through the jobs it runs; each keeps its own expectation. A run
+that fails exits 1, so Render's failure notice fires for the group.
+
 ### Canaries
 
 #### `healthcheck` — daily 12:00 UTC

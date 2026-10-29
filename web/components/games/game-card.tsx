@@ -4,6 +4,7 @@ import { TeamChip } from "@/components/board/team-chip";
 import { ShareButton } from "@/components/share/share-button";
 import { favourite, softestMatchup, type PositionMatchup } from "@/lib/core/game-view";
 import { formatCount, formatKickoff, formatVenue } from "@/lib/core/format";
+import { gameScoreTier, type GamePower } from "@/lib/core/power";
 import { shareGameFileName, shareGameTitle } from "@/lib/core/share-game";
 import type { GameConditions, GameSummary } from "@/lib/core/types";
 import { conditionsSummary } from "@/lib/core/weather-view";
@@ -27,11 +28,14 @@ export function GameCard({
   matchups,
   conditions = null,
   score = null,
+  power = null,
 }: {
   game: GameSummary;
   matchups: PositionMatchup[];
   conditions?: GameConditions | null;
   score?: { home: number; away: number } | null;
+  /** Power ranks and game score at this week (client, 2026-10-29). */
+  power?: GamePower | null;
 }) {
   const line = favourite(game);
   const softest = softestMatchup(matchups);
@@ -88,6 +92,7 @@ export function GameCard({
             altColor={game.awayAltColor}
             favoured={line?.isHome === false}
             projected={score?.away ?? null}
+            powerRank={power?.awayRank ?? null}
           />
           <TeamLine
             rank={game.homePollRank}
@@ -97,6 +102,7 @@ export function GameCard({
             altColor={game.homeAltColor}
             favoured={line?.isHome === true}
             projected={score?.home ?? null}
+            powerRank={power?.homeRank ?? null}
             atHome
           />
         </div>
@@ -119,6 +125,22 @@ export function GameCard({
               <span className="text-dim font-normal">—</span>
             )}
           </Stat>
+          {power ? (
+            <Stat label="Game score">
+              <span
+                title="0-100: two highly ranked teams in a close game score highest (60% both teams' power rank, 40% how close the game is)."
+                className={
+                  gameScoreTier(power.gameScore) === "hot"
+                    ? "text-target"
+                    : gameScoreTier(power.gameScore) === "good"
+                      ? "text-positive"
+                      : undefined
+                }
+              >
+                {power.gameScore}
+              </span>
+            </Stat>
+          ) : null}
           <Stat label="Props">
             {game.projections > 0 ? (
               formatCount(game.projections)
@@ -169,9 +191,11 @@ function TeamLine({
   altColor,
   favoured,
   projected,
+  powerRank = null,
   atHome = false,
 }: {
   rank: number | null;
+  powerRank?: number | null;
   abbreviation: string | null;
   school: string;
   color: string | null;
@@ -194,6 +218,16 @@ function TeamLine({
       {/* The favourite is marked rather than the spread being repeated on the
           row: the number is already in the Line stat below, and a second copy
           per team invites the reader to work out which perspective it is on. */}
+      {/* Power rank beside the poll rank: the poll covers 25 teams, power all
+          of them (worker/core/power.py). */}
+      {powerRank !== null ? (
+        <span
+          className="label-caption text-muted shrink-0 tabular-nums"
+          title="Power rank: points per game better than an average team, adjusted for the schedule."
+        >
+          Pwr {powerRank}
+        </span>
+      ) : null}
       {favoured ? (
         <span className="label-caption text-positive shrink-0">Fav</span>
       ) : null}

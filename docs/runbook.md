@@ -405,6 +405,26 @@ Scheduled as the last step of `cfb-props-ingest-results`, because next week's
 rows only exist once this week's games are in, and `run_game_model` refuses to
 project a game whose week has no rows. **Monitored:** 36h.
 
+#### `build_power_ratings` — daily 10:10 UTC (college), 09:10 UTC (NFL)
+
+```bash
+python -m worker.jobs.build_power_ratings --current --sport cfb
+python -m worker.jobs.build_power_ratings --current --sport nfl
+python -m worker.jobs.build_power_ratings --seasons 2025 2026 --sport nfl
+```
+
+Rebuilds `team_power_ratings` and `game_power` (client, 2026-10-29; migration
+20261029120000): each team's power rating, points per game better than an
+average team on a neutral field, for every week, fitted on games BEFORE that
+week only, and each game's two ranks and its game score (0-100). Display only:
+the games page's cards and its power rankings panel read it; no model or pick
+does. No API calls; seconds a season.
+
+A re-run deletes and rewrites the whole season for that sport, so it is
+always safe. Dispatcher tasks `cfb-power-ratings` and `nfl-power-ratings`
+(no old service; new with the dispatchers), after each sport's results chain.
+If it fails, the cards simply show yesterday's ranks and scores.
+
 #### `ingest_coaches` — Sunday 09:00 UTC, last step of `cfb-props-ingest-week`
 
 ```bash

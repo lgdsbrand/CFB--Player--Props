@@ -5,6 +5,7 @@ import { CompletedGames } from "@/components/games/completed-games";
 import { EvNow } from "@/components/games/ev-now";
 import { GameCard } from "@/components/games/game-card";
 import { LinesTable } from "@/components/games/lines-table";
+import { PowerRankings } from "@/components/games/power-rankings";
 import { RulePlays } from "@/components/games/rule-plays";
 import { LiveStrip } from "@/components/live/live-strip";
 import { NotConfigured } from "@/components/not-configured";
@@ -36,6 +37,7 @@ import { getEvWagers } from "@/lib/data/ev";
 import { getFantasyScores } from "@/lib/data/fantasy";
 import { PICK_BOOKS, withBookLines } from "@/lib/core/fantasy-view";
 import { getLiveProjections, getLiveScores } from "@/lib/data/live";
+import { getGamePower, getPowerRankings } from "@/lib/data/power";
 import {
   getFullGameBookOdds,
   getGameOddsSummaries,
@@ -188,6 +190,12 @@ export default async function Games({
   // has no game model; its cards take the fantasy model's score instead, and
   // the book line its game pages show (CFBD's consensus is college-only).
   const projectionsPromise = getGameProjections(shownIds);
+  // Power rankings and game score (client, 2026-10-29), both pinned to the
+  // week on screen like the defense ratings.
+  const powerPromise = Promise.all([
+    getGamePower(shownIds),
+    getPowerRankings(active.season, active.week, sport),
+  ]);
   const nflCards = sport === "nfl" && !showLines;
   const fantasyScoresPromise = nflCards
     ? getFantasyScores(shownIds)
@@ -233,12 +241,14 @@ export default async function Games({
           getAppConfig(),
         ])
       : [new Map(), null];
-  const [liveInitial, fantasyScores, nflOdds, liveModelInitial] = await Promise.all([
-    livePromise,
-    fantasyScoresPromise,
-    nflOddsPromise,
-    liveModelPromise,
-  ]);
+  const [liveInitial, fantasyScores, nflOdds, liveModelInitial, [gamePower, powerRankings]] =
+    await Promise.all([
+      livePromise,
+      fantasyScoresPromise,
+      nflOddsPromise,
+      liveModelPromise,
+      powerPromise,
+    ]);
 
   const conferenceLabel = params.conference ?? "displayed conferences";
 
@@ -277,6 +287,8 @@ export default async function Games({
       </div>
 
       <WeekStrip weeks={weeks} active={active} basePath={GAMES_PATH} sport={sport} />
+
+      <PowerRankings rows={powerRankings} league={sport === "nfl" ? "NFL" : "FBS"} />
 
       {sport === "cfb" ? (
         <RulePlays
@@ -447,6 +459,7 @@ export default async function Games({
               game={sport === "nfl" ? withBookLines(game, nflOdds.get(game.gameId) ?? []) : game}
               matchups={gameMatchups(game, ratings)}
               conditions={conditions.get(game.gameId) ?? null}
+              power={gamePower.get(game.gameId) ?? null}
               score={
                 sport === "nfl"
                   ? (fantasyScores.get(game.gameId) ?? null)

@@ -231,6 +231,15 @@ TASKS: tuple[Task, ...] = (
         "30 12 * * *",
         "python -m worker.jobs.run_projections --current-week",
     ),
+    # Power ratings and game score (client, 2026-10-29). New with the
+    # dispatchers, so no old service: after the 08:00 results chain, which
+    # can run 45 minutes on a Sunday.
+    Task(
+        "cfb-power-ratings",
+        "cfb-daily",
+        "10 10 * * *",
+        "python -m worker.jobs.build_power_ratings --current --sport cfb",
+    ),
     Task("cfb-props-audit", "cfb-daily", "0 13 * * *", "python -m worker.jobs.audit_data"),
     Task(
         "cfb-props-ai-reads", "cfb-daily", "0 14 * * 3", "python -m worker.jobs.generate_ai_reads"
@@ -251,6 +260,13 @@ TASKS: tuple[Task, ...] = (
         "python -m worker.jobs.nfl_ingest_injuries --current; "
         "POLARS_MAX_THREADS=1 OMP_NUM_THREADS=1 "
         "python -m worker.jobs.fit_sim_engine --if-older-than-days 6",
+    ),
+    # After the 08:20 NFL results (client, 2026-10-29; no old service).
+    Task(
+        "nfl-power-ratings",
+        "nfl-daily",
+        "10 9 * * *",
+        "python -m worker.jobs.build_power_ratings --current --sport nfl",
     ),
     Task(
         "nfl-fantasy-inputs",

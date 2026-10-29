@@ -394,6 +394,7 @@ class TestSportGating:
             "lock_prop_picks",
             "reprice_picks",
             "capture_game_periods",
+            "build_power_ratings",
         }
         for job in MONITORED_JOBS:
             assert job.sport_scoped == (job.name in shared), (

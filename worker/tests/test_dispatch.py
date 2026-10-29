@@ -235,6 +235,8 @@ NORMAL_MINUTES = {
     "cfb-props-project-current": 2.3,
     "cfb-props-audit": 2.6,
     "cfb-props-ai-reads": 0.1,
+    "cfb-power-ratings": 0.5,
+    "nfl-power-ratings": 0.3,
     "nfl-props-ingest-results": 2.7,
     "nfl-fantasy-inputs": 1.9,
     "nfl-props-project-current": 0.8,

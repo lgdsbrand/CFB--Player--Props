@@ -455,6 +455,23 @@ MONITORED_JOBS: tuple[JobExpectation, ...] = (
              "and the two derived shares behind.",
     ),
     JobExpectation(
+        name="build_power_ratings",
+        max_age_hours=36,
+        sport="cfb",
+        sport_scoped=True,
+        note="daily 10:10 UTC (cfb-power-ratings) -- the games page's power "
+             "ranks, rankings panel and game score. Display only: a stale run "
+             "leaves yesterday's ranks on the cards and nothing else.",
+    ),
+    JobExpectation(
+        name="build_power_ratings",
+        max_age_hours=36,
+        sport="nfl",
+        sport_scoped=True,
+        note="daily 09:10 UTC (nfl-power-ratings) -- the NFL games page's power "
+             "ranks, rankings panel and game score. Display only.",
+    ),
+    JobExpectation(
         name="fit_sim_engine",
         max_age_hours=8.5 * 24,
         sport="nfl",

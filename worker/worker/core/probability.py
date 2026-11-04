@@ -353,17 +353,34 @@ def side_and_confidence(model_prob_over: float) -> tuple[BetSide, float]:
 # Toward 50%, NOT toward the book: the projection stays the engine
 # (CLAUDE.md §1) and the market stays out of it.
 #
-# Left alone: anytime TD (one-way prices, cannot be measured this way),
-# attempts and completions (already within the book's Brier), rush attempts
-# (204 bets, fits swing sign) and every first-quarter market. Refit with
-# `grade_vs_book --raw` once a season of graded weeks accumulates, never
-# mid-week.
+# Left alone: anytime TD (one-way prices, cannot be measured this way) and
+# every first-quarter market. Refit with `grade_vs_book --raw` once a season of
+# graded weeks accumulates, never mid-week.
+#
+# AMENDED 2026-11-04 (user-approved, a deliberate mid-season exception). Refit
+# on 2026 NFL w1-8 and college w1-9, last pre-kickoff lines, raw:
+#   - pass_attempts, pass_completions, rush_attempts (NFL only, 250-310 bets
+#     each): best slope 0.045, -0.117 and 0.002, i.e. no information; held-out
+#     fits swing sign (-0.40 to +0.23). Raw Brier 0.259/0.263/0.282, worse than
+#     a flat 50%. Season to date at a 5%+ edge they went 52-78. They get a
+#     small floor, not the fit: a slope of 0 would publish exactly 50%, which
+#     has no side.
+#   - rush_yards 0.42 -> 0.07: refit slope 0.071 on 2,789 bets; the held-out
+#     slope beat raw on 11 of 13 weeks.
+#   - The other four were left alone until the offseason refit. rec_yards
+#     (0.27) and pass_yards (0.30) refit close to what shipped; pass_tds (0.33)
+#     and receptions (0.47) refit higher, i.e. the shipped slopes shrink those
+#     two more than this data asks for, which errs on the cautious side.
+_NO_SKILL_SLOPE = 0.05
 PROP_CALIBRATION_SLOPE: dict[str, float] = {
     "pass_tds": 0.21,
     "receptions": 0.22,
     "rec_yards": 0.31,
     "pass_yards": 0.34,
-    "rush_yards": 0.42,
+    "rush_yards": 0.07,
+    "pass_attempts": _NO_SKILL_SLOPE,
+    "pass_completions": _NO_SKILL_SLOPE,
+    "rush_attempts": _NO_SKILL_SLOPE,
 }
 
 

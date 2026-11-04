@@ -28,8 +28,19 @@ def test_pass_td_eighty_percent_becomes_believable() -> None:
 
 
 def test_uncalibrated_markets_are_untouched() -> None:
-    for market in ("anytime_td", "pass_attempts", "rush_attempts", "q1_rec_yards"):
+    for market in ("anytime_td", "q1_rec_yards", "q1_pass_yards"):
         assert calibrate_prop_probability(market, 0.83) == 0.83
+
+
+def test_no_skill_markets_publish_near_half_and_keep_the_side() -> None:
+    """Amended 2026-11-04: the volume markets showed no skill against the book."""
+    for market in ("pass_attempts", "pass_completions", "rush_attempts"):
+        assert calibrate_prop_probability(market, 0.80) == pytest.approx(0.515)
+        assert calibrate_prop_probability(market, 0.20) == pytest.approx(0.485)
+
+
+def test_rush_yards_eighty_percent_is_barely_a_lean() -> None:
+    assert calibrate_prop_probability("rush_yards", 0.80) == pytest.approx(0.521)
 
 
 def test_ladder_rungs_carry_the_same_calibration() -> None:

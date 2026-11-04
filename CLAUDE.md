@@ -174,6 +174,16 @@ provider serves this cleanly; we build it).
   > Anytime TD, attempts, completions, rush attempts and first-quarter markets
   > are untouched. Refit with `grade_vs_book --raw` each offseason. It is an
   > honesty fix, not evidence of an edge.
+  >
+  > **2026-11-04 — mid-season amendment, on the user's instruction.** NFL week
+  > 8's 10%+ edges went 14-40, mostly in the uncalibrated volume markets.
+  > Refit on 2026 NFL w1-8 and college w1-9 (last pre-kickoff lines): pass
+  > attempts, completions and rush attempts fit slopes of about 0 (no
+  > information; held-out fits swing sign), so they get a 0.05 floor and
+  > publish about 50-52% with the side kept. Rush yards refit at 0.07 (held
+  > out, beat raw on 11 of 13 weeks) and moves from 0.42 to 0.07. The user
+  > accepted overriding the offseason-only rule for this. The other four
+  > stay as shipped until the offseason refit.
 - **Markets:**
   - QB: pass yds, pass TDs, attempts, completions, rush yds
   - RB: rush yds, rec yds, rush att, receptions
